@@ -9,7 +9,7 @@ import streamlit as st
 from scipy.optimize import Bounds, LinearConstraint, milp
 from scipy.sparse import lil_matrix
 
-st.set_page_config(page_title="DFS Tournament Builder V2.2", page_icon="🏈", layout="wide")
+st.set_page_config(page_title="DFS Tournament Builder V2.3", page_icon="🏈", layout="wide")
 
 ROSTER_SLOTS = ["QB", "RB1", "RB2", "WR1", "WR2", "WR3", "TE", "FLEX", "DST"]
 PRIORITY_OPTIONS = ["Core", "Like", "Neutral", "Fade", "Exclude"]
@@ -218,7 +218,7 @@ def slot_eligibility(df):
     }
 
 
-def player_objective(df, aggr, strategy_map, preferred_stack_teams, team_strategy_map):
+def player_objective(df, aggr, strategy_map, preferred_stack_teams, team_strategy_map, exposure_state=None, built_count=0):
     proj = df["My Proj"].to_numpy(float)
     own = np.clip(df["My Own"].to_numpy(float), 0.05, None)
 
@@ -234,6 +234,19 @@ def player_objective(df, aggr, strategy_map, preferred_stack_teams, team_strateg
         strat = strategy_map.get(str(r["ID"]), {})
         pr = strat.get("Priority", "Neutral")
         objective[i] += PRIORITY_BONUS.get(pr, 0.0)
+        # Portfolio exposure steering:
+        # If a player is below the user's desired minimum, boost him.
+        # If he is already near/over the target max, reduce him before the hard max filter.
+        if exposure_state is not None and built_count > 0:
+            current_exp = 100.0 * exposure_state.get(str(r["ID"]), 0) / built_count
+            min_exp = float(strat.get("Min Exposure", 0))
+            max_exp = float(strat.get("Max Exposure", 100))
+            if current_exp < min_exp:
+                deficit = min_exp - current_exp
+                objective[i] += min(5.0, 0.10 * deficit)
+            if current_exp > max_exp - 5:
+                objective[i] -= min(4.0, 0.10 * max(0.0, current_exp - (max_exp - 5)))
+
         team_pr = team_strategy_map.get(r["Team"], "Neutral")
         objective[i] += TEAM_PRIORITY_BONUS.get(team_pr, 0.0)
         if r["Team"] in preferred_stack_teams and r["is_QB"]:
@@ -247,6 +260,7 @@ def player_objective(df, aggr, strategy_map, preferred_stack_teams, team_strateg
 def solve_one(
     df, aggr, rng, strategy_map, preferred_stack_teams, team_strategy_map,
     min_salary, qb_stack_min, bringback_mode,
+    exposure_state=None, built_count=0,
     no_dst_from_qb_game=True, no_offense_vs_dst=False,
     noise_scale=0.16
 ):
@@ -256,7 +270,7 @@ def solve_one(
     elig = slot_eligibility(df)
     active = df["ActiveForBuild"].to_numpy(bool)
 
-    base = player_objective(df, aggr, strategy_map, preferred_stack_teams, team_strategy_map)
+    base = player_objective(df, aggr, strategy_map, preferred_stack_teams, team_strategy_map, exposure_state, built_count)
     randomized = base * np.exp(rng.normal(0, noise_scale, size=n))
 
     c = np.zeros(total_vars)
@@ -520,6 +534,8 @@ def generate_lineups(
         chosen = solve_one(
             df, aggr, rng, strategy_map, preferred_stack_teams, team_strategy_map,
             min_salary, qb_stack_min, bringback_mode,
+            exposure_state=exposure_counts,
+            built_count=len(rows),
             no_dst_from_qb_game=no_dst_from_qb_game,
             no_offense_vs_dst=no_offense_vs_dst,
             noise_scale=0.13 + 0.11 * aggr
@@ -570,11 +586,45 @@ def generate_lineups(
     return out
 
 
+
+def calculate_exposure_table(df, result, strategy_map):
+    if result is None or result.empty:
+        return pd.DataFrame()
+
+    counts = defaultdict(int)
+    lineup_cols = ["QB", "RB1", "RB2", "WR1", "WR2", "WR3", "TE", "FLEX", "DST"]
+    for col in lineup_cols:
+        for name in result[col].dropna():
+            counts[name] += 1
+
+    n = len(result)
+    rows = []
+    for _, p in df.iterrows():
+        name = p["Name"]
+        pid = str(p["ID"])
+        strat = strategy_map.get(pid, {})
+        count = counts.get(name, 0)
+        rows.append({
+            "ID": pid,
+            "Name": name,
+            "Pos": p["Position"],
+            "Team": p["Team"],
+            "Salary": int(p["Salary"]),
+            "Proj": round(float(p["My Proj"]), 2),
+            "Proj Own": round(float(p["My Own"]), 1),
+            "Actual Exp %": round(100.0 * count / n, 1),
+            "Lineups": count,
+            "Min Target %": float(strat.get("Min Exposure", 0)),
+            "Max Target %": float(strat.get("Max Exposure", 100)),
+        })
+    return pd.DataFrame(rows).sort_values(["Actual Exp %", "Proj"], ascending=[False, False]).reset_index(drop=True)
+
+
 # -----------------------------
 # UI
 # -----------------------------
 
-st.title("🏈 DFS Tournament Builder V2.2")
+st.title("🏈 DFS Tournament Builder V2.3")
 st.caption("Your football opinions first. The optimizer builds around them, then rates the lineups.")
 
 with st.sidebar:
@@ -688,6 +738,7 @@ if dk_file and ss_file:
             "Own": view["My Own"].round(1),
             "Lock": False,
             "Priority": "Neutral",
+            "Min Exposure": 0,
             "Max Exposure": 100,
         })
 
@@ -700,6 +751,7 @@ if dk_file and ss_file:
             if existing:
                 base_strategy.at[idx, "Lock"] = existing.get("Lock", False)
                 base_strategy.at[idx, "Priority"] = existing.get("Priority", "Neutral")
+                base_strategy.at[idx, "Min Exposure"] = existing.get("Min Exposure", 0)
                 base_strategy.at[idx, "Max Exposure"] = existing.get("Max Exposure", 100)
 
         edited = st.data_editor(
@@ -711,6 +763,7 @@ if dk_file and ss_file:
             column_config={
                 "Priority": st.column_config.SelectboxColumn("Priority", options=PRIORITY_OPTIONS),
                 "Lock": st.column_config.CheckboxColumn("Lock"),
+                "Min Exposure": st.column_config.NumberColumn("Min %", min_value=0, max_value=100, step=5),
                 "Max Exposure": st.column_config.NumberColumn("Max %", min_value=0, max_value=100, step=5),
             },
             key="player_strategy_editor",
@@ -721,6 +774,7 @@ if dk_file and ss_file:
             st.session_state["strategy_master"][str(r["ID"])] = {
                 "Lock": bool(r["Lock"]),
                 "Priority": str(r["Priority"]),
+                "Min Exposure": float(r["Min Exposure"]),
                 "Max Exposure": float(r["Max Exposure"]),
             }
 
@@ -798,6 +852,65 @@ if "v2_result" in st.session_state:
         f"Your strategy — {r['User Fit Grade']}"
     )
 
+
+    st.subheader("6. Exposure Lab")
+    st.caption(
+        "Actual Exp % is how often each player appears in this generated lineup pool. "
+        "Raise Min Target % to push a player up; lower Max Target % to cap him. "
+        "Then rebuild the pool."
+    )
+
+    exposure_df = calculate_exposure_table(df, result, strategy_map)
+
+    exp_team_filter = st.multiselect(
+        "Exposure team filter",
+        sorted(exposure_df["Team"].dropna().unique().tolist()),
+        key="exposure_team_filter"
+    )
+    exp_pos_filter = st.multiselect(
+        "Exposure position filter",
+        ["QB", "RB", "WR", "TE", "DST"],
+        key="exposure_pos_filter"
+    )
+
+    exposure_view = exposure_df.copy()
+    if exp_team_filter:
+        exposure_view = exposure_view[exposure_view["Team"].isin(exp_team_filter)]
+    if exp_pos_filter:
+        exposure_view = exposure_view[exposure_view["Pos"].isin(exp_pos_filter)]
+
+    exposure_edit = st.data_editor(
+        exposure_view,
+        hide_index=True,
+        use_container_width=True,
+        height=520,
+        disabled=["ID", "Name", "Pos", "Team", "Salary", "Proj", "Proj Own", "Actual Exp %", "Lineups"],
+        column_config={
+            "Min Target %": st.column_config.NumberColumn("Min Target %", min_value=0, max_value=100, step=5),
+            "Max Target %": st.column_config.NumberColumn("Max Target %", min_value=0, max_value=100, step=5),
+        },
+        key="exposure_editor"
+    )
+
+    if st.button("Save Exposure Targets", use_container_width=True):
+        bad = []
+        for _, er in exposure_edit.iterrows():
+            if float(er["Min Target %"]) > float(er["Max Target %"]):
+                bad.append(er["Name"])
+                continue
+            pid = str(er["ID"])
+            current = st.session_state["strategy_master"].get(pid, {
+                "Lock": False, "Priority": "Neutral", "Min Exposure": 0, "Max Exposure": 100
+            })
+            current["Min Exposure"] = float(er["Min Target %"])
+            current["Max Exposure"] = float(er["Max Target %"])
+            st.session_state["strategy_master"][pid] = current
+
+        if bad:
+            st.error("Min target cannot exceed Max target for: " + ", ".join(bad[:10]))
+        else:
+            st.success("Exposure targets saved. Scroll up and tap Generate Rated Lineups again.")
+
     st.download_button(
         "Download rated lineups CSV",
         data=result.to_csv(index=False).encode("utf-8"),
@@ -808,6 +921,6 @@ if "v2_result" in st.session_state:
 
 st.divider()
 st.caption(
-    "V2 uses your stack choices, player priorities, locks/excludes, projections, ownership and contest size. "
+    "V2.3 uses your stack choices, player/team priorities, locks/excludes, exposure targets, projections, ownership and contest size. "
     "It still does not claim to know true ceiling or duplication until those data sources are added."
 )
