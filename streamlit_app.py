@@ -9,7 +9,7 @@ import streamlit as st
 from scipy.optimize import Bounds, LinearConstraint, milp
 from scipy.sparse import lil_matrix
 
-st.set_page_config(page_title="DFS Tournament Builder V2.5", page_icon="🏈", layout="wide")
+st.set_page_config(page_title="DFS Tournament Builder V2.6", page_icon="🏈", layout="wide")
 
 st.markdown("""
 <style>
@@ -146,6 +146,49 @@ button[data-baseweb="tab"] {
 
 /* ---------- Small helper ---------- */
 .muted { color:#64748b; font-size:0.9rem; }
+</style>
+""", unsafe_allow_html=True)
+
+
+st.markdown("""
+<style>
+/* V2.6 iPad/sidebar readability fix */
+[data-testid="stSidebar"] [data-baseweb="select"] *,
+[data-testid="stSidebar"] [data-baseweb="input"] *,
+[data-testid="stSidebar"] input,
+[data-testid="stSidebar"] select {
+    color: #111827 !important;
+    -webkit-text-fill-color: #111827 !important;
+}
+
+[data-testid="stSidebar"] [data-baseweb="select"] > div,
+[data-testid="stSidebar"] [data-baseweb="input"] > div,
+[data-testid="stSidebar"] input {
+    background: #ffffff !important;
+    color: #111827 !important;
+    border-color: rgba(148,163,184,0.35) !important;
+}
+
+/* Keep labels and section headings light on dark sidebar */
+[data-testid="stSidebar"] label,
+[data-testid="stSidebar"] h1,
+[data-testid="stSidebar"] h2,
+[data-testid="stSidebar"] h3,
+[data-testid="stSidebar"] p {
+    color: #f8fafc !important;
+}
+
+/* Slider/number value text */
+[data-testid="stSidebar"] [data-testid="stNumberInput"] input {
+    color: #111827 !important;
+    background: #ffffff !important;
+}
+
+/* Select dropdown selected value */
+[data-testid="stSidebar"] [role="combobox"] {
+    color: #111827 !important;
+    -webkit-text-fill-color: #111827 !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -766,7 +809,7 @@ st.markdown("""
 <div class="hero">
   <div class="hero-title">🏈 DFS Tournament Builder</div>
   <div class="hero-sub">Build lineups around your football takes, then rate them by projection, correlation, leverage and fit.</div>
-  <div class="hero-chip">V2.5 • Custom strategy engine</div>
+  <div class="hero-chip">V2.6 • Custom strategy engine</div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -1101,6 +1144,6 @@ if "v2_result" in st.session_state:
 
 st.divider()
 st.caption(
-    "V2.5 adds a dedicated Exclude checkbox beside Lock, while keeping the visual redesign, stack rules, priorities, and exposure controls. "
+    "V2.6 fixes iPad sidebar control visibility while keeping Exclude, stack rules, priorities, and exposure controls. "
     "It still does not claim to know true ceiling or duplication until those data sources are added."
 )
