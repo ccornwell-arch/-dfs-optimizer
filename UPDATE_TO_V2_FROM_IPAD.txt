@@ -1,0 +1,42 @@
+DFS TOURNAMENT BUILDER V2 — UPDATE YOUR LIVE APP
+
+This replaces the old `streamlit_app.py`.
+
+WHAT'S NEW
+- Lock players
+- Core / Like / Neutral / Fade / Exclude
+- Max exposure controls
+- Choose preferred QB stack teams
+- Choose 1 or 2 pass catchers
+- Bring-back can be Optional / Required / None
+- Contest presets
+- Correct, visible stack summaries
+- No fake "Tournament Score" as the main output
+- Lineups are rated A+ through C-
+- Separate grades for Projection, Correlation, Leverage and User Fit
+- Lineup inspector
+
+HOW TO UPDATE FROM YOUR IPAD
+1. Open your GitHub `dfs-optimizer` repository.
+2. Tap `streamlit_app.py`.
+3. Use the edit/replace-file option, or delete the old file and upload the new `streamlit_app.py` from this package.
+4. Commit the change.
+5. Streamlit Community Cloud should automatically redeploy the app.
+6. Refresh your existing Streamlit URL after deployment finishes.
+
+You do NOT need to change `requirements.txt` if it already has:
+streamlit
+pandas
+numpy
+scipy
+
+IMPORTANT
+V2 still uses SaberSim's projection and ownership as inputs. It does not yet pretend to have:
+- true player ceilings
+- true contest duplication
+- Vegas feeds
+- injuries/weather feeds
+- coverage matchup data
+- full correlated Monte Carlo game simulations
+
+Those are next-stage features.
