@@ -9,7 +9,7 @@ import streamlit as st
 from scipy.optimize import Bounds, LinearConstraint, milp
 from scipy.sparse import lil_matrix
 
-st.set_page_config(page_title="DFS Lab V4", page_icon="🏈", layout="wide")
+st.set_page_config(page_title="DFS Lab V4.1", page_icon="🏈", layout="wide")
 
 st.markdown("""
 <style>
@@ -904,41 +904,112 @@ def load_showdown_dk_template(uploaded_file):
 
 
 def prepare_showdown_pool(dk_file, ss_file):
+    """Merge one canonical DraftKings row per player with SaberSim Showdown data.
+
+    SaberSim Showdown exports commonly contain TWO rows per player: a FLEX row and
+    a Captain row (Captain projection is typically 1.5x the FLEX projection).  A
+    plain merge on Name would therefore duplicate every player and can make the
+    optimizer build invalid / infeasible lineups.  Collapse SaberSim to one row
+    per player first, preserving FLEX projection/ownership and Captain ownership.
+    """
     dk = load_showdown_dk_template(dk_file)
-    ss = pd.read_csv(ss_file)
-    name_col = _first_existing(ss.columns, ["Name", "Player", "Player Name"])
-    proj_col = _first_existing(ss.columns, ["My Proj", "Projection", "Proj"])
-    own_col = _first_existing(ss.columns, ["My Own", "Ownership", "Own", "Projected Ownership"])
-    cpt_own_col = _first_existing(ss.columns, ["My CPT Own", "CPT Own", "Captain Own", "Captain Ownership", "CPT Ownership"])
+    ss_raw = pd.read_csv(ss_file)
+
+    name_col = _first_existing(ss_raw.columns, ["Name", "Player", "Player Name"])
+    proj_col = _first_existing(ss_raw.columns, ["My Proj", "Projection", "Proj"])
+    own_col = _first_existing(ss_raw.columns, ["My Own", "Ownership", "Own", "Projected Ownership"])
+    cpt_own_col = _first_existing(ss_raw.columns, ["My CPT Own", "CPT Own", "Captain Own", "Captain Ownership", "CPT Ownership"])
+    roster_col = _first_existing(ss_raw.columns, ["Roster Position", "Roster Pos", "Slot", "Lineup Position", "Position Type"])
+
     if not name_col or not proj_col or not own_col:
         raise ValueError("SaberSim file needs Name, projection, and ownership columns (for example Name / My Proj / My Own).")
 
-    keep = [name_col, proj_col, own_col] + ([cpt_own_col] if cpt_own_col else [])
-    ss = ss[keep].copy()
-    ren = {name_col: "Name", proj_col: "My Proj", own_col: "My Own"}
+    work_cols = [name_col, proj_col, own_col]
+    if cpt_own_col and cpt_own_col not in work_cols:
+        work_cols.append(cpt_own_col)
+    if roster_col and roster_col not in work_cols:
+        work_cols.append(roster_col)
+    ss0 = ss_raw[work_cols].copy()
+    ss0 = ss0.rename(columns={name_col:"Name", proj_col:"My Proj", own_col:"My Own"})
     if cpt_own_col:
-        ren[cpt_own_col] = "CPT Own"
-    ss = ss.rename(columns=ren)
-    ss["My Proj"] = pd.to_numeric(ss["My Proj"], errors="coerce").fillna(0.0)
-    ss["My Own"] = pd.to_numeric(ss["My Own"], errors="coerce").fillna(0.0)
-    if "CPT Own" in ss.columns:
-        ss["CPT Own"] = pd.to_numeric(ss["CPT Own"], errors="coerce").fillna(0.0)
-    else:
-        # Do not pretend this is true captain ownership. It is only a neutral fallback used for leverage ranking.
-        ss["CPT Own"] = np.maximum(0.1, ss["My Own"] * 0.18)
-        ss["CPT Own Estimated"] = True
+        ss0 = ss0.rename(columns={cpt_own_col:"CPT Own"})
+    if roster_col:
+        ss0 = ss0.rename(columns={roster_col:"SS Roster"})
 
-    df = dk.merge(ss, on="Name", how="left")
+    ss0["Name"] = ss0["Name"].astype(str).str.strip()
+    ss0["My Proj"] = pd.to_numeric(ss0["My Proj"], errors="coerce").fillna(0.0)
+    ss0["My Own"] = pd.to_numeric(ss0["My Own"], errors="coerce").fillna(0.0)
+    if "CPT Own" in ss0.columns:
+        ss0["CPT Own"] = pd.to_numeric(ss0["CPT Own"], errors="coerce").fillna(0.0)
+
+    collapsed = []
+    for name, g in ss0.groupby("Name", sort=False, dropna=False):
+        g = g.copy().reset_index(drop=True)
+        if g.empty or not str(name).strip():
+            continue
+
+        # Prefer an explicitly labeled FLEX row when the export provides a roster/slot column.
+        flex_idx = None
+        cpt_idx = None
+        if "SS Roster" in g.columns:
+            slot = g["SS Roster"].astype(str).str.upper()
+            flex_candidates = g.index[slot.str.contains("FLEX", na=False)].tolist()
+            cpt_candidates = g.index[slot.str.contains("CPT|CAPTAIN", regex=True, na=False)].tolist()
+            if flex_candidates:
+                flex_idx = flex_candidates[0]
+            if cpt_candidates:
+                cpt_idx = cpt_candidates[0]
+
+        # Common SaberSim format has the same name twice without a slot column.
+        # The Captain row carries the 1.5x projection, so the lower projection is FLEX.
+        if flex_idx is None:
+            positive = g.index[g["My Proj"] > 0].tolist()
+            candidates = positive if positive else g.index.tolist()
+            flex_idx = min(candidates, key=lambda i: (float(g.loc[i,"My Proj"]), i))
+        if cpt_idx is None and len(g) > 1:
+            other = [i for i in g.index if i != flex_idx]
+            if other:
+                target = 1.5 * float(g.loc[flex_idx,"My Proj"])
+                cpt_idx = min(other, key=lambda i: abs(float(g.loc[i,"My Proj"]) - target))
+
+        flex = g.loc[flex_idx]
+        if "CPT Own" in g.columns and float(flex.get("CPT Own",0) or 0) > 0:
+            cpt_own = float(flex["CPT Own"])
+            cpt_est = False
+        elif cpt_idx is not None:
+            # In two-row SaberSim exports the CPT row's normal ownership field is Captain ownership.
+            cpt_own = float(g.loc[cpt_idx,"My Own"])
+            cpt_est = False
+        else:
+            cpt_own = max(0.1, float(flex["My Own"]) * 0.18)
+            cpt_est = True
+
+        collapsed.append({
+            "Name": str(name).strip(),
+            "My Proj": float(flex["My Proj"]),
+            "My Own": float(flex["My Own"]),
+            "CPT Own": cpt_own,
+            "CPT Own Estimated": cpt_est,
+        })
+
+    ss = pd.DataFrame(collapsed)
+    if ss.empty:
+        raise ValueError("No usable players were found in the SaberSim file.")
+
+    # Extra safety: exactly one SaberSim row and one DraftKings row per player.
+    ss = ss.sort_values(["Name","My Proj"], ascending=[True,False]).drop_duplicates("Name", keep="first")
+    dk = dk.drop_duplicates(subset=["ID"], keep="first").drop_duplicates(subset=["Name","Team"], keep="first")
+
+    df = dk.merge(ss, on="Name", how="left", validate="many_to_one")
     for c in ["My Proj", "My Own", "CPT Own"]:
         df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0.0)
-    df["CPT Own Estimated"] = df.get("CPT Own Estimated", False)
+    df["CPT Own Estimated"] = df.get("CPT Own Estimated", False).fillna(False).astype(bool)
 
     away, home, matchup = [], [], []
     for g in df["Game Info"]:
         a, h, m = parse_matchup(g)
         away.append(a); home.append(h); matchup.append(m)
     df["Away"] = away; df["Home"] = home; df["Matchup"] = matchup
-    # If Game Info parsing fails, the two teams are still sufficient for Showdown.
     teams = [t for t in df["Team"].dropna().unique().tolist() if t]
     if len(teams) == 2:
         opp_map = {teams[0]: teams[1], teams[1]: teams[0]}
@@ -1068,9 +1139,14 @@ def solve_showdown_one(
     # One player per slot.
     for j in range(s):
         _add_constraint(rows,lows,highs,{vidx(i,j):1.0 for i in range(n)},1,1)
-    # Player at most once.
-    for i in range(n):
-        _add_constraint(rows,lows,highs,{vidx(i,j):1.0 for j in range(s)},0,1)
+    # Player at most once. Group by DraftKings ID as a second safety net in case
+    # an upstream file ever contains duplicate player rows.
+    for pid, idxs in df.groupby(df["ID"].astype(str)).groups.items():
+        coeff={}
+        for i in idxs:
+            for j in range(s):
+                coeff[vidx(int(i),j)] = 1.0
+        _add_constraint(rows,lows,highs,coeff,0,1)
 
     # Overall locks and captain locks.
     for i,r in df.iterrows():
@@ -1371,7 +1447,68 @@ hr{border-color:rgba(17,24,39,.07)!important;}
 </style>
 """,unsafe_allow_html=True)
 
-st.markdown('''<div class="apple-hero"><div class="apple-eyebrow">DFS LAB</div><div class="apple-title">Classic + Showdown.</div><div class="apple-sub">One optimizer, two different strategy engines. Showdown adds Captain exposure, game scripts, construction control, correlation and duplication-aware ratings.</div><span class="pill">V4 • iPad optimized</span></div>''',unsafe_allow_html=True)
+st.markdown("""
+<style>
+/* V4.1 iPad readability polish — final overrides */
+[data-testid="stSidebar"] {
+    background: #f5f5f7 !important;
+    border-right: 1px solid rgba(17,24,39,.08) !important;
+}
+[data-testid="stSidebar"] label,
+[data-testid="stSidebar"] label *,
+[data-testid="stSidebar"] h1,
+[data-testid="stSidebar"] h2,
+[data-testid="stSidebar"] h3,
+[data-testid="stSidebar"] p,
+[data-testid="stSidebar"] span,
+[data-testid="stSidebar"] div[data-testid="stMarkdownContainer"] * {
+    color: #111827 !important;
+    -webkit-text-fill-color: #111827 !important;
+}
+[data-testid="stSidebar"] [data-baseweb="select"] > div,
+[data-testid="stSidebar"] [data-baseweb="input"] > div,
+[data-testid="stSidebar"] input,
+[data-testid="stSidebar"] [role="combobox"] {
+    background: #ffffff !important;
+    color: #111827 !important;
+    -webkit-text-fill-color: #111827 !important;
+    border-color: rgba(17,24,39,.14) !important;
+}
+[data-testid="stSidebar"] [data-testid="stSlider"] * {
+    -webkit-text-fill-color: initial !important;
+}
+[data-testid="stSidebar"] [data-testid="stSlider"] [data-testid="stThumbValue"],
+[data-testid="stSidebar"] [data-testid="stSlider"] [data-testid="stTickBarMin"],
+[data-testid="stSidebar"] [data-testid="stSlider"] [data-testid="stTickBarMax"] {
+    color:#111827 !important;
+    -webkit-text-fill-color:#111827 !important;
+}
+
+[data-testid="stSidebar"] [data-testid="stWidgetLabel"],
+[data-testid="stSidebar"] [data-testid="stWidgetLabel"] *,
+[data-testid="stSidebar"] label,
+[data-testid="stSidebar"] label * {
+    opacity: 1 !important;
+    color:#374151 !important;
+    -webkit-text-fill-color:#374151 !important;
+    font-weight:600 !important;
+}
+
+/* Make segmented control choices readable on the light sidebar. */
+[data-testid="stSidebar"] [data-baseweb="button-group"] button,
+[data-testid="stSidebar"] [data-baseweb="button-group"] button * {
+    color:#111827 !important;
+    -webkit-text-fill-color:#111827 !important;
+}
+/* Slightly wider sidebar on tablets so labels don't feel cramped. */
+@media (min-width: 760px) {
+    [data-testid="stSidebar"] { min-width: 385px !important; width: 385px !important; }
+    [data-testid="stSidebar"] > div:first-child { width: 385px !important; }
+}
+</style>
+""", unsafe_allow_html=True)
+
+st.markdown('''<div class="apple-hero"><div class="apple-eyebrow">DFS LAB</div><div class="apple-title">Classic + Showdown.</div><div class="apple-sub">One optimizer, two different strategy engines. Showdown adds Captain exposure, game scripts, construction control, correlation and duplication-aware ratings.</div><span class="pill">V4.2 • Showdown duplicate fix</span></div>''',unsafe_allow_html=True)
 
 with st.sidebar:
     st.markdown("### Contest")
@@ -1419,7 +1556,28 @@ if mode=="Classic":
             for x,r in ed.iterrows():
                 e=st.session_state["strategy_master"].get(str(r["ID"]),{})
                 for c,k,d in [("Lock","Lock",False),("Exclude","Exclude",False),("Priority","Priority","Neutral"),("Min Exposure","Min Exposure",0),("Max Exposure","Max Exposure",100)]: ed.at[x,c]=e.get(k,d)
-            edited=st.data_editor(ed,hide_index=True,use_container_width=True,height=620,disabled=["ID","Name","Pos","Team","Salary","Proj","Own"],column_config={"Priority":st.column_config.SelectboxColumn("Lean",options=PRIORITY_OPTIONS),"Lock":st.column_config.CheckboxColumn("Lock"),"Exclude":st.column_config.CheckboxColumn("Out"),"Min Exposure":st.column_config.NumberColumn("Min %",min_value=0,max_value=100,step=5),"Max Exposure":st.column_config.NumberColumn("Max %",min_value=0,max_value=100,step=5)},key="v4_classic_players")
+            edited=st.data_editor(
+                ed,
+                hide_index=True,
+                use_container_width=True,
+                height=620,
+                disabled=["ID","Name","Pos","Team","Salary","Proj","Own"],
+                column_order=["Name","Pos","Team","Salary","Proj","Own","Lock","Exclude","Priority","Min Exposure","Max Exposure"],
+                column_config={
+                    "Name":st.column_config.TextColumn("Player",width=190,pinned=True),
+                    "Pos":st.column_config.TextColumn("Pos",width=60),
+                    "Team":st.column_config.TextColumn("Team",width=70),
+                    "Salary":st.column_config.NumberColumn("Salary",width=85,format="$%d"),
+                    "Proj":st.column_config.NumberColumn("Proj",width=75,format="%.2f"),
+                    "Own":st.column_config.NumberColumn("Own",width=70,format="%.1f"),
+                    "Priority":st.column_config.SelectboxColumn("Lean",options=PRIORITY_OPTIONS,width=95),
+                    "Lock":st.column_config.CheckboxColumn("Lock",width=65),
+                    "Exclude":st.column_config.CheckboxColumn("Out",width=60),
+                    "Min Exposure":st.column_config.NumberColumn("Min %",min_value=0,max_value=100,step=5,width=75),
+                    "Max Exposure":st.column_config.NumberColumn("Max %",min_value=0,max_value=100,step=5,width=75),
+                },
+                key="v4_classic_players",
+            )
             for _,r in edited.iterrows():
                 ex=bool(r["Exclude"]); st.session_state["strategy_master"][str(r["ID"]) ]={"Lock":bool(r["Lock"]) and not ex,"Exclude":ex,"Priority":"Exclude" if ex else str(r["Priority"]),"Min Exposure":float(r["Min Exposure"]),"Max Exposure":float(r["Max Exposure"])}
         with tabs[2]:
@@ -1489,7 +1647,33 @@ else:
             for x,r in ed.iterrows():
                 e=st.session_state["showdown_strategy"].get(str(r["ID"]),{})
                 for c,k,d in [("Lock","Lock",False),("CPT Lock","CPT Lock",False),("Exclude","Exclude",False),("CPT Eligible","CPT Eligible",True),("Priority","Priority","Neutral"),("Min Exposure","Min Exposure",0),("Max Exposure","Max Exposure",100),("CPT Min","CPT Min",0),("CPT Max","CPT Max",100)]: ed.at[x,c]=e.get(k,d)
-            edited=st.data_editor(ed,hide_index=True,use_container_width=True,height=650,disabled=["ID","Name","Pos","Team","Flex $","Proj","Own","CPT Own"],column_config={"Priority":st.column_config.SelectboxColumn("Lean",options=PRIORITY_OPTIONS),"Lock":st.column_config.CheckboxColumn("Lock"),"CPT Lock":st.column_config.CheckboxColumn("CPT Lock"),"Exclude":st.column_config.CheckboxColumn("Out"),"CPT Eligible":st.column_config.CheckboxColumn("CPT?"),"Min Exposure":st.column_config.NumberColumn("Min %",min_value=0,max_value=100,step=5),"Max Exposure":st.column_config.NumberColumn("Max %",min_value=0,max_value=100,step=5),"CPT Min":st.column_config.NumberColumn("CPT Min",min_value=0,max_value=100,step=5),"CPT Max":st.column_config.NumberColumn("CPT Max",min_value=0,max_value=100,step=5)},key="v4_sdplayers")
+            edited=st.data_editor(
+                ed,
+                hide_index=True,
+                use_container_width=True,
+                height=650,
+                disabled=["ID","Name","Pos","Team","Flex $","Proj","Own","CPT Own"],
+                column_order=["Name","Pos","Team","Flex $","Proj","Own","CPT Own","Lock","CPT Lock","Exclude","CPT Eligible","Priority","Min Exposure","Max Exposure","CPT Min","CPT Max"],
+                column_config={
+                    "Name":st.column_config.TextColumn("Player",width=200,pinned=True),
+                    "Pos":st.column_config.TextColumn("Pos",width=58),
+                    "Team":st.column_config.TextColumn("Team",width=68),
+                    "Flex $":st.column_config.NumberColumn("Flex $",width=78,format="$%d"),
+                    "Proj":st.column_config.NumberColumn("Proj",width=70,format="%.2f"),
+                    "Own":st.column_config.NumberColumn("Own",width=64,format="%.1f"),
+                    "CPT Own":st.column_config.NumberColumn("CPT Own",width=78,format="%.1f"),
+                    "Lock":st.column_config.CheckboxColumn("Lock",width=60),
+                    "CPT Lock":st.column_config.CheckboxColumn("CPT Lock",width=80),
+                    "Exclude":st.column_config.CheckboxColumn("Out",width=58),
+                    "CPT Eligible":st.column_config.CheckboxColumn("CPT?",width=60),
+                    "Priority":st.column_config.SelectboxColumn("Lean",options=PRIORITY_OPTIONS,width=92),
+                    "Min Exposure":st.column_config.NumberColumn("Min %",min_value=0,max_value=100,step=5,width=70),
+                    "Max Exposure":st.column_config.NumberColumn("Max %",min_value=0,max_value=100,step=5,width=70),
+                    "CPT Min":st.column_config.NumberColumn("CPT Min",min_value=0,max_value=100,step=5,width=74),
+                    "CPT Max":st.column_config.NumberColumn("CPT Max",min_value=0,max_value=100,step=5,width=74),
+                },
+                key="v4_sdplayers",
+            )
             for _,r in edited.iterrows():
                 ex=bool(r["Exclude"]); cptlock=bool(r["CPT Lock"]) and not ex
                 st.session_state["showdown_strategy"][str(r["ID"]) ]={"Lock":bool(r["Lock"]) and not ex and not cptlock,"CPT Lock":cptlock,"Exclude":ex,"CPT Eligible":bool(r["CPT Eligible"]) and not ex,"Priority":"Exclude" if ex else str(r["Priority"]),"Min Exposure":float(r["Min Exposure"]),"Max Exposure":float(r["Max Exposure"]),"CPT Min":float(r["CPT Min"]),"CPT Max":float(r["CPT Max"])}
@@ -1511,6 +1695,10 @@ else:
         if build_btn:
             result=generate_showdown_lineups(df,field_size,payout_style,lineup_count,max(350,lineup_count*15),min_salary,max_salary,construction_weights,script,script_team,strategy_map,cpt_qb_pc,wrte_qb,rb_ctrl,max_k,max_dst,min_unique,seed)
             st.session_state["showdown_result_v4"]=result
+            if result is None or result.empty:
+                st.error("No valid Showdown lineups were found. V4.2 now removes duplicate FLEX/Captain player rows automatically. If this still appears, lower the minimum salary or loosen a lock/exposure rule.")
+            elif len(result) < lineup_count:
+                st.warning(f"Built {len(result)} of {lineup_count} requested lineups. The current salary, uniqueness, locks or exposure limits are restricting the pool.")
         result=st.session_state.get("showdown_result_v4")
 
         with tabs[3]:
@@ -1538,4 +1726,4 @@ else:
     except Exception as e:
         st.error(f"Showdown build error: {e}")
 
-st.caption("V4 • Classic engine preserved. Showdown uses a dedicated Captain/game-script/duplication-aware solver.")
+st.caption("V4.1 • Classic + Showdown • iPad readability and pinned player names.")
