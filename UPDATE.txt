@@ -1,0 +1,6 @@
+V2.2 adds:
+- Team-level Core / Like / Neutral / Fade / Exclude
+- Rule: if you stack a QB game, block BOTH defenses from that game
+- Optional rule: block offensive players against your selected DST
+
+Replace GitHub streamlit_app.py with this file and commit. Streamlit will redeploy automatically.

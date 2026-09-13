@@ -9,11 +9,12 @@ import streamlit as st
 from scipy.optimize import Bounds, LinearConstraint, milp
 from scipy.sparse import lil_matrix
 
-st.set_page_config(page_title="DFS Tournament Builder V2", page_icon="🏈", layout="wide")
+st.set_page_config(page_title="DFS Tournament Builder V2.2", page_icon="🏈", layout="wide")
 
 ROSTER_SLOTS = ["QB", "RB1", "RB2", "WR1", "WR2", "WR3", "TE", "FLEX", "DST"]
 PRIORITY_OPTIONS = ["Core", "Like", "Neutral", "Fade", "Exclude"]
 PRIORITY_BONUS = {"Core": 2.8, "Like": 1.35, "Neutral": 0.0, "Fade": -1.5, "Exclude": -100.0}
+TEAM_PRIORITY_BONUS = {"Core": 1.8, "Like": 0.9, "Neutral": 0.0, "Fade": -0.8, "Exclude": -100.0}
 
 # -----------------------------
 # File loading
@@ -142,13 +143,11 @@ def add_ratings(out, aggr):
     if out.empty:
         return out
 
-    # Percentile based so ratings are relative to this generated pool.
+    # Component percentiles are relative to the lineups generated in THIS build.
     proj_pct = out["Projection"].rank(pct=True)
     corr_pct = out["Correlation Raw"].rank(pct=True)
     fit_pct = out["User Fit Raw"].rank(pct=True)
-    # Lower ownership is useful in tournaments, but don't reward it too aggressively.
     lev_pct = (-out["Avg Own"]).rank(pct=True)
-    # Higher salary left gets a small benefit only in larger fields.
     unique_pct = out["Salary Left"].rank(pct=True)
 
     # Contest-aware weights.
@@ -159,7 +158,7 @@ def add_ratings(out, aggr):
     w_unique = 0.00 + 0.04 * aggr
     total = w_proj + w_corr + w_fit + w_lev + w_unique
 
-    rating_score = 100 * (
+    composite = (
         w_proj * proj_pct
         + w_corr * corr_pct
         + w_fit * fit_pct
@@ -167,12 +166,38 @@ def add_ratings(out, aggr):
         + w_unique * unique_pct
     ) / total
 
+    # V2.1 fix:
+    # The old version treated the weighted percentile itself as a school-style
+    # 0-100 score, which made even strong lineups show as C/C+.
+    # Now the letter grade is based on where the lineup ranks versus this build.
+    rel_pct = composite.rank(pct=True, method="average")
+
+    def relative_grade(p):
+        if p >= 0.95: return "A+"
+        if p >= 0.85: return "A"
+        if p >= 0.70: return "A-"
+        if p >= 0.50: return "B+"
+        if p >= 0.30: return "B"
+        if p >= 0.15: return "B-"
+        if p >= 0.05: return "C+"
+        return "C"
+
+    # Display score is intentionally relative, not fake precision.
+    # 68–99 keeps it readable while the letter grade is the main signal.
+    rating_score = 68 + 31 * rel_pct
+
     out["Rating Score"] = rating_score.round(1)
-    out["Rating"] = [letter_grade(x) for x in rating_score]
+    out["Rating"] = [relative_grade(x) for x in rel_pct]
     out["Projection Grade"] = [percentile_label(x, out["Projection"]) for x in out["Projection"]]
     out["Correlation Grade"] = [percentile_label(x, out["Correlation Raw"]) for x in out["Correlation Raw"]]
     out["Leverage Grade"] = [percentile_label(-x, -out["Avg Own"]) for x in out["Avg Own"]]
-    out["User Fit Grade"] = [percentile_label(x, out["User Fit Raw"]) for x in out["User Fit Raw"]]
+
+    # If every lineup has the same user-fit score, don't misleadingly label them all Excellent.
+    if out["User Fit Raw"].nunique() <= 1:
+        out["User Fit Grade"] = "Neutral"
+    else:
+        out["User Fit Grade"] = [percentile_label(x, out["User Fit Raw"]) for x in out["User Fit Raw"]]
+
     return out
 
 # -----------------------------
@@ -193,7 +218,7 @@ def slot_eligibility(df):
     }
 
 
-def player_objective(df, aggr, strategy_map, preferred_stack_teams):
+def player_objective(df, aggr, strategy_map, preferred_stack_teams, team_strategy_map):
     proj = df["My Proj"].to_numpy(float)
     own = np.clip(df["My Own"].to_numpy(float), 0.05, None)
 
@@ -209,6 +234,8 @@ def player_objective(df, aggr, strategy_map, preferred_stack_teams):
         strat = strategy_map.get(str(r["ID"]), {})
         pr = strat.get("Priority", "Neutral")
         objective[i] += PRIORITY_BONUS.get(pr, 0.0)
+        team_pr = team_strategy_map.get(r["Team"], "Neutral")
+        objective[i] += TEAM_PRIORITY_BONUS.get(team_pr, 0.0)
         if r["Team"] in preferred_stack_teams and r["is_QB"]:
             objective[i] += 1.1
         elif r["Team"] in preferred_stack_teams and (r["is_WR"] or r["is_TE"]):
@@ -218,8 +245,9 @@ def player_objective(df, aggr, strategy_map, preferred_stack_teams):
 
 
 def solve_one(
-    df, aggr, rng, strategy_map, preferred_stack_teams,
+    df, aggr, rng, strategy_map, preferred_stack_teams, team_strategy_map,
     min_salary, qb_stack_min, bringback_mode,
+    no_dst_from_qb_game=True, no_offense_vs_dst=False,
     noise_scale=0.16
 ):
     n = len(df)
@@ -228,7 +256,7 @@ def solve_one(
     elig = slot_eligibility(df)
     active = df["ActiveForBuild"].to_numpy(bool)
 
-    base = player_objective(df, aggr, strategy_map, preferred_stack_teams)
+    base = player_objective(df, aggr, strategy_map, preferred_stack_teams, team_strategy_map)
     randomized = base * np.exp(rng.normal(0, noise_scale, size=n))
 
     c = np.zeros(total_vars)
@@ -339,6 +367,38 @@ def solve_one(
                     coeff[vidx(q, j)] = coeff.get(vidx(q, j), 0.0) + 8.0
             rows.append(coeff); lows.append(0.0); highs.append(8.0)
 
+    # Conditional rule: if a QB stack is used, do not roster either DST from that game.
+    if no_dst_from_qb_game:
+        for q in df.index[df["is_QB"] & df["ActiveForBuild"]]:
+            q_team = df.loc[q, "Team"]
+            q_opp = df.loc[q, "Opponent"]
+            game_dsts = df.index[df["is_DST"] & df["Team"].isin([q_team, q_opp])].tolist()
+            for d in game_dsts:
+                coeff = {}
+                for j in range(s):
+                    if elig[ROSTER_SLOTS[j]][q]:
+                        coeff[vidx(q, j)] = coeff.get(vidx(q, j), 0.0) + 1.0
+                    if elig[ROSTER_SLOTS[j]][d]:
+                        coeff[vidx(d, j)] = coeff.get(vidx(d, j), 0.0) + 1.0
+                rows.append(coeff); lows.append(0.0); highs.append(1.0)
+
+    # Optional broader rule: do not roster offensive players against your DST.
+    if no_offense_vs_dst:
+        for d in df.index[df["is_DST"] & df["ActiveForBuild"]]:
+            d_team = df.loc[d, "Team"]
+            d_opp = df.loc[d, "Opponent"]
+            opp_offense = df.index[
+                df["ActiveForBuild"] & (df["Team"] == d_opp) & ~df["is_DST"]
+            ].tolist()
+            for o in opp_offense:
+                coeff = {}
+                for j in range(s):
+                    if elig[ROSTER_SLOTS[j]][d]:
+                        coeff[vidx(d, j)] = coeff.get(vidx(d, j), 0.0) + 1.0
+                    if elig[ROSTER_SLOTS[j]][o]:
+                        coeff[vidx(o, j)] = coeff.get(vidx(o, j), 0.0) + 1.0
+                rows.append(coeff); lows.append(0.0); highs.append(1.0)
+
     # Avoid QB vs opposing DST.
     for q in df.index[df["is_QB"] & df["ActiveForBuild"]]:
         opp = df.loc[q, "Opponent"]
@@ -443,7 +503,7 @@ def lineup_details(df, chosen, strategy_map, preferred_stack_teams):
 def generate_lineups(
     df, field_size, payout_style, count, attempts, min_salary,
     qb_stack_min, bringback_mode, preferred_stack_teams,
-    strategy_map, seed
+    strategy_map, team_strategy_map, no_dst_from_qb_game, no_offense_vs_dst, seed
 ):
     aggr = contest_aggression(field_size, payout_style)
     rng = np.random.default_rng(seed)
@@ -458,8 +518,10 @@ def generate_lineups(
             break
 
         chosen = solve_one(
-            df, aggr, rng, strategy_map, preferred_stack_teams,
+            df, aggr, rng, strategy_map, preferred_stack_teams, team_strategy_map,
             min_salary, qb_stack_min, bringback_mode,
+            no_dst_from_qb_game=no_dst_from_qb_game,
+            no_offense_vs_dst=no_offense_vs_dst,
             noise_scale=0.13 + 0.11 * aggr
         )
         if not chosen:
@@ -512,7 +574,7 @@ def generate_lineups(
 # UI
 # -----------------------------
 
-st.title("🏈 DFS Tournament Builder V2")
+st.title("🏈 DFS Tournament Builder V2.2")
 st.caption("Your football opinions first. The optimizer builds around them, then rates the lineups.")
 
 with st.sidebar:
@@ -560,6 +622,45 @@ if dk_file and ss_file:
             "Preferred QB stack teams",
             teams,
             help="If you select teams here, generated lineups will use a QB from one of these teams."
+        )
+
+        st.markdown("**Team priorities**")
+        team_priority_df = pd.DataFrame({
+            "Team": teams,
+            "Priority": ["Neutral"] * len(teams),
+        })
+        if "team_strategy_master" not in st.session_state:
+            st.session_state["team_strategy_master"] = {}
+        for idx, r in team_priority_df.iterrows():
+            team_priority_df.at[idx, "Priority"] = st.session_state["team_strategy_master"].get(r["Team"], "Neutral")
+
+        team_priority_edit = st.data_editor(
+            team_priority_df,
+            hide_index=True,
+            use_container_width=True,
+            disabled=["Team"],
+            column_config={
+                "Priority": st.column_config.SelectboxColumn(
+                    "Priority",
+                    options=["Core", "Like", "Neutral", "Fade", "Exclude"]
+                )
+            },
+            key="team_priority_editor",
+        )
+        for _, r in team_priority_edit.iterrows():
+            st.session_state["team_strategy_master"][r["Team"]] = r["Priority"]
+        team_strategy_map = st.session_state["team_strategy_master"]
+
+        st.markdown("**Conditional rules**")
+        no_dst_from_qb_game = st.checkbox(
+            "If I stack a game, do not use either defense from that game",
+            value=True,
+            help="Example: Herbert + LAC pass catchers means no Chargers DST and no Cardinals DST."
+        )
+        no_offense_vs_dst = st.checkbox(
+            "Do not use offensive players against my selected DST",
+            value=False,
+            help="Stronger rule. If Jets DST is used, no Titans offensive player can appear."
         )
 
         st.subheader("3. Set your player opinions")
@@ -650,6 +751,9 @@ if dk_file and ss_file:
                     bringback_mode=bringback_mode,
                     preferred_stack_teams=preferred_stack_teams,
                     strategy_map=strategy_map,
+                    team_strategy_map=team_strategy_map,
+                    no_dst_from_qb_game=no_dst_from_qb_game,
+                    no_offense_vs_dst=no_offense_vs_dst,
                     seed=seed,
                 )
 
