@@ -9,7 +9,145 @@ import streamlit as st
 from scipy.optimize import Bounds, LinearConstraint, milp
 from scipy.sparse import lil_matrix
 
-st.set_page_config(page_title="DFS Tournament Builder V2.3", page_icon="🏈", layout="wide")
+st.set_page_config(page_title="DFS Tournament Builder V2.5", page_icon="🏈", layout="wide")
+
+st.markdown("""
+<style>
+/* ---------- Global ---------- */
+.block-container {
+    padding-top: 1.2rem;
+    padding-bottom: 3rem;
+    max-width: 1500px;
+}
+html, body, [class*="css"]  {
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+[data-testid="stAppViewContainer"] {
+    background:
+        radial-gradient(circle at 15% 0%, rgba(46, 204, 113, 0.08), transparent 28%),
+        radial-gradient(circle at 100% 20%, rgba(0, 184, 255, 0.06), transparent 30%);
+}
+h1, h2, h3 {
+    letter-spacing: -0.02em;
+}
+
+/* ---------- Sidebar ---------- */
+[data-testid="stSidebar"] {
+    background: linear-gradient(180deg, rgba(17,24,39,0.98), rgba(15,23,42,0.98));
+    border-right: 1px solid rgba(255,255,255,0.08);
+}
+[data-testid="stSidebar"] * {
+    color: #f8fafc;
+}
+[data-testid="stSidebar"] label {
+    font-weight: 600;
+}
+[data-testid="stSidebar"] [data-baseweb="select"] > div,
+[data-testid="stSidebar"] input {
+    background: rgba(255,255,255,0.06) !important;
+    border-color: rgba(255,255,255,0.12) !important;
+}
+
+/* ---------- Hero ---------- */
+.hero {
+    border: 1px solid rgba(148,163,184,0.18);
+    border-radius: 22px;
+    padding: 22px 24px;
+    margin-bottom: 18px;
+    background: linear-gradient(135deg, rgba(15,23,42,0.96), rgba(30,41,59,0.92));
+    box-shadow: 0 10px 30px rgba(0,0,0,0.10);
+}
+.hero-title {
+    font-size: 2rem;
+    font-weight: 800;
+    color: #f8fafc;
+    margin: 0;
+}
+.hero-sub {
+    color: #cbd5e1;
+    margin-top: 4px;
+}
+.hero-chip {
+    display: inline-block;
+    margin-top: 12px;
+    padding: 5px 10px;
+    border-radius: 999px;
+    background: rgba(34,197,94,0.15);
+    border: 1px solid rgba(34,197,94,0.35);
+    color: #86efac;
+    font-size: 0.82rem;
+    font-weight: 700;
+}
+
+/* ---------- Section cards ---------- */
+.section-card {
+    border: 1px solid rgba(148,163,184,0.20);
+    border-radius: 18px;
+    padding: 18px;
+    background: rgba(255,255,255,0.82);
+    box-shadow: 0 8px 22px rgba(15,23,42,0.05);
+    margin-bottom: 14px;
+}
+@media (prefers-color-scheme: dark) {
+    .section-card {
+        background: rgba(15,23,42,0.55);
+    }
+}
+
+/* ---------- Metrics ---------- */
+[data-testid="stMetric"] {
+    border: 1px solid rgba(148,163,184,0.20);
+    border-radius: 16px;
+    padding: 12px 14px;
+    background: rgba(255,255,255,0.70);
+}
+[data-testid="stMetricValue"] {
+    font-weight: 800;
+}
+
+/* ---------- Buttons ---------- */
+.stButton > button {
+    border-radius: 12px;
+    font-weight: 700;
+    padding: 0.65rem 1rem;
+    border: 1px solid rgba(148,163,184,0.25);
+}
+.stButton > button[kind="primary"] {
+    background: linear-gradient(90deg, #16a34a, #22c55e);
+    border: 0;
+    color: white;
+}
+
+/* ---------- Dataframes ---------- */
+[data-testid="stDataFrame"] {
+    border-radius: 16px;
+    overflow: hidden;
+    border: 1px solid rgba(148,163,184,0.20);
+}
+
+/* ---------- Tabs ---------- */
+button[data-baseweb="tab"] {
+    border-radius: 10px 10px 0 0;
+    font-weight: 700;
+}
+
+/* ---------- Badges ---------- */
+.badge {
+    display:inline-block;
+    padding:4px 8px;
+    border-radius:999px;
+    font-size:0.78rem;
+    font-weight:800;
+}
+.badge-a {background:#dcfce7;color:#166534;}
+.badge-b {background:#dbeafe;color:#1d4ed8;}
+.badge-c {background:#fef3c7;color:#92400e;}
+.badge-x {background:#fee2e2;color:#991b1b;}
+
+/* ---------- Small helper ---------- */
+.muted { color:#64748b; font-size:0.9rem; }
+</style>
+""", unsafe_allow_html=True)
 
 ROSTER_SLOTS = ["QB", "RB1", "RB2", "WR1", "WR2", "WR3", "TE", "FLEX", "DST"]
 PRIORITY_OPTIONS = ["Core", "Like", "Neutral", "Fade", "Exclude"]
@@ -284,8 +422,8 @@ def solve_one(
     for i in range(n):
         player_id = str(df.loc[i, "ID"])
         strat = strategy_map.get(player_id, {})
-        excluded = strat.get("Priority") == "Exclude"
-        locked = bool(strat.get("Lock", False))
+        excluded = bool(strat.get("Exclude", False)) or strat.get("Priority") == "Exclude"
+        locked = bool(strat.get("Lock", False)) and not excluded
 
         for j, slot in enumerate(ROSTER_SLOTS):
             c[vidx(i, j)] = -randomized[i]
@@ -308,7 +446,7 @@ def solve_one(
     for i in range(n):
         player_id = str(df.loc[i, "ID"])
         strat = strategy_map.get(player_id, {})
-        if bool(strat.get("Lock", False)):
+        if bool(strat.get("Lock", False)) and not bool(strat.get("Exclude", False)):
             coeff = {vidx(i, j): 1.0 for j in range(s)}
             rows.append(coeff); lows.append(1.0); highs.append(1.0)
 
@@ -624,8 +762,13 @@ def calculate_exposure_table(df, result, strategy_map):
 # UI
 # -----------------------------
 
-st.title("🏈 DFS Tournament Builder V2.3")
-st.caption("Your football opinions first. The optimizer builds around them, then rates the lineups.")
+st.markdown("""
+<div class="hero">
+  <div class="hero-title">🏈 DFS Tournament Builder</div>
+  <div class="hero-sub">Build lineups around your football takes, then rate them by projection, correlation, leverage and fit.</div>
+  <div class="hero-chip">V2.5 • Custom strategy engine</div>
+</div>
+""", unsafe_allow_html=True)
 
 with st.sidebar:
     st.header("Contest")
@@ -655,7 +798,8 @@ with st.sidebar:
     lineup_count = st.slider("Lineups to generate", 25, 500, 100, 25)
     seed = st.number_input("Random seed", min_value=1, value=42, step=1)
 
-st.subheader("1. Upload this week's files")
+st.markdown("## 📥 Slate data")
+st.caption("Upload this week’s DraftKings salaries and SaberSim projection/ownership files.")
 c1, c2 = st.columns(2)
 with c1:
     dk_file = st.file_uploader("DraftKings salary CSV", type=["csv"], key="dk")
@@ -666,7 +810,8 @@ if dk_file and ss_file:
     try:
         df = prepare_player_pool(dk_file, ss_file)
 
-        st.subheader("2. Choose the stacks you want")
+        st.markdown("## 🧩 Stack Builder")
+        st.caption("Choose the teams you want to build around and let the optimizer create correlated combinations.")
         teams = sorted(df["Team"].dropna().unique().tolist())
         preferred_stack_teams = st.multiselect(
             "Preferred QB stack teams",
@@ -674,7 +819,8 @@ if dk_file and ss_file:
             help="If you select teams here, generated lineups will use a QB from one of these teams."
         )
 
-        st.markdown("**Team priorities**")
+        st.markdown("### Team priorities")
+        st.caption("Push entire offenses up or down without locking every individual player.")
         team_priority_df = pd.DataFrame({
             "Team": teams,
             "Priority": ["Neutral"] * len(teams),
@@ -701,7 +847,8 @@ if dk_file and ss_file:
             st.session_state["team_strategy_master"][r["Team"]] = r["Priority"]
         team_strategy_map = st.session_state["team_strategy_master"]
 
-        st.markdown("**Conditional rules**")
+        st.markdown("### Conditional rules")
+        st.caption("Tell the optimizer which lineup combinations should never happen.")
         no_dst_from_qb_game = st.checkbox(
             "If I stack a game, do not use either defense from that game",
             value=True,
@@ -713,7 +860,8 @@ if dk_file and ss_file:
             help="Stronger rule. If Jets DST is used, no Titans offensive player can appear."
         )
 
-        st.subheader("3. Set your player opinions")
+        st.markdown("## 👤 Player Pool")
+        st.caption("Use the dedicated Lock / Exclude checkboxes, plus Core / Like / Fade and exposure targets to shape your pool.")
         st.caption("Lock = must use. Core/Like increases priority. Fade reduces priority. Exclude removes the player.")
 
         f1, f2 = st.columns([1, 1])
@@ -737,6 +885,7 @@ if dk_file and ss_file:
             "Proj": view["My Proj"].round(2),
             "Own": view["My Own"].round(1),
             "Lock": False,
+            "Exclude": False,
             "Priority": "Neutral",
             "Min Exposure": 0,
             "Max Exposure": 100,
@@ -750,6 +899,7 @@ if dk_file and ss_file:
             existing = st.session_state["strategy_master"].get(str(r["ID"]))
             if existing:
                 base_strategy.at[idx, "Lock"] = existing.get("Lock", False)
+                base_strategy.at[idx, "Exclude"] = existing.get("Exclude", False)
                 base_strategy.at[idx, "Priority"] = existing.get("Priority", "Neutral")
                 base_strategy.at[idx, "Min Exposure"] = existing.get("Min Exposure", 0)
                 base_strategy.at[idx, "Max Exposure"] = existing.get("Max Exposure", 100)
@@ -763,6 +913,7 @@ if dk_file and ss_file:
             column_config={
                 "Priority": st.column_config.SelectboxColumn("Priority", options=PRIORITY_OPTIONS),
                 "Lock": st.column_config.CheckboxColumn("Lock"),
+                "Exclude": st.column_config.CheckboxColumn("Exclude"),
                 "Min Exposure": st.column_config.NumberColumn("Min %", min_value=0, max_value=100, step=5),
                 "Max Exposure": st.column_config.NumberColumn("Max %", min_value=0, max_value=100, step=5),
             },
@@ -771,9 +922,23 @@ if dk_file and ss_file:
 
         # Save visible edits into master map.
         for _, r in edited.iterrows():
+            lock_val = bool(r["Lock"])
+            exclude_val = bool(r["Exclude"])
+
+            # Lock and Exclude cannot both be active.
+            # Exclude wins if both are checked in the editor.
+            if lock_val and exclude_val:
+                lock_val = False
+
+            priority_val = str(r["Priority"])
+            # Dedicated Exclude checkbox overrides dropdown priority.
+            if exclude_val:
+                priority_val = "Exclude"
+
             st.session_state["strategy_master"][str(r["ID"])] = {
-                "Lock": bool(r["Lock"]),
-                "Priority": str(r["Priority"]),
+                "Lock": lock_val,
+                "Exclude": exclude_val,
+                "Priority": priority_val,
                 "Min Exposure": float(r["Min Exposure"]),
                 "Max Exposure": float(r["Max Exposure"]),
             }
@@ -783,15 +948,18 @@ if dk_file and ss_file:
         # Quick summary
         counts = defaultdict(int)
         locks = 0
+        excludes = 0
         for v in strategy_map.values():
             counts[v.get("Priority", "Neutral")] += 1
-            locks += int(bool(v.get("Lock", False)))
+            locks += int(bool(v.get("Lock", False)) and not bool(v.get("Exclude", False)))
+            excludes += int(bool(v.get("Exclude", False)) or v.get("Priority") == "Exclude")
         st.caption(
             f"Locks: {locks} | Core: {counts['Core']} | Like: {counts['Like']} | "
-            f"Fade: {counts['Fade']} | Exclude: {counts['Exclude']}"
+            f"Fade: {counts['Fade']} | Exclude: {excludes}"
         )
 
-        st.subheader("4. Generate and rate lineups")
+        st.markdown("## ⚡ Build lineups")
+        st.caption("Generate a pool based on your contest, stacks, player opinions and rules.")
         if st.button("Generate Rated Lineups", type="primary", use_container_width=True):
             with st.spinner("Building around your player and stack preferences..."):
                 result = generate_lineups(
@@ -823,8 +991,16 @@ if dk_file and ss_file:
 if "v2_result" in st.session_state:
     result = st.session_state["v2_result"]
 
-    st.subheader("5. Your rated lineup pool")
+    st.markdown("## 🏆 Rated lineup pool")
+    st.caption("The best builds rise to the top based on projection, correlation, leverage and your strategy.")
     st.caption("Ratings are relative to the lineups this build generated. They balance projection, correlation, leverage and your own preferences.")
+
+    top = result.iloc[0]
+    s1, s2, s3, s4 = st.columns(4)
+    s1.metric("Top grade", top["Rating"])
+    s2.metric("Top projection", top["Projection"])
+    s3.metric("Top lineup ownership", f"{top['Total Own']}%")
+    s4.metric("Generated", len(result))
 
     display_cols = [
         "Rank", "Rating", "Projection Grade", "Correlation Grade", "Leverage Grade", "User Fit Grade",
@@ -834,14 +1010,18 @@ if "v2_result" in st.session_state:
     ]
     st.dataframe(result[display_cols], use_container_width=True, height=620)
 
-    st.subheader("Inspect a lineup")
+    st.markdown("### 🔎 Lineup inspector")
     rank_choice = st.selectbox("Choose rank", result["Rank"].tolist())
     r = result[result["Rank"] == rank_choice].iloc[0]
 
+    grade = str(r["Rating"])
+    grade_class = "badge-a" if grade.startswith("A") else ("badge-b" if grade.startswith("B") else "badge-c")
+    st.markdown(f'<span class="badge {grade_class}">Overall grade: {grade}</span>', unsafe_allow_html=True)
+
     a, b, c, d = st.columns(4)
-    a.metric("Overall", r["Rating"])
-    b.metric("Projection", r["Projection"])
-    c.metric("Total own", f"{r['Total Own']}%")
+    a.metric("Projection", r["Projection"])
+    b.metric("Total ownership", f"{r['Total Own']}%")
+    c.metric("Salary used", f"${int(r['Salary']):,}")
     d.metric("Salary left", f"${int(r['Salary Left']):,}")
 
     st.write(f"**Stack:** {r['Stack Summary']}")
@@ -853,7 +1033,7 @@ if "v2_result" in st.session_state:
     )
 
 
-    st.subheader("6. Exposure Lab")
+    st.markdown("## 📊 Exposure Lab")
     st.caption(
         "Actual Exp % is how often each player appears in this generated lineup pool. "
         "Raise Min Target % to push a player up; lower Max Target % to cap him. "
@@ -900,7 +1080,7 @@ if "v2_result" in st.session_state:
                 continue
             pid = str(er["ID"])
             current = st.session_state["strategy_master"].get(pid, {
-                "Lock": False, "Priority": "Neutral", "Min Exposure": 0, "Max Exposure": 100
+                "Lock": False, "Exclude": False, "Priority": "Neutral", "Min Exposure": 0, "Max Exposure": 100
             })
             current["Min Exposure"] = float(er["Min Target %"])
             current["Max Exposure"] = float(er["Max Target %"])
@@ -921,6 +1101,6 @@ if "v2_result" in st.session_state:
 
 st.divider()
 st.caption(
-    "V2.3 uses your stack choices, player/team priorities, locks/excludes, exposure targets, projections, ownership and contest size. "
+    "V2.5 adds a dedicated Exclude checkbox beside Lock, while keeping the visual redesign, stack rules, priorities, and exposure controls. "
     "It still does not claim to know true ceiling or duplication until those data sources are added."
 )
