@@ -9,7 +9,7 @@ import streamlit as st
 from scipy.optimize import Bounds, LinearConstraint, milp
 from scipy.sparse import lil_matrix
 
-st.set_page_config(page_title="DFS Lab V4.1", page_icon="🏈", layout="wide")
+st.set_page_config(page_title="DFS Lab V4.3", page_icon="🏈", layout="wide")
 
 st.markdown("""
 <style>
@@ -400,7 +400,8 @@ def slot_eligibility(df):
 
 
 def player_objective(df, aggr, strategy_map, preferred_stack_teams, team_strategy_map, exposure_state=None, built_count=0):
-    proj = df["My Proj"].to_numpy(float)
+    proj_col = "Script Proj" if "Script Proj" in df.columns else "My Proj"
+    proj = df[proj_col].to_numpy(float)
     own = np.clip(df["My Own"].to_numpy(float), 0.05, None)
 
     # Projection remains the backbone.
@@ -1039,12 +1040,12 @@ def showdown_script_bonus(row, script, script_team):
     opp = row["Opponent"]
     same = team == script_team if script_team else False
     bonus = 0.0
-    if script == "Shootout":
+    if script in ["Shootout", "Pass-heavy shootout"]:
         if row["is_QB"]: bonus += 1.8
         if row["is_passcatcher"]: bonus += 1.2
         if row["is_RB"]: bonus += 0.35
         if row["is_DST"]: bonus -= 1.1
-    elif script == "Low-scoring game":
+    elif script in ["Low-scoring game", "Defensive / field-goal battle", "Ground-and-pound"]:
         if row["is_RB"]: bonus += 1.0
         if row["is_K"]: bonus += 1.1
         if row["is_DST"]: bonus += 1.2
@@ -1067,6 +1068,161 @@ def showdown_script_bonus(row, script, script_team):
         if (not same) and row["is_DST"]: bonus += 0.25
     return bonus
 
+
+
+def infer_score_script(team_scores):
+    """Translate a predicted final score into a broad Showdown game environment."""
+    if not team_scores or len(team_scores) < 2:
+        return "Neutral", "", {"total": 0, "margin": 0, "winner": "", "loser": ""}
+    ordered = sorted(team_scores.items(), key=lambda kv: kv[1], reverse=True)
+    winner, win_pts = ordered[0]
+    loser, lose_pts = ordered[1]
+    total = float(win_pts + lose_pts)
+    margin = float(win_pts - lose_pts)
+    if total <= 41:
+        script = "Low-scoring game"
+    elif total >= 55 and margin <= 10:
+        script = "Pass-heavy shootout"
+    elif margin >= 17:
+        script = "Team dominates"
+    elif margin >= 8:
+        script = "Team plays from ahead"
+    else:
+        script = "Team wins close"
+    return script, winner, {"total": total, "margin": margin, "winner": winner, "loser": loser}
+
+
+def _scenario_intensity_scale(level):
+    return {"Conservative": 0.65, "Standard": 1.0, "Aggressive": 1.30}.get(level, 1.0)
+
+
+def score_projection_multiplier(row, team_scores, intensity="Standard"):
+    """Conservative, transparent heuristic for translating a predicted score into role-based projection movement.
+    It is intentionally bounded; the goal is to tilt a baseline projection, not replace a projection model.
+    """
+    if not team_scores or row["Team"] not in team_scores or row["Opponent"] not in team_scores:
+        return 1.0
+    team_pts = float(team_scores[row["Team"]])
+    opp_pts = float(team_scores[row["Opponent"]])
+    total = team_pts + opp_pts
+    margin = team_pts - opp_pts
+    scale = _scenario_intensity_scale(intensity)
+
+    # Baselines roughly represent an ordinary NFL scoring environment. Effects are kept modest.
+    team_env = np.clip((team_pts - 23.5) / 55.0, -0.12, 0.12)
+    total_env = np.clip((total - 47.0) / 85.0, -0.09, 0.09)
+    lead = np.clip(margin / 70.0, -0.12, 0.12)
+    trail = np.clip((-margin) / 70.0, -0.12, 0.12)
+
+    delta = 0.0
+    if row["is_QB"]:
+        delta += 0.75 * team_env + 0.75 * total_env + 0.45 * max(0.0, trail) - 0.20 * max(0.0, lead)
+    elif row["is_passcatcher"]:
+        delta += 0.75 * team_env + 0.90 * total_env + 0.65 * max(0.0, trail) - 0.18 * max(0.0, lead)
+    elif row["is_RB"]:
+        delta += 0.70 * team_env + 0.20 * total_env + 0.90 * max(0.0, lead) - 0.65 * max(0.0, trail)
+    elif row["is_K"]:
+        delta += 0.45 * team_env
+        if total <= 44: delta += 0.045
+        if 16 <= team_pts <= 29: delta += 0.030
+        if team_pts < 13: delta -= 0.070
+    elif row["is_DST"]:
+        # Defense is driven more by opponent suppression than own-team scoring.
+        delta += np.clip((20.5 - opp_pts) / 75.0, -0.13, 0.13)
+        if total <= 42: delta += 0.045
+        if margin >= 7: delta += 0.035
+
+    delta = float(np.clip(delta * scale, -0.20, 0.20))
+    return 1.0 + delta
+
+
+def named_script_projection_multiplier(row, script, script_team, intensity="Standard"):
+    """Small projection tilts for a user's football story. These stack with score-driven tilts."""
+    scale = _scenario_intensity_scale(intensity)
+    same = bool(script_team) and row["Team"] == script_team
+    d = 0.0
+    if script in ["Shootout", "Pass-heavy shootout"]:
+        if row["is_QB"]: d += 0.055
+        if row["is_passcatcher"]: d += 0.065
+        if row["is_RB"]: d += 0.010
+        if row["is_DST"]: d -= 0.065
+    elif script in ["Low-scoring game", "Defensive / field-goal battle"]:
+        if row["is_RB"]: d += 0.035
+        if row["is_K"]: d += 0.060
+        if row["is_DST"]: d += 0.075
+        if row["is_QB"] or row["is_passcatcher"]: d -= 0.035
+    elif script == "Ground-and-pound":
+        if row["is_RB"]: d += 0.070
+        if row["is_K"] or row["is_DST"]: d += 0.035
+        if row["is_QB"] or row["is_passcatcher"]: d -= 0.025
+    elif script in ["Team dominates", "Team plays from ahead"]:
+        if same and row["is_RB"]: d += 0.070
+        if same and row["is_DST"]: d += 0.070
+        if same and row["is_K"]: d += 0.035
+        if (not same) and row["is_QB"]: d += 0.035
+        if (not same) and row["is_passcatcher"]: d += 0.045
+        if same and row["is_passcatcher"] and script == "Team dominates": d -= 0.015
+    elif script == "Team wins close":
+        if same: d += 0.018
+        if row["is_QB"] or row["is_passcatcher"] or row["is_RB"]: d += 0.012
+    elif script == "Team passing comeback":
+        if same and row["is_QB"]: d += 0.075
+        if same and row["is_passcatcher"]: d += 0.065
+        if same and row["is_RB"]: d -= 0.040
+        if (not same) and row["is_RB"]: d += 0.045
+    return 1.0 + float(np.clip(d * scale, -0.12, 0.12))
+
+
+def apply_showdown_scenario(df, script, script_team, use_score=False, team_scores=None, intensity="Standard"):
+    out = df.copy()
+    multipliers = []
+    for _, r in out.iterrows():
+        m = named_script_projection_multiplier(r, script, script_team, intensity)
+        if use_score:
+            m *= score_projection_multiplier(r, team_scores or {}, intensity)
+        multipliers.append(float(np.clip(m, 0.75, 1.25)))
+    out["Scenario Mult"] = multipliers
+    out["Script Proj"] = (out["My Proj"].astype(float) * out["Scenario Mult"]).round(3)
+    out["Proj Change %"] = ((out["Scenario Mult"] - 1.0) * 100).round(1)
+    return out
+
+
+def script_build_adjustments(base_weights, script, script_team, use_score=False, team_scores=None, auto_shape=True):
+    """Return construction mix + correlation settings implied by the scenario.
+    Exact percentages are heuristics, while the direction is grounded in standard Showdown correlation theory.
+    """
+    weights = dict(base_weights)
+    if not auto_shape:
+        return weights, None
+
+    margin = 0.0
+    total = 0.0
+    if use_score and team_scores and len(team_scores) >= 2:
+        vals = sorted([float(v) for v in team_scores.values()], reverse=True)
+        margin = vals[0] - vals[1]
+        total = sum(vals)
+
+    if script in ["Shootout", "Pass-heavy shootout"] or total >= 55:
+        weights = {"3-3": 58, "4-2": 19, "2-4": 19, "5-1": 2, "1-5": 2}
+        corr = {"qb_pc": 2, "wrte_qb": 90, "rb_ctrl": 30}
+    elif script in ["Low-scoring game", "Defensive / field-goal battle", "Ground-and-pound"] or (use_score and total and total <= 41):
+        weights = {"3-3": 42, "4-2": 25, "2-4": 25, "5-1": 4, "1-5": 4}
+        corr = {"qb_pc": 1, "wrte_qb": 70, "rb_ctrl": 75}
+    elif script == "Team dominates" or margin >= 17:
+        weights = {"3-3": 18, "4-2": 28, "2-4": 28, "5-1": 13, "1-5": 13}
+        corr = {"qb_pc": 1, "wrte_qb": 70, "rb_ctrl": 80}
+    elif script == "Team plays from ahead" or margin >= 8:
+        weights = {"3-3": 34, "4-2": 27, "2-4": 27, "5-1": 6, "1-5": 6}
+        corr = {"qb_pc": 1, "wrte_qb": 75, "rb_ctrl": 70}
+    elif script == "Team passing comeback":
+        weights = {"3-3": 52, "4-2": 22, "2-4": 22, "5-1": 2, "1-5": 2}
+        corr = {"qb_pc": 2, "wrte_qb": 90, "rb_ctrl": 40}
+    elif script == "Team wins close" or (use_score and margin <= 6):
+        weights = {"3-3": 58, "4-2": 19, "2-4": 19, "5-1": 2, "1-5": 2}
+        corr = {"qb_pc": 2, "wrte_qb": 85, "rb_ctrl": 50}
+    else:
+        corr = None
+    return weights, corr
 
 def showdown_base_objective(df, aggr, strategy_map, script, script_team, exposure_state=None, cpt_exposure_state=None, built_count=0):
     proj = df["My Proj"].to_numpy(float)
@@ -1118,7 +1274,8 @@ def solve_showdown_one(
                 ub[vidx(i,j)] = 0
             if slot == "CPT":
                 cpt_own = max(float(r["CPT Own"]), 0.1)
-                cpt_lev = math.log((1.5*float(r["My Proj"])+2)/(cpt_own+1.5))
+                cpt_proj = float(r["Script Proj"] if "Script Proj" in r.index else r["My Proj"])
+                cpt_lev = math.log((1.5*cpt_proj+2)/(cpt_own+1.5))
                 val = 1.5*base[i] + (0.5 + 1.5*aggr)*cpt_lev
                 # Position priors are soft, never hard rules.
                 if r["is_WR"]: val += 0.55
@@ -1246,7 +1403,9 @@ def showdown_lineup_details(df, chosen, strategy_map, script, script_team):
     cpt=df.loc[cpt_i]
     flex_idxs=[i for slot,i in chosen if slot!="CPT"]
     p=df.loc[idxs]
-    projection=1.5*float(cpt["My Proj"])+float(df.loc[flex_idxs,"My Proj"].sum())
+    proj_col = "Script Proj" if "Script Proj" in df.columns else "My Proj"
+    projection=1.5*float(cpt[proj_col])+float(df.loc[flex_idxs,proj_col].sum())
+    base_projection=1.5*float(cpt["My Proj"])+float(df.loc[flex_idxs,"My Proj"].sum())
     salary=int(cpt["CaptainSalary"])+int(df.loc[flex_idxs,"FlexSalary"].sum())
     total_own=float(p["My Own"].sum())
 
@@ -1291,7 +1450,7 @@ def showdown_lineup_details(df, chosen, strategy_map, script, script_team):
     story += f" • {cpt['Name']} CPT • {construction}"
 
     return {
-        "Projection":round(projection,2),"Salary":salary,"Salary Left":salary_left,
+        "Projection":round(projection,2),"Base Projection":round(base_projection,2),"Scenario Delta":round(projection-base_projection,2),"Salary":salary,"Salary Left":salary_left,
         "Total Own":round(total_own,1),"CPT Own":round(float(cpt["CPT Own"]),1),
         "Correlation Raw":round(corr,2),"User Fit Raw":round(fit,2),
         "Dup Raw":dup_raw,"Captain":cpt["Name"],"Captain Pos":cpt["Position"],
@@ -1449,7 +1608,7 @@ hr{border-color:rgba(17,24,39,.07)!important;}
 
 st.markdown("""
 <style>
-/* V4.1 iPad readability polish — final overrides */
+/* V4.3 iPad readability + scenario engine */
 [data-testid="stSidebar"] {
     background: #f5f5f7 !important;
     border-right: 1px solid rgba(17,24,39,.08) !important;
@@ -1508,7 +1667,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown('''<div class="apple-hero"><div class="apple-eyebrow">DFS LAB</div><div class="apple-title">Classic + Showdown.</div><div class="apple-sub">One optimizer, two different strategy engines. Showdown adds Captain exposure, game scripts, construction control, correlation and duplication-aware ratings.</div><span class="pill">V4.2 • Showdown duplicate fix</span></div>''',unsafe_allow_html=True)
+st.markdown('''<div class="apple-hero"><div class="apple-eyebrow">DFS LAB</div><div class="apple-title">Classic + Showdown.</div><div class="apple-sub">One optimizer, two different strategy engines. Showdown adds Captain exposure, game scripts, construction control, correlation and duplication-aware ratings.</div><span class="pill">V4.3 • Scenario Engine</span></div>''',unsafe_allow_html=True)
 
 with st.sidebar:
     st.markdown("### Contest")
@@ -1589,7 +1748,7 @@ if mode=="Classic":
         with tabs[3]:
             if res is None or res.empty: st.info("Generate lineups from Build.")
             else:
-                show_cols=["Rank","Rating","Rating Score","Projection","Salary","Salary Left","Avg Own","Stack Summary"]+ROSTER_SLOTS
+                show_cols=["Rank","Rating","Rating Score","Projection","Base Projection","Scenario Delta","Salary","Salary Left","Avg Own","Stack Summary"]+ROSTER_SLOTS
                 st.dataframe(res[[c for c in show_cols if c in res.columns]],hide_index=True,use_container_width=True,height=590)
                 st.download_button("Download lineup analysis CSV",res.to_csv(index=False),"classic_lineups_v4.csv","text/csv",use_container_width=True)
         with tabs[4]:
@@ -1602,6 +1761,14 @@ else:
         df=prepare_showdown_pool(dk_file,ss_file); teams=[t for t in df["Team"].dropna().unique().tolist() if t]
         if len(teams)!=2: st.warning(f"Showdown normally has two teams. I found {len(teams)}: {', '.join(teams)}")
         st.session_state.setdefault("showdown_strategy",{})
+        st.session_state.setdefault("sd_use_score", False)
+        st.session_state.setdefault("sd_script", "Neutral")
+        st.session_state.setdefault("sd_script_team", "None")
+        st.session_state.setdefault("sd_intensity", "Standard")
+        st.session_state.setdefault("sd_auto_shape", True)
+        if len(teams) >= 2:
+            st.session_state.setdefault("sd_score_0", 24)
+            st.session_state.setdefault("sd_score_1", 21)
         q1,q2,q3,q4=st.columns(4); q1.metric("Players",len(df)); q2.metric("Teams",len(teams)); q3.metric("Field",f"{int(field_size):,}"); q4.metric("Pool",lineup_count)
         if bool(df["CPT Own Estimated"].any()): st.warning("Your SaberSim file does not appear to include Captain ownership. V4 is using a neutral fallback for CPT leverage. Overall ownership is still used normally.")
 
@@ -1640,10 +1807,20 @@ else:
             st.markdown('<div class="card-title">Player + Captain Exposure</div><div class="card-sub">Overall exposure and Captain exposure are controlled separately.</div>',unsafe_allow_html=True)
             team_filter=st.multiselect("Teams",teams,key="v4_sdteam")
             pos_filter=st.multiselect("Positions",sorted(df["Position"].dropna().unique().tolist()),key="v4_sdpos")
-            view=df.copy()
+            current_script=st.session_state.get("sd_script","Neutral")
+            current_team=st.session_state.get("sd_script_team","None")
+            if current_team=="None": current_team=""
+            current_use_score=bool(st.session_state.get("sd_use_score",False))
+            current_scores={}
+            if len(teams)>=2:
+                current_scores={teams[0]:float(st.session_state.get("sd_score_0",24)),teams[1]:float(st.session_state.get("sd_score_1",21))}
+            if current_script=="Auto from score" and current_use_score:
+                current_script,current_team,_=infer_score_script(current_scores)
+            scenario_df=apply_showdown_scenario(df,current_script,current_team,current_use_score,current_scores,st.session_state.get("sd_intensity","Standard"))
+            view=scenario_df.copy()
             if team_filter:view=view[view["Team"].isin(team_filter)]
             if pos_filter:view=view[view["Position"].isin(pos_filter)]
-            ed=pd.DataFrame({"ID":view["ID"].astype(str),"Name":view["Name"],"Pos":view["Position"],"Team":view["Team"],"Flex $":view["FlexSalary"],"Proj":view["My Proj"].round(2),"Own":view["My Own"].round(1),"CPT Own":view["CPT Own"].round(1),"Lock":False,"CPT Lock":False,"Exclude":False,"CPT Eligible":True,"Priority":"Neutral","Min Exposure":0,"Max Exposure":100,"CPT Min":0,"CPT Max":100})
+            ed=pd.DataFrame({"ID":view["ID"].astype(str),"Name":view["Name"],"Pos":view["Position"],"Team":view["Team"],"Flex $":view["FlexSalary"],"Proj":view["My Proj"].round(2),"Script Proj":view["Script Proj"].round(2),"Δ%":view["Proj Change %"].round(1),"Own":view["My Own"].round(1),"CPT Own":view["CPT Own"].round(1),"Lock":False,"CPT Lock":False,"Exclude":False,"CPT Eligible":True,"Priority":"Neutral","Min Exposure":0,"Max Exposure":100,"CPT Min":0,"CPT Max":100})
             for x,r in ed.iterrows():
                 e=st.session_state["showdown_strategy"].get(str(r["ID"]),{})
                 for c,k,d in [("Lock","Lock",False),("CPT Lock","CPT Lock",False),("Exclude","Exclude",False),("CPT Eligible","CPT Eligible",True),("Priority","Priority","Neutral"),("Min Exposure","Min Exposure",0),("Max Exposure","Max Exposure",100),("CPT Min","CPT Min",0),("CPT Max","CPT Max",100)]: ed.at[x,c]=e.get(k,d)
@@ -1652,14 +1829,16 @@ else:
                 hide_index=True,
                 use_container_width=True,
                 height=650,
-                disabled=["ID","Name","Pos","Team","Flex $","Proj","Own","CPT Own"],
-                column_order=["Name","Pos","Team","Flex $","Proj","Own","CPT Own","Lock","CPT Lock","Exclude","CPT Eligible","Priority","Min Exposure","Max Exposure","CPT Min","CPT Max"],
+                disabled=["ID","Name","Pos","Team","Flex $","Proj","Script Proj","Δ%","Own","CPT Own"],
+                column_order=["Name","Pos","Team","Flex $","Proj","Script Proj","Δ%","Own","CPT Own","Lock","CPT Lock","Exclude","CPT Eligible","Priority","Min Exposure","Max Exposure","CPT Min","CPT Max"],
                 column_config={
                     "Name":st.column_config.TextColumn("Player",width=200,pinned=True),
                     "Pos":st.column_config.TextColumn("Pos",width=58),
                     "Team":st.column_config.TextColumn("Team",width=68),
                     "Flex $":st.column_config.NumberColumn("Flex $",width=78,format="$%d"),
-                    "Proj":st.column_config.NumberColumn("Proj",width=70,format="%.2f"),
+                    "Proj":st.column_config.NumberColumn("Base",width=68,format="%.2f"),
+                    "Script Proj":st.column_config.NumberColumn("Scenario",width=78,format="%.2f"),
+                    "Δ%":st.column_config.NumberColumn("Δ%",width=58,format="%.1f"),
                     "Own":st.column_config.NumberColumn("Own",width=64,format="%.1f"),
                     "CPT Own":st.column_config.NumberColumn("CPT Own",width=78,format="%.1f"),
                     "Lock":st.column_config.CheckboxColumn("Lock",width=60),
@@ -1679,24 +1858,80 @@ else:
                 st.session_state["showdown_strategy"][str(r["ID"]) ]={"Lock":bool(r["Lock"]) and not ex and not cptlock,"CPT Lock":cptlock,"Exclude":ex,"CPT Eligible":bool(r["CPT Eligible"]) and not ex,"Priority":"Exclude" if ex else str(r["Priority"]),"Min Exposure":float(r["Min Exposure"]),"Max Exposure":float(r["Max Exposure"]),"CPT Min":float(r["CPT Min"]),"CPT Max":float(r["CPT Max"])}
 
         with tabs[2]:
-            st.markdown('<div class="card-title">Game Script</div><div class="card-sub">Tell the optimizer the story you are betting on. This changes player weights and how asymmetric constructions are oriented.</div>',unsafe_allow_html=True)
-            script=st.selectbox("Script",["Neutral","Shootout","Low-scoring game","Team wins close","Team dominates","Team plays from ahead","Team passing comeback"])
+            st.markdown('<div class="card-title">Scenario Engine</div><div class="card-sub">Use a football story, a predicted score, or both. V4.3 converts the scenario into projection tilts, correlation rules and lineup-construction preferences.</div>',unsafe_allow_html=True)
+            script_options=["Neutral","Auto from score","Shootout","Pass-heavy shootout","Low-scoring game","Defensive / field-goal battle","Ground-and-pound","Team wins close","Team dominates","Team plays from ahead","Team passing comeback"]
+            script=st.selectbox("Game script",script_options,key="sd_script")
+            use_score=st.toggle("Use predicted score to adjust projections",key="sd_use_score")
+            team_scores={}
+            score_profile={"total":0,"margin":0,"winner":"","loser":""}
+            if len(teams)>=2:
+                sc1,sc2=st.columns(2)
+                with sc1: score0=st.number_input(f"{teams[0]} score",0,70,key="sd_score_0",disabled=not use_score)
+                with sc2: score1=st.number_input(f"{teams[1]} score",0,70,key="sd_score_1",disabled=not use_score)
+                team_scores={teams[0]:float(score0),teams[1]:float(score1)}
+            intensity=st.select_slider("Scenario influence",options=["Conservative","Standard","Aggressive"],key="sd_intensity")
             directional=script in ["Team wins close","Team dominates","Team plays from ahead","Team passing comeback"]
-            script_team=st.selectbox("Script team",["None"]+teams,index=0,disabled=not directional)
-            if script_team=="None":script_team=""
-            script_text={"Neutral":"No directional boost. Projection, leverage and your player takes drive the build.","Shootout":"Boost QBs and pass catchers on both sides; de-emphasize defense.","Low-scoring game":"Boost RB, kicker and DST combinations; slightly lower pass-game preference.","Team wins close":"Small boost to the selected team without forcing a blowout construction.","Team dominates":"Boost selected-team RB/DST/K and orient 4-2 / 5-1 builds toward that side.","Team plays from ahead":"Favor selected-team rushing/control pieces plus opponent passing volume.","Team passing comeback":"Favor selected-team QB/WR/TE and opponent RB game-closing pieces."}
-            st.info(script_text[script])
-            st.markdown("#### How V4 grades Showdown")
+            script_team=st.selectbox("Script team",["None"]+teams,disabled=(not directional) or script=="Auto from score",key="sd_script_team")
+            if script_team=="None": script_team=""
+
+            effective_script=script
+            effective_team=script_team
+            if use_score and team_scores:
+                auto_script,auto_team,score_profile=infer_score_script(team_scores)
+                if script=="Auto from score":
+                    effective_script=auto_script; effective_team=auto_team
+                st.markdown(f"**Score read:** {int(score_profile['total'])} total • {int(score_profile['margin'])}-point margin • **{auto_team}** projected winner • auto shape: **{auto_script}**")
+            elif script=="Auto from score":
+                effective_script="Neutral"; effective_team=""
+                st.warning("Turn on predicted score to use Auto from score.")
+
+            script_text={
+                "Neutral":"No directional football-story tilt. Baseline projection, leverage and your player takes drive the build.",
+                "Shootout":"Boost both passing games and reduce defense preference.",
+                "Pass-heavy shootout":"Stronger QB/WR/TE emphasis, more 3-3 builds and tighter QB/pass-catcher correlation.",
+                "Low-scoring game":"Raise RB/K/DST slightly and reduce passing-game projections.",
+                "Defensive / field-goal battle":"Strongest K/DST environment; keeps skill-player adjustments conservative.",
+                "Ground-and-pound":"Raises RBs and control pieces while reducing pass-game emphasis.",
+                "Team wins close":"Mostly balanced 3-3 builds with a mild lean toward the selected team.",
+                "Team dominates":"More 4-2/5-1 winner-heavy constructions; winner RB/DST/K rise and trailing pass volume rises.",
+                "Team plays from ahead":"Winner rushing/control pieces rise while the opponent QB/WR/TE get catch-up volume.",
+                "Team passing comeback":"Selected-team QB/WR/TE rise; opponent RB gets a closing-game boost.",
+                "Auto from score":"The entered score chooses the broad game shape automatically."
+            }
+            st.info(script_text.get(script,script_text["Neutral"]))
+
+            auto_shape=st.toggle("Let the scenario shape lineup construction + correlation",key="sd_auto_shape")
+            scenario_df=apply_showdown_scenario(df,effective_script,effective_team,use_score,team_scores,intensity)
+            effective_weights,corr_overrides=script_build_adjustments(construction_weights,effective_script,effective_team,use_score,team_scores,auto_shape)
+            if auto_shape:
+                mix_txt=" • ".join(f"{k} {int(v)}%" for k,v in effective_weights.items())
+                st.caption(f"Scenario build mix: {mix_txt}")
+                if corr_overrides:
+                    st.caption(f"Scenario correlation: QB CPT + {corr_overrides['qb_pc']} pass catcher(s) • WR/TE CPT + QB {corr_overrides['wrte_qb']}% • RB CPT + DST/K {corr_overrides['rb_ctrl']}%")
+
+            st.markdown("#### Projection movement")
+            preview=scenario_df[["Name","Position","Team","My Proj","Script Proj","Proj Change %"]].copy()
+            preview.columns=["Player","Pos","Team","Base","Scenario","Change %"]
+            preview=preview.sort_values("Change %",key=lambda x:x.abs(),ascending=False).head(14)
+            st.dataframe(preview,hide_index=True,use_container_width=True,height=410,column_config={"Player":st.column_config.TextColumn("Player",pinned=True,width=190),"Base":st.column_config.NumberColumn("Base",format="%.2f"),"Scenario":st.column_config.NumberColumn("Scenario",format="%.2f"),"Change %":st.column_config.NumberColumn("Change %",format="%.1f")})
+            st.caption("These are bounded scenario tilts applied to the uploaded baseline projections. They are not a claim that a final score can precisely predict individual fantasy points.")
+            st.markdown("#### How V4.3 grades Showdown")
             st.caption("Projection 29–34% • Captain quality 18% • correlation 20% • leverage 11–15% • duplication proxy 10–15% • your takes 7%. The exact weights move with contest size/payout.")
-            st.caption("Duplication is a relative risk proxy based on lineup ownership and salary usage — not a claim that we know the exact number of duplicate entries.")
+            st.caption("The scenario engine changes the projection and construction inputs before the lineup is graded; it does not simply add points to the final grade.")
 
         # Defaults exist even before the user opens tabs because Streamlit executes all tab bodies.
         strategy_map=st.session_state["showdown_strategy"]
+        # Apply the scenario to the actual build, not just the preview.
+        build_df=apply_showdown_scenario(df,effective_script,effective_team,use_score,team_scores,intensity)
+        build_weights,corr_overrides=script_build_adjustments(construction_weights,effective_script,effective_team,use_score,team_scores,auto_shape)
+        eff_qb_pc=cpt_qb_pc; eff_wrte_qb=wrte_qb; eff_rb_ctrl=rb_ctrl
+        if corr_overrides:
+            eff_qb_pc=corr_overrides["qb_pc"]; eff_wrte_qb=corr_overrides["wrte_qb"]; eff_rb_ctrl=corr_overrides["rb_ctrl"]
         if build_btn:
-            result=generate_showdown_lineups(df,field_size,payout_style,lineup_count,max(350,lineup_count*15),min_salary,max_salary,construction_weights,script,script_team,strategy_map,cpt_qb_pc,wrte_qb,rb_ctrl,max_k,max_dst,min_unique,seed)
+            result=generate_showdown_lineups(build_df,field_size,payout_style,lineup_count,max(350,lineup_count*15),min_salary,max_salary,build_weights,effective_script,effective_team,strategy_map,eff_qb_pc,eff_wrte_qb,eff_rb_ctrl,max_k,max_dst,min_unique,seed)
             st.session_state["showdown_result_v4"]=result
             if result is None or result.empty:
-                st.error("No valid Showdown lineups were found. V4.2 now removes duplicate FLEX/Captain player rows automatically. If this still appears, lower the minimum salary or loosen a lock/exposure rule.")
+                st.error("No valid Showdown lineups were found. V4.3 scenario engine is active. If no lineup builds, lower the minimum salary or loosen a lock/exposure rule.")
             elif len(result) < lineup_count:
                 st.warning(f"Built {len(result)} of {lineup_count} requested lineups. The current salary, uniqueness, locks or exposure limits are restricting the pool.")
         result=st.session_state.get("showdown_result_v4")
@@ -1726,4 +1961,4 @@ else:
     except Exception as e:
         st.error(f"Showdown build error: {e}")
 
-st.caption("V4.1 • Classic + Showdown • iPad readability and pinned player names.")
+st.caption("V4.3 • Classic + Showdown • Scenario-driven projections, build shaping and pinned player names.")
