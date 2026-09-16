@@ -2244,11 +2244,11 @@ else:
                 exp=showdown_exposure_table(df,result,strategy_map)
                 st.markdown("#### Set player exposure")
                 st.caption("iPad-friendly controls. Type a percentage or use +/−. Minimums are enforced across the requested portfolio when feasible.")
-                exp_names=exp["Player"].astype(str).tolist()
+                exp_names=exp["Name"].astype(str).tolist()
                 ep=st.selectbox("Player",exp_names,key="exposure_player_select")
                 erow=df[df["Name"].astype(str).eq(ep)].iloc[0]; epid=str(erow["ID"])
                 estrat=st.session_state["showdown_strategy"].setdefault(epid,{})
-                actual=float(exp.loc[exp["Player"].eq(ep),"Actual %"].iloc[0]); cactual=float(exp.loc[exp["Player"].eq(ep),"CPT Actual %"].iloc[0])
+                actual=float(exp.loc[exp["Name"].eq(ep),"Actual %"].iloc[0]); cactual=float(exp.loc[exp["Name"].eq(ep),"CPT Actual %"].iloc[0])
                 st.caption(f"Current portfolio: {actual:.0f}% overall • {cactual:.0f}% Captain")
                 e1,e2,e3,e4=st.columns(4)
                 with e1: emin=st.number_input("Min %",0,100,int(estrat.get("Min Exposure",0)),5,key=f"emin_{epid}")
@@ -2260,9 +2260,9 @@ else:
                 else:
                     estrat.update({"Min Exposure":float(emin),"Max Exposure":float(emax),"CPT Min":float(cmin),"CPT Max":float(cmax)})
                 st.markdown("#### Portfolio exposure")
-                st.dataframe(exp,hide_index=True,use_container_width=True,height=560,column_config={"Player":st.column_config.TextColumn("Player",pinned=True,width=190)})
+                st.dataframe(exp,hide_index=True,use_container_width=True,height=560,column_config={"Name":st.column_config.TextColumn("Player",pinned=True,width=190)})
                 st.download_button("Download exposure CSV",exp.to_csv(index=False),"showdown_exposure_v5_2.csv","text/csv",use_container_width=True)
     except Exception as e:
         st.error(f"Showdown build error: {e}")
 
-st.caption("V5.2 • Classic + Showdown • Relationships • Context Engine • Scenario Engine • Control Deck")
+st.caption("V5.2.1 • Classic + Showdown • Relationships • Context Engine • Scenario Engine • Control Deck")
