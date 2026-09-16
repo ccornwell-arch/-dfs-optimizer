@@ -1188,41 +1188,36 @@ def apply_showdown_scenario(df, script, script_team, use_score=False, team_score
 
 
 def script_build_adjustments(base_weights, script, script_team, use_score=False, team_scores=None, auto_shape=True):
-    """Return construction mix + correlation settings implied by the scenario.
-    Exact percentages are heuristics, while the direction is grounded in standard Showdown correlation theory.
+    """Tilt only the construction shapes the user has allowed.
+    4-2 and 5-1 are orientation-free; directional scripts choose the heavy team later.
     """
-    weights = dict(base_weights)
+    allowed={k: float(base_weights.get(k,0)) > 0 for k in ["3-3","4-2","5-1"]}
+    weights={k:(1.0 if allowed[k] else 0.0) for k in allowed}
     if not auto_shape:
         return weights, None
 
-    margin = 0.0
-    total = 0.0
-    if use_score and team_scores and len(team_scores) >= 2:
-        vals = sorted([float(v) for v in team_scores.values()], reverse=True)
-        margin = vals[0] - vals[1]
-        total = sum(vals)
+    margin=0.0; total=0.0
+    if use_score and team_scores and len(team_scores)>=2:
+        vals=sorted([float(v) for v in team_scores.values()], reverse=True)
+        margin=vals[0]-vals[1]; total=sum(vals)
 
-    if script in ["Shootout", "Pass-heavy shootout"] or total >= 55:
-        weights = {"3-3": 58, "4-2": 19, "2-4": 19, "5-1": 2, "1-5": 2}
-        corr = {"qb_pc": 2, "wrte_qb": 90, "rb_ctrl": 30}
-    elif script in ["Low-scoring game", "Defensive / field-goal battle", "Ground-and-pound"] or (use_score and total and total <= 41):
-        weights = {"3-3": 42, "4-2": 25, "2-4": 25, "5-1": 4, "1-5": 4}
-        corr = {"qb_pc": 1, "wrte_qb": 70, "rb_ctrl": 75}
-    elif script == "Team dominates" or margin >= 17:
-        weights = {"3-3": 18, "4-2": 28, "2-4": 28, "5-1": 13, "1-5": 13}
-        corr = {"qb_pc": 1, "wrte_qb": 70, "rb_ctrl": 80}
-    elif script == "Team plays from ahead" or margin >= 8:
-        weights = {"3-3": 34, "4-2": 27, "2-4": 27, "5-1": 6, "1-5": 6}
-        corr = {"qb_pc": 1, "wrte_qb": 75, "rb_ctrl": 70}
-    elif script == "Team passing comeback":
-        weights = {"3-3": 52, "4-2": 22, "2-4": 22, "5-1": 2, "1-5": 2}
-        corr = {"qb_pc": 2, "wrte_qb": 90, "rb_ctrl": 40}
-    elif script == "Team wins close" or (use_score and margin <= 6):
-        weights = {"3-3": 58, "4-2": 19, "2-4": 19, "5-1": 2, "1-5": 2}
-        corr = {"qb_pc": 2, "wrte_qb": 85, "rb_ctrl": 50}
+    if script in ["Shootout","Pass-heavy shootout"] or total>=55:
+        desired={"3-3":62,"4-2":34,"5-1":4}; corr={"qb_pc":2,"wrte_qb":90,"rb_ctrl":30}
+    elif script in ["Low-scoring game","Defensive / field-goal battle","Ground-and-pound"] or (use_score and total and total<=41):
+        desired={"3-3":46,"4-2":46,"5-1":8}; corr={"qb_pc":1,"wrte_qb":70,"rb_ctrl":75}
+    elif script=="Team dominates" or margin>=17:
+        desired={"3-3":18,"4-2":56,"5-1":26}; corr={"qb_pc":1,"wrte_qb":70,"rb_ctrl":80}
+    elif script=="Team plays from ahead" or margin>=8:
+        desired={"3-3":34,"4-2":54,"5-1":12}; corr={"qb_pc":1,"wrte_qb":75,"rb_ctrl":70}
+    elif script=="Team passing comeback":
+        desired={"3-3":56,"4-2":40,"5-1":4}; corr={"qb_pc":2,"wrte_qb":90,"rb_ctrl":40}
+    elif script=="Team wins close" or (use_score and margin<=6):
+        desired={"3-3":62,"4-2":34,"5-1":4}; corr={"qb_pc":2,"wrte_qb":85,"rb_ctrl":50}
     else:
-        corr = None
-    return weights, corr
+        desired={"3-3":50,"4-2":45,"5-1":5}; corr=None
+    weights={k:(desired[k] if allowed[k] else 0.0) for k in desired}
+    if sum(weights.values())<=0: weights={"3-3":1.0,"4-2":0.0,"5-1":0.0}
+    return weights,corr
 
 def showdown_base_objective(df, aggr, strategy_map, script, script_team, exposure_state=None, cpt_exposure_state=None, built_count=0):
     proj = df["My Proj"].to_numpy(float)
@@ -1490,21 +1485,18 @@ def add_showdown_ratings(out, aggr):
 
 
 def choose_construction_target(rng, teams, weights, script, script_team):
+    # 4-2 means four players from either team; 5-1 means five from either team.
     if len(teams)!=2: return None
-    labels=["3-3","4-2","2-4","5-1","1-5"]
+    labels=["3-3","4-2","5-1"]
     probs=np.array([max(0,float(weights.get(k,0))) for k in labels],dtype=float)
-    if probs.sum()<=0: probs=np.array([50,25,20,3,2],dtype=float)
+    if probs.sum()<=0: probs=np.array([1,0,0],dtype=float)
     probs=probs/probs.sum()
     label=rng.choice(labels,p=probs)
     a,b=map(int,label.split("-"))
-    # For asymmetric builds, script team gets the larger side when a directional script is selected.
+    if a==b: return (teams[0],a)
     directional=script in ["Team dominates","Team plays from ahead","Team wins close"] and script_team in teams
-    if directional and a!=b:
-        count_script=max(a,b)
-        return (script_team,count_script)
-    # Otherwise randomly orient to prevent team-order bias.
-    return (teams[0],a if rng.random()<0.5 else b)
-
+    heavy_team=script_team if directional else (teams[0] if rng.random()<0.5 else teams[1])
+    return (heavy_team,max(a,b))
 
 def generate_showdown_lineups(df, field_size, payout_style, count, attempts, min_salary, max_salary,
                               construction_weights, script, script_team, strategy_map,
@@ -1667,7 +1659,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown('''<div class="apple-hero"><div class="apple-eyebrow">DFS LAB</div><div class="apple-title">Classic + Showdown.</div><div class="apple-sub">One optimizer, two different strategy engines. Showdown adds Captain exposure, game scripts, construction control, correlation and duplication-aware ratings.</div><span class="pill">V4.3 • Scenario Engine</span></div>''',unsafe_allow_html=True)
+st.markdown('''<div class="apple-hero"><div class="apple-eyebrow">DFS LAB</div><div class="apple-title">Classic + Showdown.</div><div class="apple-sub">One optimizer, two different strategy engines. Showdown adds Captain exposure, game scripts, construction control, correlation and duplication-aware ratings.</div><span class="pill">V4.4 • iPad Control Deck</span></div>''',unsafe_allow_html=True)
 
 with st.sidebar:
     st.markdown("### Contest")
@@ -1783,16 +1775,17 @@ else:
         tabs=st.tabs(["Build","Players","Scripts","Lineups","Exposure"])
         with tabs[0]:
             st.markdown('<div class="card-title">Showdown Build</div><div class="card-sub">Control how the six-man portfolio is shaped before the optimizer starts solving.</div>',unsafe_allow_html=True)
-            st.markdown("#### Team construction mix")
-            c1,c2,c3,c4,c5=st.columns(5)
-            with c1:w33=st.number_input("3-3 %",0,100,45,5)
-            with c2:w42=st.number_input("4-2 %",0,100,30,5)
-            with c3:w24=st.number_input("2-4 %",0,100,20,5)
-            with c4:w51=st.number_input("5-1 %",0,100,3,1)
-            with c5:w15=st.number_input("1-5 %",0,100,2,1)
-            construction_weights={"3-3":w33,"4-2":w42,"2-4":w24,"5-1":w51,"1-5":w15}
-            total_mix=sum(construction_weights.values())
-            st.caption(f"Mix total: {total_mix}% — values are normalized automatically, so they do not have to equal 100.")
+            st.markdown("#### Allowed team builds")
+            st.caption("Choose what is allowed — no percentages. 4-2 means four players from either team; 5-1 means five from either team.")
+            c1,c2,c3=st.columns(3)
+            with c1:allow_33=st.checkbox("3-3",value=True,key="sd_allow_33")
+            with c2:allow_42=st.checkbox("4-2",value=True,key="sd_allow_42")
+            with c3:allow_51=st.checkbox("5-1",value=False,key="sd_allow_51")
+            if not any([allow_33,allow_42,allow_51]):
+                st.warning("Choose at least one build. 3-3 will be used until you select one.")
+                allow_33=True
+            construction_weights={"3-3":1 if allow_33 else 0,"4-2":1 if allow_42 else 0,"5-1":1 if allow_51 else 0}
+            st.caption("The Scenario Engine decides how often to use each allowed build based on your score and game script.")
             st.markdown("#### Correlation")
             a,b,c=st.columns(3)
             with a:cpt_qb_pc=st.selectbox("QB CPT: same-team pass catchers",[0,1,2,3],index=2)
@@ -1820,6 +1813,28 @@ else:
             view=scenario_df.copy()
             if team_filter:view=view[view["Team"].isin(team_filter)]
             if pos_filter:view=view[view["Position"].isin(pos_filter)]
+
+            st.markdown("##### Quick lock")
+            quick_names=view["Name"].astype(str).tolist()
+            if quick_names:
+                q1,q2,q3,q4,q5=st.columns([2.4,1,1,1,1])
+                with q1: quick_player=st.selectbox("Quick player",quick_names,key="sd_quick_player",label_visibility="collapsed")
+                qrow=view[view["Name"].astype(str)==str(quick_player)].iloc[0]; qid=str(qrow["ID"])
+                if qid not in st.session_state["showdown_strategy"]: st.session_state["showdown_strategy"][qid]={}
+                with q2:
+                    if st.button("Lock",use_container_width=True,key="sd_quick_lock"):
+                        st.session_state["showdown_strategy"][qid].update({"Lock":True,"CPT Lock":False,"Exclude":False}); st.rerun()
+                with q3:
+                    if st.button("CPT",use_container_width=True,key="sd_quick_cpt"):
+                        st.session_state["showdown_strategy"][qid].update({"Lock":False,"CPT Lock":True,"Exclude":False,"CPT Eligible":True}); st.rerun()
+                with q4:
+                    if st.button("Out",use_container_width=True,key="sd_quick_out"):
+                        st.session_state["showdown_strategy"][qid].update({"Lock":False,"CPT Lock":False,"Exclude":True,"CPT Eligible":False,"Priority":"Exclude"}); st.rerun()
+                with q5:
+                    if st.button("Clear",use_container_width=True,key="sd_quick_clear"):
+                        st.session_state["showdown_strategy"].pop(qid,None); st.rerun()
+                st.caption("Lock = every lineup • CPT = Captain every lineup • Out = never use")
+
             ed=pd.DataFrame({"ID":view["ID"].astype(str),"Name":view["Name"],"Pos":view["Position"],"Team":view["Team"],"Flex $":view["FlexSalary"],"Proj":view["My Proj"].round(2),"Script Proj":view["Script Proj"].round(2),"Δ%":view["Proj Change %"].round(1),"Own":view["My Own"].round(1),"CPT Own":view["CPT Own"].round(1),"Lock":False,"CPT Lock":False,"Exclude":False,"CPT Eligible":True,"Priority":"Neutral","Min Exposure":0,"Max Exposure":100,"CPT Min":0,"CPT Max":100})
             for x,r in ed.iterrows():
                 e=st.session_state["showdown_strategy"].get(str(r["ID"]),{})
@@ -1830,9 +1845,10 @@ else:
                 use_container_width=True,
                 height=650,
                 disabled=["ID","Name","Pos","Team","Flex $","Proj","Script Proj","Δ%","Own","CPT Own"],
-                column_order=["Name","Pos","Team","Flex $","Proj","Script Proj","Δ%","Own","CPT Own","Lock","CPT Lock","Exclude","CPT Eligible","Priority","Min Exposure","Max Exposure","CPT Min","CPT Max"],
+                column_order=["Name","Lock","CPT Lock","Exclude","CPT Eligible","Priority","Pos","Team","Flex $","Proj","Script Proj","Δ%","Own","CPT Own","Min Exposure","Max Exposure","CPT Min","CPT Max"],
                 column_config={
-                    "Name":st.column_config.TextColumn("Player",width=200,pinned=True),
+                    "ID":None,
+                    "Name":st.column_config.TextColumn("Player",width=190,pinned=True),
                     "Pos":st.column_config.TextColumn("Pos",width=58),
                     "Team":st.column_config.TextColumn("Team",width=68),
                     "Flex $":st.column_config.NumberColumn("Flex $",width=78,format="$%d"),
@@ -1841,9 +1857,9 @@ else:
                     "Δ%":st.column_config.NumberColumn("Δ%",width=58,format="%.1f"),
                     "Own":st.column_config.NumberColumn("Own",width=64,format="%.1f"),
                     "CPT Own":st.column_config.NumberColumn("CPT Own",width=78,format="%.1f"),
-                    "Lock":st.column_config.CheckboxColumn("Lock",width=60),
-                    "CPT Lock":st.column_config.CheckboxColumn("CPT Lock",width=80),
-                    "Exclude":st.column_config.CheckboxColumn("Out",width=58),
+                    "Lock":st.column_config.CheckboxColumn("Lock",width=62,pinned=True),
+                    "CPT Lock":st.column_config.CheckboxColumn("CPT",width=62,pinned=True),
+                    "Exclude":st.column_config.CheckboxColumn("Out",width=58,pinned=True),
                     "CPT Eligible":st.column_config.CheckboxColumn("CPT?",width=60),
                     "Priority":st.column_config.SelectboxColumn("Lean",options=PRIORITY_OPTIONS,width=92),
                     "Min Exposure":st.column_config.NumberColumn("Min %",min_value=0,max_value=100,step=5,width=70),
@@ -1858,7 +1874,7 @@ else:
                 st.session_state["showdown_strategy"][str(r["ID"]) ]={"Lock":bool(r["Lock"]) and not ex and not cptlock,"CPT Lock":cptlock,"Exclude":ex,"CPT Eligible":bool(r["CPT Eligible"]) and not ex,"Priority":"Exclude" if ex else str(r["Priority"]),"Min Exposure":float(r["Min Exposure"]),"Max Exposure":float(r["Max Exposure"]),"CPT Min":float(r["CPT Min"]),"CPT Max":float(r["CPT Max"])}
 
         with tabs[2]:
-            st.markdown('<div class="card-title">Scenario Engine</div><div class="card-sub">Use a football story, a predicted score, or both. V4.3 converts the scenario into projection tilts, correlation rules and lineup-construction preferences.</div>',unsafe_allow_html=True)
+            st.markdown('<div class="card-title">Scenario Engine</div><div class="card-sub">Use a football story, a predicted score, or both. V4.4 converts the scenario into projection tilts, correlation rules and lineup-construction preferences.</div>',unsafe_allow_html=True)
             script_options=["Neutral","Auto from score","Shootout","Pass-heavy shootout","Low-scoring game","Defensive / field-goal battle","Ground-and-pound","Team wins close","Team dominates","Team plays from ahead","Team passing comeback"]
             script=st.selectbox("Game script",script_options,key="sd_script")
             use_score=st.toggle("Use predicted score to adjust projections",key="sd_use_score")
