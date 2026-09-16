@@ -9,7 +9,7 @@ import streamlit as st
 from scipy.optimize import Bounds, LinearConstraint, milp
 from scipy.sparse import lil_matrix
 
-st.set_page_config(page_title="DFS Lab V4.3", page_icon="🏈", layout="wide")
+st.set_page_config(page_title="DFS Lab V5.1", page_icon="🏈", layout="wide")
 
 st.markdown("""
 <style>
@@ -400,7 +400,7 @@ def slot_eligibility(df):
 
 
 def player_objective(df, aggr, strategy_map, preferred_stack_teams, team_strategy_map, exposure_state=None, built_count=0):
-    proj_col = "Script Proj" if "Script Proj" in df.columns else "My Proj"
+    proj_col = "DFS Lab Proj" if "DFS Lab Proj" in df.columns else ("Script Proj" if "Script Proj" in df.columns else "My Proj")
     proj = df[proj_col].to_numpy(float)
     own = np.clip(df["My Own"].to_numpy(float), 0.05, None)
 
@@ -1219,8 +1219,52 @@ def script_build_adjustments(base_weights, script, script_team, use_score=False,
     if sum(weights.values())<=0: weights={"3-3":1.0,"4-2":0.0,"5-1":0.0}
     return weights,corr
 
+CONTEXT_FACTOR_WEIGHTS = {
+    "Defense": 0.045,
+    "Usage": 0.050,
+    "Home/Rest": 0.020,
+    "Travel": 0.015,
+    "Time/Split": 0.010,
+}
+CONTEXT_RATING_LABELS = {
+    -3: "Strong negative", -2: "Negative", -1: "Slight negative", 0: "Neutral",
+    1: "Slight positive", 2: "Positive", 3: "Strong positive",
+}
+
+def apply_context_engine(df, context_map=None, strength="Standard"):
+    """Explainable context layer. Ratings are deliberately bounded and confidence-shrunk.
+    This is the V5.1 foundation for future automated defensive/usage/travel/split feeds.
+    """
+    out = df.copy()
+    context_map = context_map or {}
+    strength_scale = {"Conservative":0.65, "Standard":1.0, "Aggressive":1.25}.get(strength,1.0)
+    adjs=[]; reasons=[]
+    for _, r in out.iterrows():
+        cfg=context_map.get(str(r["ID"]),{})
+        confidence=float(cfg.get("Confidence",50))/100.0
+        total=0.0; parts=[]
+        for key,w in CONTEXT_FACTOR_WEIGHTS.items():
+            rating=int(cfg.get(key,0) or 0)
+            delta=rating*w*confidence*strength_scale
+            total += delta
+            if rating:
+                parts.append(f"{key}: {CONTEXT_RATING_LABELS.get(rating,str(rating))} ({delta*100:+.1f}%)")
+        # Prevent a collection of small/contextual splits from overwhelming the baseline model.
+        total=float(np.clip(total,-0.18,0.18))
+        adjs.append(total)
+        note=str(cfg.get("Note","") or "").strip()
+        reason=" • ".join(parts) if parts else "No context adjustment"
+        if note: reason += f" • {note}"
+        reasons.append(reason)
+    out["Context Adj %"]=(np.array(adjs)*100).round(1)
+    base_col="Script Proj" if "Script Proj" in out.columns else "My Proj"
+    out["DFS Lab Proj"]=(out[base_col].astype(float)*(1.0+np.array(adjs))).round(3)
+    out["Context Why"]=reasons
+    return out
+
 def showdown_base_objective(df, aggr, strategy_map, script, script_team, exposure_state=None, cpt_exposure_state=None, built_count=0):
-    proj = df["My Proj"].to_numpy(float)
+    proj_col = "DFS Lab Proj" if "DFS Lab Proj" in df.columns else ("Script Proj" if "Script Proj" in df.columns else "My Proj")
+    proj = df[proj_col].to_numpy(float)
     own = np.clip(df["My Own"].to_numpy(float), 0.1, None)
     objective = proj.copy()
     leverage = np.log((proj + 2.0) / (own + 2.0))
@@ -1269,7 +1313,7 @@ def solve_showdown_one(
                 ub[vidx(i,j)] = 0
             if slot == "CPT":
                 cpt_own = max(float(r["CPT Own"]), 0.1)
-                cpt_proj = float(r["Script Proj"] if "Script Proj" in r.index else r["My Proj"])
+                cpt_proj = float(r["DFS Lab Proj"] if "DFS Lab Proj" in r.index else (r["Script Proj"] if "Script Proj" in r.index else r["My Proj"]))
                 cpt_lev = math.log((1.5*cpt_proj+2)/(cpt_own+1.5))
                 val = 1.5*base[i] + (0.5 + 1.5*aggr)*cpt_lev
                 # Position priors are soft, never hard rules.
@@ -1659,7 +1703,22 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown('''<div class="apple-hero"><div class="apple-eyebrow">DFS LAB</div><div class="apple-title">Classic + Showdown.</div><div class="apple-sub">One optimizer, two different strategy engines. Showdown adds Captain exposure, game scripts, construction control, correlation and duplication-aware ratings.</div><span class="pill">V4.4 • iPad Control Deck</span></div>''',unsafe_allow_html=True)
+st.markdown("""
+<style>
+/* DFS Lab V5 — dark iPad control deck */
+:root{--v5-bg:#080d17;--v5-panel:#101827;--v5-line:rgba(148,163,184,.16);--v5-text:#f3f6fb;--v5-muted:#94a3b8;}
+[data-testid="stAppViewContainer"]{background:radial-gradient(circle at 8% 0%,rgba(47,129,247,.16),transparent 28%),radial-gradient(circle at 92% 8%,rgba(124,58,237,.10),transparent 25%),var(--v5-bg)!important;color:var(--v5-text)!important;}
+[data-testid="stHeader"]{background:transparent!important}.block-container{max-width:1480px;padding-top:1rem}
+.apple-hero{background:linear-gradient(135deg,rgba(20,30,48,.96),rgba(10,16,28,.94))!important;border:1px solid rgba(96,165,250,.20)!important;box-shadow:0 22px 65px rgba(0,0,0,.30)!important}
+.apple-title,.card-title,h1,h2,h3,h4{color:var(--v5-text)!important}.apple-sub,.card-sub,.muted{color:var(--v5-muted)!important}.pill{background:rgba(47,129,247,.15)!important;color:#8ec5ff!important}
+[data-testid="stMetric"]{background:linear-gradient(180deg,rgba(21,31,49,.94),rgba(14,22,36,.94))!important;border:1px solid var(--v5-line)!important;box-shadow:none!important}[data-testid="stMetricLabel"],[data-testid="stMetricValue"]{color:var(--v5-text)!important}
+.stButton>button[kind="primary"]{background:linear-gradient(90deg,#1769d2,#2f81f7)!important;box-shadow:0 8px 24px rgba(47,129,247,.22)}
+.lineup-card{background:linear-gradient(145deg,rgba(21,31,49,.98),rgba(13,21,34,.98));border:1px solid var(--v5-line);border-radius:18px;padding:16px 18px;margin:10px 0;box-shadow:0 12px 32px rgba(0,0,0,.18)}.lineup-rank{font-size:.78rem;font-weight:800;color:#8ec5ff}.lineup-rank span{background:rgba(47,129,247,.14);padding:3px 7px;border-radius:999px}.lineup-cpt{font-size:1.15rem;font-weight:800;color:#fff;margin-top:7px}.lineup-flex{font-size:.92rem;color:#cbd5e1;margin-top:5px}.lineup-meta{font-size:.80rem;color:#94a3b8;margin-top:9px}
+@media(max-width:800px){.apple-title{font-size:1.85rem!important}.apple-hero{padding:21px!important}.block-container{padding-left:.8rem!important;padding-right:.8rem!important}.lineup-card{padding:14px}}
+</style>
+""",unsafe_allow_html=True)
+
+st.markdown('''<div class="apple-hero"><div class="apple-eyebrow">DFS LAB</div><div class="apple-title">Classic + Showdown.</div><div class="apple-sub">One optimizer, two different strategy engines. Showdown adds Captain exposure, game scripts, construction control, correlation and duplication-aware ratings.</div><span class="pill">V5 • Control Deck</span></div>''',unsafe_allow_html=True)
 
 with st.sidebar:
     st.markdown("### Contest")
@@ -1752,7 +1811,17 @@ else:
     try:
         df=prepare_showdown_pool(dk_file,ss_file); teams=[t for t in df["Team"].dropna().unique().tolist() if t]
         if len(teams)!=2: st.warning(f"Showdown normally has two teams. I found {len(teams)}: {', '.join(teams)}")
+        nonzero_proj=int((pd.to_numeric(df["My Proj"],errors="coerce").fillna(0)>0.05).sum())
+        nonzero_own=int((pd.to_numeric(df["My Own"],errors="coerce").fillna(0)>0).sum())
+        if nonzero_proj==0:
+            st.error("Projection file problem · Players matched, but every uploaded SaberSim projection is 0. DFS Lab will not build from an empty projection set.")
+            st.stop()
+        elif nonzero_proj < 6: st.warning(f"Projection check · Only {nonzero_proj} players have usable projections. The slate may be incomplete.")
+        else: st.success(f"Slate ready · {nonzero_proj} players have usable projections.")
+        if nonzero_own==0: st.warning("Ownership not populated yet · Lineups can be built, but leverage and duplication ratings that depend on ownership are provisional.")
         st.session_state.setdefault("showdown_strategy",{})
+        st.session_state.setdefault("showdown_context",{})
+        st.session_state.setdefault("context_strength","Standard")
         st.session_state.setdefault("sd_use_score", False)
         st.session_state.setdefault("sd_script", "Neutral")
         st.session_state.setdefault("sd_script_team", "None")
@@ -1772,7 +1841,7 @@ else:
         max_salary=50000
         min_unique=st.sidebar.selectbox("Minimum unique players",[1,2,3],index=0)
 
-        tabs=st.tabs(["Build","Players","Scripts","Lineups","Exposure"])
+        tabs=st.tabs(["Build","Players","Context","Scripts","Lineups","Exposure"])
         with tabs[0]:
             st.markdown('<div class="card-title">Showdown Build</div><div class="card-sub">Control how the six-man portfolio is shaped before the optimizer starts solving.</div>',unsafe_allow_html=True)
             st.markdown("#### Allowed team builds")
@@ -1786,11 +1855,14 @@ else:
                 allow_33=True
             construction_weights={"3-3":1 if allow_33 else 0,"4-2":1 if allow_42 else 0,"5-1":1 if allow_51 else 0}
             st.caption("The Scenario Engine decides how often to use each allowed build based on your score and game script.")
-            st.markdown("#### Correlation")
+            st.markdown("#### Captain pairing")
+            st.caption("These settings apply only when that position is Captain — they do not control how often the position becomes Captain.")
             a,b,c=st.columns(3)
-            with a:cpt_qb_pc=st.selectbox("QB CPT: same-team pass catchers",[0,1,2,3],index=2)
-            with b:wrte_qb=st.slider("WR/TE CPT + QB %",0,100,80,5)
-            with c:rb_ctrl=st.slider("RB CPT + DST/K %",0,100,55,5)
+            with a:cpt_qb_pc=st.selectbox("When QB is CPT · pass catchers",[0,1,2,3],index=2,help="Number of same-team WR/TE pass catchers to pair with a QB Captain.")
+            pair_map={"Never":0,"Sometimes":35,"Usually":80,"Always":100}
+            with b: wrte_pair=st.selectbox("When WR/TE is CPT · pair QB",list(pair_map),index=2)
+            with c: rb_pair=st.selectbox("When RB is CPT · pair DST/K",list(pair_map),index=1)
+            wrte_qb=pair_map[wrte_pair]; rb_ctrl=pair_map[rb_pair]
             d,e=st.columns(2)
             with d:max_k=st.selectbox("Max kickers",[0,1,2],index=2)
             with e:max_dst=st.selectbox("Max defenses",[0,1,2],index=1)
@@ -1810,6 +1882,7 @@ else:
             if current_script=="Auto from score" and current_use_score:
                 current_script,current_team,_=infer_score_script(current_scores)
             scenario_df=apply_showdown_scenario(df,current_script,current_team,current_use_score,current_scores,st.session_state.get("sd_intensity","Standard"))
+            scenario_df=apply_context_engine(scenario_df,st.session_state.get("showdown_context",{}),st.session_state.get("context_strength","Standard"))
             view=scenario_df.copy()
             if team_filter:view=view[view["Team"].isin(team_filter)]
             if pos_filter:view=view[view["Position"].isin(pos_filter)]
@@ -1835,7 +1908,7 @@ else:
                         st.session_state["showdown_strategy"].pop(qid,None); st.rerun()
                 st.caption("Lock = every lineup • CPT = Captain every lineup • Out = never use")
 
-            ed=pd.DataFrame({"ID":view["ID"].astype(str),"Name":view["Name"],"Pos":view["Position"],"Team":view["Team"],"Flex $":view["FlexSalary"],"Proj":view["My Proj"].round(2),"Script Proj":view["Script Proj"].round(2),"Δ%":view["Proj Change %"].round(1),"Own":view["My Own"].round(1),"CPT Own":view["CPT Own"].round(1),"Lock":False,"CPT Lock":False,"Exclude":False,"CPT Eligible":True,"Priority":"Neutral","Min Exposure":0,"Max Exposure":100,"CPT Min":0,"CPT Max":100})
+            ed=pd.DataFrame({"ID":view["ID"].astype(str),"Name":view["Name"],"Pos":view["Position"],"Team":view["Team"],"Flex $":view["FlexSalary"],"Proj":view["My Proj"].round(2),"Script Proj":view["Script Proj"].round(2),"DFS Lab":view["DFS Lab Proj"].round(2),"Δ%":view["Proj Change %"].round(1),"Own":view["My Own"].round(1),"CPT Own":view["CPT Own"].round(1),"Lock":False,"CPT Lock":False,"Exclude":False,"CPT Eligible":True,"Priority":"Neutral","Min Exposure":0,"Max Exposure":100,"CPT Min":0,"CPT Max":100})
             for x,r in ed.iterrows():
                 e=st.session_state["showdown_strategy"].get(str(r["ID"]),{})
                 for c,k,d in [("Lock","Lock",False),("CPT Lock","CPT Lock",False),("Exclude","Exclude",False),("CPT Eligible","CPT Eligible",True),("Priority","Priority","Neutral"),("Min Exposure","Min Exposure",0),("Max Exposure","Max Exposure",100),("CPT Min","CPT Min",0),("CPT Max","CPT Max",100)]: ed.at[x,c]=e.get(k,d)
@@ -1844,8 +1917,8 @@ else:
                 hide_index=True,
                 use_container_width=True,
                 height=650,
-                disabled=["ID","Name","Pos","Team","Flex $","Proj","Script Proj","Δ%","Own","CPT Own"],
-                column_order=["Name","Lock","CPT Lock","Exclude","CPT Eligible","Priority","Pos","Team","Flex $","Proj","Script Proj","Δ%","Own","CPT Own","Min Exposure","Max Exposure","CPT Min","CPT Max"],
+                disabled=["ID","Name","Pos","Team","Flex $","Proj","Script Proj","DFS Lab","Δ%","Own","CPT Own"],
+                column_order=["Name","Lock","CPT Lock","Exclude","CPT Eligible","Priority","Pos","Team","Flex $","Proj","Script Proj","DFS Lab","Δ%","Own","CPT Own","Min Exposure","Max Exposure","CPT Min","CPT Max"],
                 column_config={
                     "ID":None,
                     "Name":st.column_config.TextColumn("Player",width=190,pinned=True),
@@ -1854,6 +1927,7 @@ else:
                     "Flex $":st.column_config.NumberColumn("Flex $",width=78,format="$%d"),
                     "Proj":st.column_config.NumberColumn("Base",width=68,format="%.2f"),
                     "Script Proj":st.column_config.NumberColumn("Scenario",width=78,format="%.2f"),
+                    "DFS Lab":st.column_config.NumberColumn("DFS Lab",width=78,format="%.2f"),
                     "Δ%":st.column_config.NumberColumn("Δ%",width=58,format="%.1f"),
                     "Own":st.column_config.NumberColumn("Own",width=64,format="%.1f"),
                     "CPT Own":st.column_config.NumberColumn("CPT Own",width=78,format="%.1f"),
@@ -1874,7 +1948,58 @@ else:
                 st.session_state["showdown_strategy"][str(r["ID"]) ]={"Lock":bool(r["Lock"]) and not ex and not cptlock,"CPT Lock":cptlock,"Exclude":ex,"CPT Eligible":bool(r["CPT Eligible"]) and not ex,"Priority":"Exclude" if ex else str(r["Priority"]),"Min Exposure":float(r["Min Exposure"]),"Max Exposure":float(r["Max Exposure"]),"CPT Min":float(r["CPT Min"]),"CPT Max":float(r["CPT Max"])}
 
         with tabs[2]:
-            st.markdown('<div class="card-title">Scenario Engine</div><div class="card-sub">Use a football story, a predicted score, or both. V4.4 converts the scenario into projection tilts, correlation rules and lineup-construction preferences.</div>',unsafe_allow_html=True)
+            st.markdown('<div class="card-title">Context Engine · V5.1</div><div class="card-sub">Add matchup, role and situational information without letting small samples overpower the SaberSim baseline. This first build is manual and explainable; automated feeds plug into this same layer next.</div>',unsafe_allow_html=True)
+            st.info("Ratings are confidence-shrunk and capped. Defense and current usage carry more weight than travel or primetime splits.")
+            context_strength=st.select_slider("Context influence",options=["Conservative","Standard","Aggressive"],key="context_strength")
+            rating_opts=[-3,-2,-1,0,1,2,3]
+            ced=pd.DataFrame({
+                "ID":df["ID"].astype(str),"Player":df["Name"],"Pos":df["Position"],"Team":df["Team"],
+                "Defense":0,"Usage":0,"Home/Rest":0,"Travel":0,"Time/Split":0,"Confidence":50,"Note":""
+            })
+            for x,r in ced.iterrows():
+                cfg=st.session_state["showdown_context"].get(str(r["ID"]),{})
+                for col in ["Defense","Usage","Home/Rest","Travel","Time/Split","Confidence","Note"]:
+                    ced.at[x,col]=cfg.get(col,ced.at[x,col])
+            cedited=st.data_editor(ced,hide_index=True,use_container_width=True,height=560,
+                disabled=["ID","Player","Pos","Team"],
+                column_order=["Player","Pos","Team","Defense","Usage","Home/Rest","Travel","Time/Split","Confidence","Note"],
+                column_config={
+                    "ID":None,"Player":st.column_config.TextColumn("Player",pinned=True,width=185),
+                    "Pos":st.column_config.TextColumn("Pos",width=55),"Team":st.column_config.TextColumn("Team",width=62),
+                    "Defense":st.column_config.SelectboxColumn("Defense",options=rating_opts,width=78,help="-3 strong negative to +3 strong positive defensive matchup."),
+                    "Usage":st.column_config.SelectboxColumn("Usage",options=rating_opts,width=72,help="Current role: routes, targets, carries, red-zone work and injury-driven opportunity."),
+                    "Home/Rest":st.column_config.SelectboxColumn("Home/Rest",options=rating_opts,width=90),
+                    "Travel":st.column_config.SelectboxColumn("Travel",options=rating_opts,width=70),
+                    "Time/Split":st.column_config.SelectboxColumn("Time/Split",options=rating_opts,width=90,help="Day/night/Thursday/Monday split. Intentionally low weight."),
+                    "Confidence":st.column_config.NumberColumn("Conf %",min_value=0,max_value=100,step=5,width=78),
+                    "Note":st.column_config.TextColumn("Why / source note",width=220),
+                },key="v51_context_editor")
+            for _,r in cedited.iterrows():
+                st.session_state["showdown_context"][str(r["ID"])]= {k:(int(r[k]) if k not in ["Note"] else str(r[k])) for k in ["Defense","Usage","Home/Rest","Travel","Time/Split","Confidence","Note"]}
+
+            # Preview context on top of the current scenario state.
+            ctx_script=st.session_state.get("sd_script","Neutral"); ctx_team=st.session_state.get("sd_script_team","None")
+            if ctx_team=="None": ctx_team=""
+            ctx_use_score=bool(st.session_state.get("sd_use_score",False)); ctx_scores={}
+            if len(teams)>=2: ctx_scores={teams[0]:float(st.session_state.get("sd_score_0",24)),teams[1]:float(st.session_state.get("sd_score_1",21))}
+            if ctx_script=="Auto from score" and ctx_use_score: ctx_script,ctx_team,_=infer_score_script(ctx_scores)
+            ctx_base=apply_showdown_scenario(df,ctx_script,ctx_team,ctx_use_score,ctx_scores,st.session_state.get("sd_intensity","Standard"))
+            ctx_df=apply_context_engine(ctx_base,st.session_state["showdown_context"],context_strength)
+            st.markdown("#### Market vs. model foundation")
+            st.caption("For now, 'Base' is SaberSim and 'DFS Lab' is scenario + your context layer. Sportsbook/usage/defense feeds will populate these factors automatically in the next data phase.")
+            cp=ctx_df[["Name","My Proj","Script Proj","Context Adj %","DFS Lab Proj"]].copy()
+            cp.columns=["Player","Base","Scenario","Context %","DFS Lab"]
+            cp=cp.sort_values("Context %",key=lambda x:x.abs(),ascending=False)
+            st.dataframe(cp,hide_index=True,use_container_width=True,height=390,column_config={"Player":st.column_config.TextColumn("Player",pinned=True,width=185),"Base":st.column_config.NumberColumn("Base",format="%.2f"),"Scenario":st.column_config.NumberColumn("Scenario",format="%.2f"),"Context %":st.column_config.NumberColumn("Context %",format="%.1f"),"DFS Lab":st.column_config.NumberColumn("DFS Lab",format="%.2f")})
+            why_name=st.selectbox("WHY? player",ctx_df["Name"].astype(str).tolist(),key="context_why_player")
+            wr=ctx_df[ctx_df["Name"].astype(str)==str(why_name)].iloc[0]
+            with st.expander(f"WHY? · {why_name}",expanded=True):
+                st.write(f"**SaberSim {wr['My Proj']:.2f} → Scenario {wr['Script Proj']:.2f} → DFS Lab {wr['DFS Lab Proj']:.2f}**")
+                st.write(str(wr["Context Why"]))
+                st.caption("V5.1 does not invent historical splits. A context factor only moves the projection when you enter evidence for it.")
+
+        with tabs[3]:
+            st.markdown('<div class="card-title">Scenario Engine</div><div class="card-sub">Use a football story, a predicted score, or both. V5 converts the scenario into projection tilts, correlation rules and lineup-construction preferences.</div>',unsafe_allow_html=True)
             script_options=["Neutral","Auto from score","Shootout","Pass-heavy shootout","Low-scoring game","Defensive / field-goal battle","Ground-and-pound","Team wins close","Team dominates","Team plays from ahead","Team passing comeback"]
             script=st.selectbox("Game script",script_options,key="sd_script")
             use_score=st.toggle("Use predicted score to adjust projections",key="sd_use_score")
@@ -1931,7 +2056,7 @@ else:
             preview=preview.sort_values("Change %",key=lambda x:x.abs(),ascending=False).head(14)
             st.dataframe(preview,hide_index=True,use_container_width=True,height=410,column_config={"Player":st.column_config.TextColumn("Player",pinned=True,width=190),"Base":st.column_config.NumberColumn("Base",format="%.2f"),"Scenario":st.column_config.NumberColumn("Scenario",format="%.2f"),"Change %":st.column_config.NumberColumn("Change %",format="%.1f")})
             st.caption("These are bounded scenario tilts applied to the uploaded baseline projections. They are not a claim that a final score can precisely predict individual fantasy points.")
-            st.markdown("#### How V4.3 grades Showdown")
+            st.markdown("#### How V5.1 grades Showdown")
             st.caption("Projection 29–34% • Captain quality 18% • correlation 20% • leverage 11–15% • duplication proxy 10–15% • your takes 7%. The exact weights move with contest size/payout.")
             st.caption("The scenario engine changes the projection and construction inputs before the lineup is graded; it does not simply add points to the final grade.")
 
@@ -1939,6 +2064,7 @@ else:
         strategy_map=st.session_state["showdown_strategy"]
         # Apply the scenario to the actual build, not just the preview.
         build_df=apply_showdown_scenario(df,effective_script,effective_team,use_score,team_scores,intensity)
+        build_df=apply_context_engine(build_df,st.session_state.get("showdown_context",{}),st.session_state.get("context_strength","Standard"))
         build_weights,corr_overrides=script_build_adjustments(construction_weights,effective_script,effective_team,use_score,team_scores,auto_shape)
         eff_qb_pc=cpt_qb_pc; eff_wrte_qb=wrte_qb; eff_rb_ctrl=rb_ctrl
         if corr_overrides:
@@ -1947,34 +2073,43 @@ else:
             result=generate_showdown_lineups(build_df,field_size,payout_style,lineup_count,max(350,lineup_count*15),min_salary,max_salary,build_weights,effective_script,effective_team,strategy_map,eff_qb_pc,eff_wrte_qb,eff_rb_ctrl,max_k,max_dst,min_unique,seed)
             st.session_state["showdown_result_v4"]=result
             if result is None or result.empty:
-                st.error("No valid Showdown lineups were found. V4.3 scenario engine is active. If no lineup builds, lower the minimum salary or loosen a lock/exposure rule.")
+                st.error("No legal lineup found. Check minimum salary, locks/outs, Captain eligibility, allowed team builds, and Captain-pairing rules. Try one change at a time; DFS Lab will preserve your player settings.")
             elif len(result) < lineup_count:
                 st.warning(f"Built {len(result)} of {lineup_count} requested lineups. The current salary, uniqueness, locks or exposure limits are restricting the pool.")
         result=st.session_state.get("showdown_result_v4")
 
-        with tabs[3]:
+        with tabs[4]:
             st.markdown('<div class="card-title">Rated Lineups</div><div class="card-sub">The grade is portfolio-relative. A+ means one of the strongest lineups in this build — not a guarantee of outcome.</div>',unsafe_allow_html=True)
             if result is None or result.empty: st.info("Set your build, player takes and script, then generate lineups.")
             else:
                 m1,m2,m3,m4=st.columns(4); m1.metric("A / A+",int(result["Rating"].isin(["A","A+"]).sum())); m2.metric("Top projection",f"{result['Projection'].max():.1f}"); m3.metric("Avg salary left",f"${int(result['Salary Left'].mean()):,}"); m4.metric("Built",len(result))
+                st.markdown("#### Top lineup cards")
+                for _,lr in result.head(5).iterrows():
+                    flex_names=" · ".join(str(lr.get("FLEX"+str(i),"")) for i in range(1,6))
+                    card_html=("<div class='lineup-card'><div class='lineup-rank'>#%s &nbsp; <span>%s</span></div>" % (int(lr["Rank"]),lr["Rating"]) +
+                               "<div class='lineup-cpt'>CPT · %s</div>" % lr["Captain"] +
+                               "<div class='lineup-flex'>%s</div>" % flex_names +
+                               "<div class='lineup-meta'>Proj %.1f &nbsp; • &nbsp; $%s &nbsp; • &nbsp; %s &nbsp; • &nbsp; %s duplication risk</div></div>" % (lr["Projection"],f"{int(lr['Salary']):,}",lr["Construction"],lr["Dup Risk"]))
+                    st.markdown(card_html,unsafe_allow_html=True)
+                st.markdown("#### Full lineup table")
                 cols=["Rank","Rating","Rating Score","Projection","Salary","Salary Left","Captain","Captain Pos","CPT Own","Construction","Dup Risk","Projection Grade","Captain Grade","Correlation Grade","Leverage Grade","Duplication Grade","Story","CPT","FLEX1","FLEX2","FLEX3","FLEX4","FLEX5"]
                 st.dataframe(result[[c for c in cols if c in result.columns]],hide_index=True,use_container_width=True,height=610)
                 d1,d2=st.columns(2)
-                with d1: st.download_button("Download analysis CSV",result.to_csv(index=False),"showdown_lineups_v4.csv","text/csv",use_container_width=True)
-                with d2: st.download_button("Download DK-format lineup CSV",showdown_upload_csv(result),"showdown_dk_upload_v4.csv","text/csv",use_container_width=True)
+                with d1: st.download_button("Download analysis CSV",result.to_csv(index=False),"showdown_lineups_v5.csv","text/csv",use_container_width=True)
+                with d2: st.download_button("Download DK-format lineup CSV",showdown_upload_csv(result),"showdown_dk_upload_v5.csv","text/csv",use_container_width=True)
                 pick=st.number_input("Inspect lineup rank",min_value=1,max_value=len(result),value=1,step=1)
                 r=result.iloc[int(pick)-1]
                 st.write(f"**{r['Rating']} ({r['Rating Score']})** — {r['Story']}")
                 st.caption(f"Projection {r['Projection']} • Salary ${int(r['Salary']):,} • ${int(r['Salary Left']):,} left • Duplication risk {r['Dup Risk']} • {r['Strategy Notes']}")
 
-        with tabs[4]:
+        with tabs[5]:
             st.markdown('<div class="card-title">Exposure Lab</div><div class="card-sub">See overall and Captain exposure side by side.</div>',unsafe_allow_html=True)
             if result is None or result.empty: st.info("Generate lineups first.")
             else:
                 exp=showdown_exposure_table(df,result,strategy_map)
                 st.dataframe(exp,hide_index=True,use_container_width=True,height=650)
-                st.download_button("Download exposure CSV",exp.to_csv(index=False),"showdown_exposure_v4.csv","text/csv",use_container_width=True)
+                st.download_button("Download exposure CSV",exp.to_csv(index=False),"showdown_exposure_v5.csv","text/csv",use_container_width=True)
     except Exception as e:
         st.error(f"Showdown build error: {e}")
 
-st.caption("V4.3 • Classic + Showdown • Scenario-driven projections, build shaping and pinned player names.")
+st.caption("V5.1 • Classic + Showdown • Context Engine • Scenario Engine • Control Deck")
