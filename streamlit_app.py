@@ -1111,9 +1111,10 @@ def prepare_showdown_pool(dk_file, ss_file=None):
     df["ActiveForBuild"]=(df["My Proj"]>0.01)&(df["FlexSalary"]>0)
     return df.reset_index(drop=True)
 
-def showdown_aggression(field_size, payout_style):
+def showdown_aggression(field_size, payout_style, entry_format="Single Entry"):
     aggr = contest_aggression(field_size, payout_style)
-    return min(1.0, aggr + 0.08)
+    entry_bump={"Single Entry":-0.14,"3-Max":-0.05,"20-Max":0.05,"150-Max":0.14}.get(entry_format,0.0)
+    return float(np.clip(aggr + 0.08 + entry_bump, 0.05, 1.0))
 
 
 def showdown_script_bonus(row, script, script_team):
@@ -1174,6 +1175,10 @@ def infer_score_script(team_scores):
 
 
 def _scenario_intensity_scale(level):
+    
+    if isinstance(level, (int, float, np.integer, np.floating)):
+        # 0 = no scenario effect, 50 = standard, 100 = strongest bounded effect.
+        return float(np.clip(level, 0, 100)) / 50.0
     return {"Conservative": 0.65, "Standard": 1.0, "Aggressive": 1.30}.get(level, 1.0)
 
 
@@ -1348,8 +1353,20 @@ def showdown_base_objective(df, aggr, strategy_map, script, script_team, exposur
     proj = df[proj_col].to_numpy(float)
     own = np.clip(df["My Own"].to_numpy(float), 0.1, None)
     objective = proj.copy()
-    leverage = np.log((proj + 2.0) / (own + 2.0))
-    objective += (0.65 + 2.0 * aggr) * leverage
+    ownership_available = bool(pd.to_numeric(df.get("My Own",0),errors="coerce").fillna(0).max() > 0.01)
+    if ownership_available:
+        leverage = np.log((proj + 2.0) / (own + 2.0))
+        objective += (0.65 + 2.0 * aggr) * leverage
+
+    # Contest-aware role confidence. Single-entry builds pay a larger price for
+    # thin, low-projection salary punts; large-field builds may accept them when
+    # they unlock a coherent ceiling construction. This is a soft penalty, never a ban.
+    hist = pd.to_numeric(df.get("History Games", pd.Series(0,index=df.index)),errors="coerce").fillna(0).to_numpy(float)
+    curg = pd.to_numeric(df.get("Current Games", pd.Series(0,index=df.index)),errors="coerce").fillna(0).to_numpy(float)
+    sal = pd.to_numeric(df.get("FlexSalary",0),errors="coerce").fillna(0).to_numpy(float)
+    role_conf = np.clip((hist/24.0)*0.65 + (curg/6.0)*0.35, 0, 1)
+    punt = (sal <= 2200) & (proj < 4.0)
+    objective -= punt.astype(float) * (1.0-role_conf) * (2.8 - 1.9*aggr)
 
     for i, r in df.iterrows():
         strat = strategy_map.get(str(r["ID"]), {})
@@ -1677,9 +1694,10 @@ def choose_construction_target(rng, teams, weights, script, script_team):
 
 def generate_showdown_lineups(df, field_size, payout_style, count, attempts, min_salary, max_salary,
                               construction_weights, script, script_team, strategy_map,
+                              entry_format,
                               cpt_qb_passcatchers, wrte_cpt_qb_pair_pct, rb_cpt_dst_k_pct,
                               max_k, max_dst, min_unique, seed, relationship_rules=None):
-    aggr=showdown_aggression(field_size,payout_style); rng=np.random.default_rng(seed)
+    aggr=showdown_aggression(field_size,payout_style,entry_format); rng=np.random.default_rng(seed)
     teams=[t for t in df["Team"].dropna().unique().tolist() if t]
     rows=[]; exposure=defaultdict(int); cpt_exp=defaultdict(int); previous=[]; seen=set()
     prog=st.progress(0,text="Building Showdown lineups...")
@@ -1731,7 +1749,11 @@ def generate_showdown_lineups(df, field_size, payout_style, count, attempts, min
     prog.empty()
     out=pd.DataFrame(rows)
     if out.empty:return out
-    out=add_showdown_ratings(out,aggr).sort_values(["Rating Score","Projection"],ascending=[False,False]).reset_index(drop=True)
+    out=add_showdown_ratings(out,aggr)
+    out["Contest Format"]=entry_format
+    out["Field Size"]=int(field_size)
+    out["Contest Aggression"] = round(aggr*100,1)
+    out=out.sort_values(["Rating Score","Projection"],ascending=[False,False]).reset_index(drop=True)
     out.insert(0,"Rank",np.arange(1,len(out)+1))
     return out
 
@@ -1866,15 +1888,24 @@ st.markdown("""
 </style>
 """,unsafe_allow_html=True)
 
-st.markdown('''<div class="apple-hero"><div class="apple-eyebrow">DFS LAB</div><div class="apple-title">Classic + Showdown.</div><div class="apple-sub">One optimizer, two different strategy engines. Showdown adds Captain exposure, game scripts, construction control, correlation and duplication-aware ratings.</div><span class="pill">V6.1 • Projection Engine</span></div>''',unsafe_allow_html=True)
+
+st.markdown("""<style>
+[data-testid="stAppViewContainer"] label, [data-testid="stSidebar"] label {color:#e8edf7 !important;}
+.stCaption, [data-testid="stCaptionContainer"], .card-sub {color:#b7c0d1 !important;}
+[data-testid="stTabs"] button p {color:#d7deea !important;}
+[data-testid="stTabs"] button[aria-selected="true"] p {color:#ffffff !important;}
+[data-testid="stMarkdownContainer"] p, [data-testid="stMarkdownContainer"] li {color:#dce3ef;}
+</style>""",unsafe_allow_html=True)
+st.markdown('''<div class="apple-hero"><div class="apple-eyebrow">DFS LAB</div><div class="apple-title">Classic + Showdown.</div><div class="apple-sub">One optimizer, two different strategy engines. Showdown adds Captain exposure, game scripts, construction control, correlation and duplication-aware ratings.</div><span class="pill">V6.2 • Contest Intelligence</span></div>''',unsafe_allow_html=True)
 
 with st.sidebar:
     st.markdown("### Contest")
     mode=st.segmented_control("Mode",["Classic","Showdown"],default="Showdown")
     preset=st.selectbox("Contest preset",["Large GPP","Small-field GPP","Single Entry","Winner Take All","Cash-ish"])
-    defaults={"Large GPP":(50000,"GPP / top-heavy"),"Small-field GPP":(500,"GPP / top-heavy"),"Single Entry":(300,"Flatter payouts"),"Winner Take All":(500,"Winner take all"),"Cash-ish":(100,"Flatter payouts")}
-    dfield,dpayout=defaults[preset]
+    defaults={"Large GPP":(50000,"GPP / top-heavy","150-Max"),"Small-field GPP":(500,"GPP / top-heavy","3-Max"),"Single Entry":(300,"Flatter payouts","Single Entry"),"Winner Take All":(500,"Winner take all","Single Entry"),"Cash-ish":(100,"Flatter payouts","Single Entry")}
+    dfield,dpayout,dentry=defaults[preset]
     field_size=st.number_input("Field size",min_value=2,value=int(dfield),step=1)
+    entry_format=st.selectbox("Entry format",["Single Entry","3-Max","20-Max","150-Max"],index=["Single Entry","3-Max","20-Max","150-Max"].index(dentry))
     payout_style=st.selectbox("Payout",["GPP / top-heavy","Winner take all","Flatter payouts"],index=["GPP / top-heavy","Winner take all","Flatter payouts"].index(dpayout))
     lineup_count=st.slider("Lineup pool",25,500,100,25)
     with st.expander("Advanced"):
@@ -1994,7 +2025,7 @@ else:
         max_salary=50000
         min_unique=st.sidebar.selectbox("Minimum unique players",[1,2,3],index=0)
 
-        tabs=st.tabs(["Build","Players","Relationships","Context","Scripts","Lineups","Exposure"])
+        tabs=st.tabs(["Build","Players","Relationships","Context","Scripts","Lineup Lab","Exposure"])
         with tabs[0]:
             st.markdown('<div class="card-title">Showdown Build</div><div class="card-sub">Control how the six-man portfolio is shaped before the optimizer starts solving.</div>',unsafe_allow_html=True)
             st.markdown("#### Allowed team builds")
@@ -2198,16 +2229,10 @@ else:
             cp.columns=["Player","Base","Scenario","Context %","DFS Lab"] + (["SaberSim"] if "SaberSim Proj" in ctx_df.columns else [])
             cp=cp.sort_values("Context %",key=lambda x:x.abs(),ascending=False)
             st.dataframe(cp,hide_index=True,use_container_width=True,height=390,column_config={"Player":st.column_config.TextColumn("Player",pinned=True,width=185),"Base":st.column_config.NumberColumn("Base",format="%.2f"),"Scenario":st.column_config.NumberColumn("Scenario",format="%.2f"),"Context %":st.column_config.NumberColumn("Context %",format="%.1f"),"DFS Lab":st.column_config.NumberColumn("DFS Lab",format="%.2f")})
-            why_name=st.selectbox("WHY? player",ctx_df["Name"].astype(str).tolist(),key="context_why_player")
-            wr=ctx_df[ctx_df["Name"].astype(str)==str(why_name)].iloc[0]
-            with st.expander(f"WHY? · {why_name}",expanded=True):
-                st.write(f"**DFS Base {wr['My Proj']:.2f} → Scenario {wr['Script Proj']:.2f} → DFS Lab {wr['DFS Lab Proj']:.2f}**")
-                st.write(str(wr.get("Projection Why","Historical evidence unavailable")))
-                st.write(str(wr["Context Why"]))
-                st.caption("DFS Lab V6.1 separates long-term baseline, opponent matchup, scenario, context, and your override so you can see what moved the number.")
+            st.caption("Historical evidence is used under the hood. Slate- and lineup-specific explanations now live in Lineup Lab after lineups are generated.")
 
         with tabs[4]:
-            st.markdown('<div class="card-title">Scenario Engine</div><div class="card-sub">Use a football story, a predicted score, or both. V5 converts the scenario into projection tilts, correlation rules and lineup-construction preferences.</div>',unsafe_allow_html=True)
+            st.markdown('<div class="card-title">Scenario Engine</div><div class="card-sub">Use a football story, a predicted score, or both. Your game thesis changes projections, correlation and lineup construction. Use the 0–100 influence control to decide how strongly DFS Lab should commit to it.</div>',unsafe_allow_html=True)
             script_options=["Neutral","Auto from score","Shootout","Pass-heavy shootout","Low-scoring game","Defensive / field-goal battle","Ground-and-pound","Team wins close","Team dominates","Team plays from ahead","Team passing comeback"]
             script=st.selectbox("Game script",script_options,key="sd_script")
             use_score=st.toggle("Use predicted score to adjust projections",key="sd_use_score")
@@ -2218,7 +2243,8 @@ else:
                 with sc1: score0=st.number_input(f"{teams[0]} score",0,70,key="sd_score_0",disabled=not use_score)
                 with sc2: score1=st.number_input(f"{teams[1]} score",0,70,key="sd_score_1",disabled=not use_score)
                 team_scores={teams[0]:float(score0),teams[1]:float(score1)}
-            intensity=st.select_slider("Scenario influence",options=["Conservative","Standard","Aggressive"],key="sd_intensity")
+            intensity=st.slider("Scenario influence",min_value=0,max_value=100,value=50,step=5,key="sd_intensity",help="0 = ignore the game thesis. 50 = standard influence. 100 = strongest bounded scenario influence.")
+            st.caption(f"Game-thesis influence: {intensity}%")
             directional=script in ["Team wins close","Team dominates","Team plays from ahead","Team passing comeback"]
             script_team=st.selectbox("Script team",["None"]+teams,disabled=(not directional) or script=="Auto from score",key="sd_script_team")
             if script_team=="None": script_team=""
@@ -2264,7 +2290,7 @@ else:
             preview=preview.sort_values("Change %",key=lambda x:x.abs(),ascending=False).head(14)
             st.dataframe(preview,hide_index=True,use_container_width=True,height=410,column_config={"Player":st.column_config.TextColumn("Player",pinned=True,width=190),"Base":st.column_config.NumberColumn("Base",format="%.2f"),"Scenario":st.column_config.NumberColumn("Scenario",format="%.2f"),"Change %":st.column_config.NumberColumn("Change %",format="%.1f")})
             st.caption("These are bounded scenario tilts applied to the DFS Lab baseline projections. They are not a claim that a final score can precisely predict individual fantasy points.")
-            st.markdown("#### How V5.2 grades Showdown")
+            st.markdown("#### How V6.2 grades Showdown")
             st.caption("Projection 29–34% • Captain quality 18% • correlation 20% • leverage 11–15% • duplication proxy 10–15% • your takes 7%. The exact weights move with contest size/payout.")
             st.caption("The scenario engine changes the projection and construction inputs before the lineup is graded; it does not simply add points to the final grade.")
 
@@ -2289,7 +2315,7 @@ else:
                     for y in range(x+1,len(rb_ids)):
                         active_relationships.append({"enabled":True,"rule":"Never Together","a":{"kind":"Player","id":rb_ids[x]},"b":{"kind":"Player","id":rb_ids[y]}})
         if build_btn:
-            result=generate_showdown_lineups(build_df,field_size,payout_style,lineup_count,max(350,lineup_count*15),min_salary,max_salary,build_weights,effective_script,effective_team,strategy_map,eff_qb_pc,eff_wrte_qb,eff_rb_ctrl,max_k,max_dst,min_unique,seed,relationship_rules=active_relationships)
+            result=generate_showdown_lineups(build_df,field_size,payout_style,lineup_count,max(350,lineup_count*15),min_salary,max_salary,build_weights,effective_script,effective_team,strategy_map,entry_format,eff_qb_pc,eff_wrte_qb,eff_rb_ctrl,max_k,max_dst,min_unique,seed,relationship_rules=active_relationships)
             st.session_state["showdown_result_v4"]=result
             if result is None or result.empty:
                 st.error("No legal lineup found. Check minimum salary, locks/outs, Captain eligibility, allowed team builds, and Captain-pairing rules. Try one change at a time; DFS Lab will preserve your player settings.")
@@ -2302,6 +2328,30 @@ else:
             if result is None or result.empty: st.info("Set your build, player takes and script, then generate lineups.")
             else:
                 m1,m2,m3,m4=st.columns(4); m1.metric("A / A+",int(result["Rating"].isin(["A","A+"]).sum())); m2.metric("Top projection",f"{result['Projection'].max():.1f}"); m3.metric("Avg salary left",f"${int(result['Salary Left'].mean()):,}"); m4.metric("Built",len(result))
+                st.markdown("#### Lineup Lab")
+                st.caption("Select a lineup to see why DFS Lab built it for this contest and game thesis. Historical data stays under the hood; this explanation is slate-specific.")
+                lineup_choices=[f"#{int(r['Rank'])} · {r['Captain']} CPT · {r['Construction']} · {r['Projection']:.1f} pts" for _,r in result.iterrows()]
+                pick=st.selectbox("Analyze lineup",lineup_choices,key="lineup_lab_pick")
+                li=lineup_choices.index(pick); lr=result.iloc[li]
+                risk = "lower" if entry_format=="Single Entry" else ("moderate" if entry_format in ["3-Max","20-Max"] else "higher")
+                contest_reason=(f"{entry_format} with {int(field_size):,} entries. DFS Lab uses {risk} tolerance for fragile salary-relief plays and weights tournament ceiling/correlation accordingly.")
+                st.markdown(f"**Why this lineup exists**  \n**Contest:** {entry_format} · {int(field_size):,} entries · {payout_style}  \n**Game thesis:** {effective_script} · influence {int(intensity)}%  \n**Construction:** {lr['Construction']} · **Captain:** {lr['Captain']}  \n**Projection:** {lr['Projection']:.2f} · **Salary left:** ${int(lr['Salary Left']):,}")
+                st.write(contest_reason)
+                st.write(f"DFS Lab selected **{lr['Captain']} at Captain** while preserving the {lr['Construction']} game construction because this combination ranked strongly under the current projection, correlation, salary and contest-risk settings. {lr.get('Strategy Notes','')}")
+                if float(lr.get('Scenario Delta',0))!=0:
+                    st.write(f"Your game thesis moved this lineup by **{float(lr['Scenario Delta']):+.2f} projected DK points** versus the unadjusted baseline.")
+                st.markdown("##### Challenge this lineup")
+                st.caption("Choose a player you would rather use. DFS Lab will show the salary/projection contrast. Full conversational AI control comes after the optimizer evidence layer is validated.")
+                roster_names=[str(lr['Captain'])]+[str(lr.get('FLEX'+str(i),'')) for i in range(1,6)]
+                roster_names=[x for x in roster_names if x]
+                out_player=st.selectbox("Replace",roster_names,key="lab_out")
+                pool_names=[x for x in build_df['Name'].astype(str).tolist() if x not in roster_names]
+                in_player=st.selectbox("With",pool_names,key="lab_in")
+                if out_player and in_player:
+                    po=build_df[build_df['Name'].astype(str).eq(out_player)].iloc[0]; pi=build_df[build_df['Name'].astype(str).eq(in_player)].iloc[0]
+                    dproj=float(pi['DFS Lab Proj'])-float(po['DFS Lab Proj']); dsal=int(pi['FlexSalary'])-int(po['FlexSalary'])
+                    legal = int(lr['Salary']) + dsal <= 50000
+                    st.write(f"**Direct swap:** projection {dproj:+.2f} · salary {dsal:+,} · {'salary-cap legal' if legal else 'over the salary cap — a second change would be required'}. This is a direct contrast, not yet a full re-optimization.")
                 st.markdown("#### Top lineup cards")
                 for _,lr in result.head(5).iterrows():
                     flex_names=" · ".join(str(lr.get("FLEX"+str(i),"")) for i in range(1,6))

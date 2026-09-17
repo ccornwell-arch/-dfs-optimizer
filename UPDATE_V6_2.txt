@@ -1,0 +1,20 @@
+DFS Lab V6.2 — Contest Intelligence
+
+Changes
+- Scenario influence is now a true 0–100 slider.
+- Added Entry Format: Single Entry, 3-Max, 20-Max, 150-Max.
+- Entry format and field size now change Showdown tournament aggression.
+- Added contest-aware soft role-confidence penalty: fragile cheap punts are penalized more in Single Entry and less in large-field formats; they are never automatically banned.
+- Ownership leverage is not used in the optimizer objective when ownership is missing.
+- Added Lineup Lab to select a generated lineup and explain it in the context of THIS slate, game thesis, field size, entry format, construction and Captain.
+- Added first What-If contrast: replace one lineup player with another and immediately see projection/salary impact and whether a second move is required.
+- Historical explanation is moved out of the primary WHY workflow; history remains under the projection engine.
+- Improved dark-background text contrast.
+- Removed stale V5 language from Scenario help and updated visible version to V6.2.
+
+Next validation
+Run the same slate/game thesis as:
+1. ~250-entry Single Entry
+2. ~5,000-entry 20-Max
+3. ~100,000-entry 150-Max
+Compare CPT exposure, cheap-punt use, salary left, construction and top lineups.
