@@ -1629,23 +1629,22 @@ def solve_showdown_one(
     # Captain-specific correlation rules. Use randomized enforcement for percentage-based rules.
     for cpt in df.index[df["ActiveForBuild"]]:
         r=df.loc[cpt]
-        # QB captain -> require same-team pass catchers.
-        if r["is_QB"] and cpt_qb_passcatchers > 0:
+        # QB captain -> optional minimum/maximum same-team pass-catcher rule.
+        if r["is_QB"] and cpt_qb_passcatchers != 0:
             pcs=df.index[df["ActiveForBuild"] & df["Team"].eq(r["Team"]) & df["is_passcatcher"]].tolist()
+            n=abs(int(cpt_qb_passcatchers))
             coeff={}
             for i in pcs:
                 for j in range(1,s): coeff[vidx(i,j)] = coeff.get(vidx(i,j),0)+1
-            coeff[vidx(cpt,0)] = coeff.get(vidx(cpt,0),0)-float(cpt_qb_passcatchers)
-            _add_constraint(rows,lows,highs,coeff,0,np.inf)
-
-            # Enforce the selected number exactly when this QB is Captain.
-            # If the QB is not Captain, allow the normal FLEX player mix.
-            max_flex=float(s-1)
-            upper={}
-            for i in pcs:
-                for j in range(1,s): upper[vidx(i,j)] = upper.get(vidx(i,j),0)+1
-            upper[vidx(cpt,0)] = upper.get(vidx(cpt,0),0) + (max_flex-float(cpt_qb_passcatchers))
-            _add_constraint(rows,lows,highs,upper,-np.inf,max_flex)
+            if cpt_qb_passcatchers > 0:
+                # Minimum N: when this QB is Captain, require at least N same-team pass catchers.
+                coeff[vidx(cpt,0)] = coeff.get(vidx(cpt,0),0)-float(n)
+                _add_constraint(rows,lows,highs,coeff,0,np.inf)
+            else:
+                # No more than N: when this QB is Captain, cap same-team pass catchers at N.
+                max_flex=float(s-1)
+                coeff[vidx(cpt,0)] = coeff.get(vidx(cpt,0),0)+(max_flex-float(n))
+                _add_constraint(rows,lows,highs,coeff,-np.inf,max_flex)
 
         # WR/TE captain -> pair same-team QB in chosen percentage of solves.
         if r["is_passcatcher"] and rng.random() < wrte_cpt_qb_pair_pct/100.0:
@@ -2346,7 +2345,14 @@ else:
             st.markdown("#### Captain pairing")
             st.caption("These settings apply only when that position is Captain — they do not control how often the position becomes Captain.")
             a,b,c=st.columns(3)
-            with a:cpt_qb_pc=st.selectbox("When QB is CPT · pass catchers",[0,1,2,3],index=2,help="Number of same-team WR/TE pass catchers to pair with a QB Captain.")
+            with a:
+                qb_cpt_pc_rule = st.selectbox(
+                    "When QB is CPT · pass catchers",
+                    ["No rule", "Minimum 1", "Minimum 2", "No more than 1", "No more than 2"],
+                    index=1,
+                    help="Minimum means at least this many same-team WR/TE pass catchers. No more than sets a maximum."
+                )
+                cpt_qb_pc = {"No rule":0, "Minimum 1":1, "Minimum 2":2, "No more than 1":-1, "No more than 2":-2}[qb_cpt_pc_rule]
             pair_map={"Never":0,"Sometimes":35,"Usually":80,"Always":100}
             with b: wrte_pair=st.selectbox("When WR/TE is CPT · pair QB",list(pair_map),index=2)
             with c: rb_pair=st.selectbox("When RB is CPT · pair DST/K",list(pair_map),index=1)
