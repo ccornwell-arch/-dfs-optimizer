@@ -1,0 +1,22 @@
+name: Run Showdown Feasibility Patch
+
+on:
+  push:
+    paths:
+      - '.github/workflows/run-showdown-feasibility-patch.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python .github/scripts/patch_showdown_feasibility.py
+      - run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add streamlit_app.py
+          git commit -m "Add Showdown feasibility diagnostics"
+          git push
