@@ -2643,7 +2643,11 @@ else:
                         pr=_player_record(nm)
                         if pr is not None: recs.append(pr)
 
-                    challenge=any(x in q for x in ["don't like","dont like","do not like","hate ","not sold","don't want","dont want","get rid","remove ","fade ","off of ","too high","overprojected","over projected","won't score","wont score","won’t score","won't get","wont get","won’t get"])
+                    qwords=re.findall(r"[a-z]+",q)
+
+                    typo_neg=any(difflib.SequenceMatcher(None,w,"wont").ratio()>=0.72 for w in qwords)
+
+                    challenge=(any(x in q for x in ["don't like","dont like","do not like","hate ","not sold","don't want","dont want","get rid","remove ","fade ","off of ","too high","overprojected","over projected","won't score","wont score","won’t score","won't get","wont get","won’t get","score that much","get that much","projected high","projection high","seems high","too much","not score","not get"]) or (typo_neg and any(x in q for x in ["score","get","project","points","much"])))
                     if recs and challenge:
                         pr=recs[0]; nm=str(pr['Name']); proj=float(pr.get('DFS Lab Proj',0))
                         rr=next((x for x in detail_rows if str(x.get('Player','')).lower()==nm.lower()),None)
