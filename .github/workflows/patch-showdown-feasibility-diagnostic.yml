@@ -1,4 +1,5 @@
 name: Patch Showdown Feasibility Diagnostic
+# trigger v2
 
 on:
   push:
