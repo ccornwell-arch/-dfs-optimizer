@@ -3,73 +3,38 @@ from pathlib import Path
 p = Path('streamlit_app.py')
 s = p.read_text()
 
-old = '[data-testid=\\"stExpander\\"] label,[data-testid=\\"stExpander\\"] p{color:#dbe7f5!important}.stRadio label{color:#dbe7f5!important}'
-new = '''[data-testid=\\"stExpander\\"] label,
-[data-testid=\\"stExpander\\"] label p,
-[data-testid=\\"stExpander\\"] [data-testid=\\"stWidgetLabel\\"] p,
-[data-testid=\\"stExpander\\"] p{
-  color:#253247!important;
-  -webkit-text-fill-color:#253247!important;
-  opacity:1!important;
-}
-.stRadio label,.stRadio label p{
-  color:#253247!important;
-  -webkit-text-fill-color:#253247!important;
-  opacity:1!important;
-}'''
-if old not in s:
-    raise SystemExit('target contrast rule not found')
-s = s.replace(old, new, 1)
+marker = '/* DFS LAB iPad surface/background pass */'
+if marker not in s:
+    anchor = "st.markdown(\"\"\"<style>\n/* Final iPad contrast pass */"
+    if anchor not in s:
+        raise SystemExit('final contrast style anchor not found')
 
-anchor = 'st.markdown(\'\'\'<div class="apple-hero">'
-fix = '''st.markdown("""<style>
-/* Final iPad contrast pass */
-html, body, [data-testid="stAppViewContainer"] {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif !important;
+    surface_fix = '''st.markdown("""<style>
+/* DFS LAB iPad surface/background pass */
+[data-testid="stAppViewContainer"] {
+  background: linear-gradient(180deg, #dbe4ef 0%, #e7edf5 42%, #dfe8f2 100%) !important;
 }
-[data-testid="stAppViewContainer"] [data-testid="stWidgetLabel"] p,
-[data-testid="stAppViewContainer"] label p,
-[data-testid="stAppViewContainer"] [data-testid="stCaptionContainer"] p {
-  color:#253247 !important;
-  -webkit-text-fill-color:#253247 !important;
-  opacity:1 !important;
-  font-weight:600 !important;
+[data-testid="stAppViewContainer"] > .main,
+[data-testid="stAppViewContainer"] .main {
+  background: transparent !important;
 }
-[data-testid="stSegmentedControl"] label,
-[data-testid="stSegmentedControl"] button,
-[data-testid="stSegmentedControl"] [role="radio"] {
-  background:#243041 !important;
-  border-color:#506078 !important;
-  color:#ffffff !important;
-  -webkit-text-fill-color:#ffffff !important;
-  opacity:1 !important;
+[data-testid="stAppViewContainer"] .block-container {
+  background: transparent !important;
 }
-[data-testid="stSegmentedControl"] label *,
-[data-testid="stSegmentedControl"] button *,
-[data-testid="stSegmentedControl"] [role="radio"] * {
-  color:#ffffff !important;
-  -webkit-text-fill-color:#ffffff !important;
-  opacity:1 !important;
-  font-weight:700 !important;
+[data-testid="stExpander"],
+[data-testid="stVerticalBlockBorderWrapper"] > div,
+[data-testid="stForm"] {
+  background: rgba(248,250,252,0.94) !important;
 }
-[data-testid="stSegmentedControl"] label:has(input:checked),
-[data-testid="stSegmentedControl"] button[aria-checked="true"],
-[data-testid="stSegmentedControl"] button[aria-pressed="true"],
-[data-testid="stSegmentedControl"] [role="radio"][aria-checked="true"] {
-  background:#2563eb !important;
-  border-color:#2563eb !important;
-}
-[data-baseweb="button-group"] button,
-[data-baseweb="button-group"] button * {
-  color:#ffffff !important;
-  -webkit-text-fill-color:#ffffff !important;
-  opacity:1 !important;
+[data-testid="stSelectbox"] [data-baseweb="select"] > div,
+[data-testid="stNumberInput"] > div > div,
+[data-testid="stTextInput"] input,
+[data-testid="stTextArea"] textarea {
+  background: #eef3f9 !important;
 }
 </style>""", unsafe_allow_html=True)
 
 '''
-if anchor not in s:
-    raise SystemExit('hero anchor not found')
-s = s.replace(anchor, fix + anchor, 1)
+    s = s.replace(anchor, surface_fix + anchor, 1)
 
 p.write_text(s)
