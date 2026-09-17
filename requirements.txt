@@ -2,3 +2,6 @@ streamlit
 pandas
 numpy
 scipy
+
+nflreadpy>=0.1.5
+polars>=1.0

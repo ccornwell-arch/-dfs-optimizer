@@ -9,7 +9,7 @@ import streamlit as st
 from scipy.optimize import Bounds, LinearConstraint, milp
 from scipy.sparse import lil_matrix
 
-st.set_page_config(page_title="DFS Lab V5.2", page_icon="🏈", layout="wide")
+st.set_page_config(page_title="DFS Lab V6", page_icon="🏈", layout="wide")
 
 st.markdown("""
 <style>
@@ -918,131 +918,134 @@ def load_showdown_dk_template(uploaded_file):
     return pd.DataFrame(collapsed).reset_index(drop=True)
 
 
-def prepare_showdown_pool(dk_file, ss_file):
-    """Merge one canonical DraftKings row per player with SaberSim Showdown data.
 
-    SaberSim Showdown exports commonly contain TWO rows per player: a FLEX row and
-    a Captain row (Captain projection is typically 1.5x the FLEX projection).  A
-    plain merge on Name would therefore duplicate every player and can make the
-    optimizer build invalid / infeasible lineups.  Collapse SaberSim to one row
-    per player first, preserving FLEX projection/ownership and Captain ownership.
+def _dk_fantasy_points_from_stats(stats):
+    """DraftKings-style fantasy points from nflverse weekly player stats."""
+    def col(name):
+        return pd.to_numeric(stats[name], errors="coerce").fillna(0.0) if name in stats.columns else pd.Series(0.0, index=stats.index)
+    pts = (col("passing_yards") * 0.04 + col("passing_tds") * 4 - col("interceptions")
+           + col("rushing_yards") * 0.10 + col("rushing_tds") * 6
+           + col("receptions") * 1.0 + col("receiving_yards") * 0.10 + col("receiving_tds") * 6
+           - col("rushing_fumbles_lost") - col("receiving_fumbles_lost") - col("sack_fumbles_lost"))
+    # DK 300-yard passing and 100-yard rushing/receiving bonuses.
+    pts += (col("passing_yards") >= 300).astype(float) * 3
+    pts += (col("rushing_yards") >= 100).astype(float) * 3
+    pts += (col("receiving_yards") >= 100).astype(float) * 3
+    return pts
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _load_nflverse_projection_inputs(season):
+    import nflreadpy as nfl
+    cur = nfl.load_player_stats([int(season)], summary_level="week").to_pandas()
+    prev = nfl.load_player_stats([int(season)-1], summary_level="week").to_pandas()
+    return cur, prev
+
+def dfs_lab_projection_engine(dk):
+    """V1 independent baseline. Uses nflverse weekly production plus DK slate context.
+
+    The model deliberately shrinks small 2026 samples toward prior-season per-game
+    production and the DK slate's AvgPointsPerGame. DK Avg is a stabilizing prior,
+    not the final projection. No SaberSim values are used here.
     """
-    dk = load_showdown_dk_template(dk_file)
-    ss_raw = pd.read_csv(ss_file)
+    out=dk.copy()
+    # Determine season from game info, with a safe current-year fallback.
+    season=2026
+    try:
+        import re
+        m=re.search(r"(20\\d{2})", " ".join(out["Game Info"].astype(str).tolist()))
+        if m: season=int(m.group(1))
+    except Exception: pass
+    out["DFS Lab Data"]="DK prior only"
+    out["DFS Lab Base Proj"]=pd.to_numeric(out.get("AvgPointsPerGame",0),errors="coerce").fillna(0.0)
+    try:
+        cur,prev=_load_nflverse_projection_inputs(season)
+        def summarize(x):
+            if x is None or x.empty: return pd.DataFrame(columns=["Name","FPPG","Games"])
+            x=x.copy(); x["_fp"]=_dk_fantasy_points_from_stats(x)
+            name_col=_first_existing(x.columns,["player_display_name","player_name","Name"])
+            if not name_col: return pd.DataFrame(columns=["Name","FPPG","Games"])
+            x["Name"]=x[name_col].astype(str).str.strip()
+            # Rows with actual football participation; avoids future schedule placeholders.
+            if "week" in x.columns: x=x[pd.to_numeric(x["week"],errors="coerce").notna()]
+            return x.groupby("Name",as_index=False).agg(FPPG=("_fp","mean"),Games=("_fp","size"))
+        cs=summarize(cur).rename(columns={"FPPG":"CurFPPG","Games":"CurGames"})
+        ps=summarize(prev).rename(columns={"FPPG":"PrevFPPG","Games":"PrevGames"})
+        out=out.merge(cs,on="Name",how="left").merge(ps,on="Name",how="left")
+        for c in ["CurFPPG","CurGames","PrevFPPG","PrevGames"]: out[c]=pd.to_numeric(out[c],errors="coerce").fillna(0.0)
+        dkavg=pd.to_numeric(out["AvgPointsPerGame"],errors="coerce").fillna(0.0)
+        # Early season: 2026 production matters, but one hot/cold game cannot own the model.
+        cur_w=np.minimum(out["CurGames"],4.0)*0.12
+        prev_w=np.where(out["PrevGames"]>0,0.32,0.0)
+        prior_w=np.maximum(0.20,1.0-cur_w-prev_w)
+        denom=cur_w+prev_w+prior_w
+        raw=(cur_w*out["CurFPPG"]+prev_w*out["PrevFPPG"]+prior_w*dkavg)/denom
+        # Salary is a weak slate-relative sanity prior, never the main projection.
+        sal=pd.to_numeric(out["FlexSalary"],errors="coerce").fillna(0.0)
+        sal_prior=np.maximum(0.5, sal/1000.0*2.05)
+        pos=out["Position"].astype(str).str.upper()
+        skill=~pos.isin(["K","PK","DST","D/ST"])
+        raw=np.where(skill,0.90*raw+0.10*sal_prior,raw)
+        out["DFS Lab Base Proj"]=np.maximum(0.0,raw).round(3)
+        out["DFS Lab Data"]=np.where(out["CurGames"]>0,"2026 + 2025 + DK prior",np.where(out["PrevGames"]>0,"2025 + DK prior","DK prior fallback"))
+    except Exception as e:
+        out["DFS Lab Data"]="DK prior fallback"
+        out.attrs["projection_warning"]=f"Live nflverse data could not load ({e}). DFS Lab used the DK slate prior for this run."
+    return out
 
-    name_col = _first_existing(ss_raw.columns, ["Name", "Player", "Player Name"])
-    proj_col = _first_existing(ss_raw.columns, ["My Proj", "Projection", "Proj"])
-    own_col = _first_existing(ss_raw.columns, ["My Own", "Ownership", "Own", "Projected Ownership"])
-    cpt_own_col = _first_existing(ss_raw.columns, ["My CPT Own", "CPT Own", "Captain Own", "Captain Ownership", "CPT Ownership"])
-    roster_col = _first_existing(ss_raw.columns, ["Roster Position", "Roster Pos", "Slot", "Lineup Position", "Position Type"])
+def apply_projection_overrides(df, override_map=None):
+    out=df.copy(); override_map=override_map or {}
+    out["Model Proj"]=pd.to_numeric(out.get("DFS Lab Proj",out.get("My Proj",0)),errors="coerce").fillna(0.0)
+    finals=[]; flags=[]
+    for _,r in out.iterrows():
+        val=override_map.get(str(r["ID"]),None)
+        if val is None or float(val)<0: finals.append(float(r["Model Proj"])); flags.append(False)
+        else: finals.append(float(val)); flags.append(True)
+    out["DFS Lab Proj"]=np.array(finals).round(3); out["Projection Override"]=flags
+    return out
 
-    if not name_col or not proj_col or not own_col:
-        raise ValueError("SaberSim file needs Name, projection, and ownership columns (for example Name / My Proj / My Own).")
-
-    work_cols = [name_col, proj_col, own_col]
-    if cpt_own_col and cpt_own_col not in work_cols:
-        work_cols.append(cpt_own_col)
-    if roster_col and roster_col not in work_cols:
-        work_cols.append(roster_col)
-    ss0 = ss_raw[work_cols].copy()
-    ss0 = ss0.rename(columns={name_col:"Name", proj_col:"My Proj", own_col:"My Own"})
-    if cpt_own_col:
-        ss0 = ss0.rename(columns={cpt_own_col:"CPT Own"})
-    if roster_col:
-        ss0 = ss0.rename(columns={roster_col:"SS Roster"})
-
-    ss0["Name"] = ss0["Name"].astype(str).str.strip()
-    ss0["My Proj"] = pd.to_numeric(ss0["My Proj"], errors="coerce").fillna(0.0)
-    ss0["My Own"] = pd.to_numeric(ss0["My Own"], errors="coerce").fillna(0.0)
-    if "CPT Own" in ss0.columns:
-        ss0["CPT Own"] = pd.to_numeric(ss0["CPT Own"], errors="coerce").fillna(0.0)
-
-    collapsed = []
-    for name, g in ss0.groupby("Name", sort=False, dropna=False):
-        g = g.copy().reset_index(drop=True)
-        if g.empty or not str(name).strip():
-            continue
-
-        # Prefer an explicitly labeled FLEX row when the export provides a roster/slot column.
-        flex_idx = None
-        cpt_idx = None
-        if "SS Roster" in g.columns:
-            slot = g["SS Roster"].astype(str).str.upper()
-            flex_candidates = g.index[slot.str.contains("FLEX", na=False)].tolist()
-            cpt_candidates = g.index[slot.str.contains("CPT|CAPTAIN", regex=True, na=False)].tolist()
-            if flex_candidates:
-                flex_idx = flex_candidates[0]
-            if cpt_candidates:
-                cpt_idx = cpt_candidates[0]
-
-        # Common SaberSim format has the same name twice without a slot column.
-        # The Captain row carries the 1.5x projection, so the lower projection is FLEX.
-        if flex_idx is None:
-            positive = g.index[g["My Proj"] > 0].tolist()
-            candidates = positive if positive else g.index.tolist()
-            flex_idx = min(candidates, key=lambda i: (float(g.loc[i,"My Proj"]), i))
-        if cpt_idx is None and len(g) > 1:
-            other = [i for i in g.index if i != flex_idx]
-            if other:
-                target = 1.5 * float(g.loc[flex_idx,"My Proj"])
-                cpt_idx = min(other, key=lambda i: abs(float(g.loc[i,"My Proj"]) - target))
-
-        flex = g.loc[flex_idx]
-        if "CPT Own" in g.columns and float(flex.get("CPT Own",0) or 0) > 0:
-            cpt_own = float(flex["CPT Own"])
-            cpt_est = False
-        elif cpt_idx is not None:
-            # In two-row SaberSim exports the CPT row's normal ownership field is Captain ownership.
-            cpt_own = float(g.loc[cpt_idx,"My Own"])
-            cpt_est = False
-        else:
-            cpt_own = max(0.1, float(flex["My Own"]) * 0.18)
-            cpt_est = True
-
-        collapsed.append({
-            "Name": str(name).strip(),
-            "My Proj": float(flex["My Proj"]),
-            "My Own": float(flex["My Own"]),
-            "CPT Own": cpt_own,
-            "CPT Own Estimated": cpt_est,
-        })
-
-    ss = pd.DataFrame(collapsed)
-    if ss.empty:
-        raise ValueError("No usable players were found in the SaberSim file.")
-
-    # Extra safety: exactly one SaberSim row and one DraftKings row per player.
-    ss = ss.sort_values(["Name","My Proj"], ascending=[True,False]).drop_duplicates("Name", keep="first")
-    dk = dk.drop_duplicates(subset=["ID"], keep="first").drop_duplicates(subset=["Name","Team"], keep="first")
-
-    df = dk.merge(ss, on="Name", how="left", validate="many_to_one")
-    for c in ["My Proj", "My Own", "CPT Own"]:
-        df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0.0)
-    df["CPT Own Estimated"] = df.get("CPT Own Estimated", False).fillna(False).astype(bool)
-
-    away, home, matchup = [], [], []
+def prepare_showdown_pool(dk_file, ss_file=None):
+    """Create the Showdown pool. DFS Lab projections work with DK alone; SaberSim is optional comparison data."""
+    dk=load_showdown_dk_template(dk_file)
+    dk=dk.drop_duplicates(subset=["ID"],keep="first").drop_duplicates(subset=["Name","Team"],keep="first")
+    df=dfs_lab_projection_engine(dk)
+    df["SaberSim Proj"]=np.nan; df["My Own"]=0.0; df["CPT Own"]=0.0; df["CPT Own Estimated"]=True
+    if ss_file is not None:
+        ss_raw=pd.read_csv(ss_file)
+        name_col=_first_existing(ss_raw.columns,["Name","Player","Player Name"]); proj_col=_first_existing(ss_raw.columns,["My Proj","Projection","Proj"])
+        own_col=_first_existing(ss_raw.columns,["My Own","Ownership","Own","Projected Ownership"])
+        roster_col=_first_existing(ss_raw.columns,["Roster Position","Roster Pos","Slot","Lineup Position","Position Type"])
+        if name_col and proj_col:
+            x=ss_raw.copy(); x["Name"]=x[name_col].astype(str).str.strip(); x["_proj"]=pd.to_numeric(x[proj_col],errors="coerce").fillna(0.0)
+            x["_own"]=pd.to_numeric(x[own_col],errors="coerce").fillna(0.0) if own_col else 0.0
+            rows=[]
+            for name,g in x.groupby("Name",sort=False):
+                g=g.copy()
+                flex=None; cpt=None
+                if roster_col:
+                    slot=g[roster_col].astype(str).str.upper(); fg=g[slot.str.contains("FLEX",na=False)]; cg=g[slot.str.contains("CPT|CAPTAIN",regex=True,na=False)]
+                    if not fg.empty:flex=fg.iloc[0]
+                    if not cg.empty:cpt=cg.iloc[0]
+                if flex is None: flex=g.sort_values("_proj",ascending=True).iloc[0]
+                if cpt is None and len(g)>1: cpt=g.sort_values("_proj",ascending=False).iloc[0]
+                rows.append({"Name":name,"SaberSim Proj":float(flex["_proj"]),"My Own":float(flex["_own"]),"CPT Own":float(cpt["_own"]) if cpt is not None else max(.1,float(flex["_own"])*.18),"CPT Own Estimated":cpt is None})
+            ss=pd.DataFrame(rows).drop_duplicates("Name")
+            base_cols=[c for c in df.columns if c not in ["SaberSim Proj","My Own","CPT Own","CPT Own Estimated"]]
+            df=df[base_cols].merge(ss,on="Name",how="left")
+            for c in ["SaberSim Proj","My Own","CPT Own"]: df[c]=pd.to_numeric(df[c],errors="coerce").fillna(0.0)
+            df["CPT Own Estimated"]=df["CPT Own Estimated"].fillna(True).astype(bool)
+    # Compatibility: My Proj is now DFS Lab's independent baseline, not SaberSim.
+    df["My Proj"]=pd.to_numeric(df["DFS Lab Base Proj"],errors="coerce").fillna(0.0)
+    away=[];home=[];matchup=[]
     for g in df["Game Info"]:
-        a, h, m = parse_matchup(g)
-        away.append(a); home.append(h); matchup.append(m)
-    df["Away"] = away; df["Home"] = home; df["Matchup"] = matchup
-    teams = [t for t in df["Team"].dropna().unique().tolist() if t]
-    if len(teams) == 2:
-        opp_map = {teams[0]: teams[1], teams[1]: teams[0]}
-        df["Opponent"] = df["Team"].map(opp_map).fillna("")
-    else:
-        df["Opponent"] = np.where(df["Team"] == df["Away"], df["Home"], df["Away"])
-
-    pos = df["Position"].astype(str).str.upper()
-    df["is_QB"] = pos.eq("QB")
-    df["is_RB"] = pos.eq("RB")
-    df["is_WR"] = pos.eq("WR")
-    df["is_TE"] = pos.eq("TE")
-    df["is_DST"] = pos.isin(["DST", "D/ST"])
-    df["is_K"] = pos.isin(["K", "PK"])
-    df["is_passcatcher"] = df["is_WR"] | df["is_TE"]
-    df["ActiveForBuild"] = (df["My Proj"] > 0.01) & (df["FlexSalary"] > 0)
+        a,h,m=parse_matchup(g);away.append(a);home.append(h);matchup.append(m)
+    df["Away"]=away;df["Home"]=home;df["Matchup"]=matchup
+    teams=[t for t in df["Team"].dropna().unique().tolist() if t]
+    if len(teams)==2:
+        opp={teams[0]:teams[1],teams[1]:teams[0]};df["Opponent"]=df["Team"].map(opp).fillna("")
+    else: df["Opponent"]=np.where(df["Team"]==df["Away"],df["Home"],df["Away"])
+    pos=df["Position"].astype(str).str.upper();df["is_QB"]=pos.eq("QB");df["is_RB"]=pos.eq("RB");df["is_WR"]=pos.eq("WR");df["is_TE"]=pos.eq("TE");df["is_DST"]=pos.isin(["DST","D/ST"]);df["is_K"]=pos.isin(["K","PK"]);df["is_passcatcher"]=df["is_WR"]|df["is_TE"]
+    df["ActiveForBuild"]=(df["My Proj"]>0.01)&(df["FlexSalary"]>0)
     return df.reset_index(drop=True)
-
 
 def showdown_aggression(field_size, payout_style):
     aggr = contest_aggression(field_size, payout_style)
@@ -1715,6 +1718,12 @@ html,body,[class*="css"]{font-family:-apple-system,BlinkMacSystemFont,"SF Pro Di
 .stButton>button{border-radius:13px;font-weight:750;padding:.65rem 1rem}.stButton>button[kind="primary"]{background:#0071e3;color:#fff;border:0;}
 button[data-baseweb="tab"]{font-weight:750;}
 hr{border-color:rgba(17,24,39,.07)!important;}
+
+/* V6 true wide workspace: the sidebar overlays instead of permanently consuming canvas width.
+   When Streamlit collapses it, Players/Lineups immediately inherit the full viewport. */
+[data-testid="stAppViewContainer"] .main, [data-testid="stMain"]{margin-left:0!important;width:100%!important;max-width:100%!important;}
+[data-testid="stMainBlockContainer"], .block-container{max-width:100%!important;width:100%!important;}
+@media (min-width: 700px){section[data-testid="stSidebar"]{position:fixed!important;z-index:1000!important;box-shadow:18px 0 45px rgba(0,0,0,.28)!important;}}
 </style>
 """,unsafe_allow_html=True)
 
@@ -1794,7 +1803,7 @@ st.markdown("""
 </style>
 """,unsafe_allow_html=True)
 
-st.markdown('''<div class="apple-hero"><div class="apple-eyebrow">DFS LAB</div><div class="apple-title">Classic + Showdown.</div><div class="apple-sub">One optimizer, two different strategy engines. Showdown adds Captain exposure, game scripts, construction control, correlation and duplication-aware ratings.</div><span class="pill">V5 • Control Deck</span></div>''',unsafe_allow_html=True)
+st.markdown('''<div class="apple-hero"><div class="apple-eyebrow">DFS LAB</div><div class="apple-title">Classic + Showdown.</div><div class="apple-sub">One optimizer, two different strategy engines. Showdown adds Captain exposure, game scripts, construction control, correlation and duplication-aware ratings.</div><span class="pill">V6 • Projection Engine</span></div>''',unsafe_allow_html=True)
 
 with st.sidebar:
     st.markdown("### Contest")
@@ -1809,13 +1818,16 @@ with st.sidebar:
         seed=st.number_input("Random seed",min_value=1,value=42,step=1)
         st.caption("Change this only when you want a different randomized batch.")
 
-st.markdown('<div class="card-title">Slate files</div><div class="card-sub">Upload the DraftKings template and your SaberSim projection/ownership export.</div>',unsafe_allow_html=True)
+st.markdown('<div class="card-title">Slate files</div><div class="card-sub">DraftKings is the only required file. DFS Lab can create its own baseline projection; SaberSim is now optional and used only as a comparison source.</div>',unsafe_allow_html=True)
 u1,u2=st.columns(2)
-with u1: dk_file=st.file_uploader("DraftKings salaries/template",type=["csv"],key=f"dk_{mode}")
-with u2: ss_file=st.file_uploader("SaberSim projections + ownership",type=["csv"],key=f"ss_{mode}")
+with u1: dk_file=st.file_uploader("DraftKings salaries/template · required",type=["csv"],key=f"dk_{mode}")
+with u2: ss_file=st.file_uploader("SaberSim · optional comparison",type=["csv"],key=f"ss_{mode}")
 
-if not (dk_file and ss_file):
-    st.info("Upload both files to open the workspace.")
+if not dk_file:
+    st.info("Upload the DraftKings slate to open DFS Lab.")
+    st.stop()
+if mode=="Classic" and not ss_file:
+    st.info("DFS Lab-only projections are enabled for Showdown first. Classic still needs the projection file in this V6 test build.")
     st.stop()
 
 if mode=="Classic":
@@ -1890,14 +1902,15 @@ else:
         nonzero_proj=int((pd.to_numeric(df["My Proj"],errors="coerce").fillna(0)>0.05).sum())
         nonzero_own=int((pd.to_numeric(df["My Own"],errors="coerce").fillna(0)>0).sum())
         if nonzero_proj==0:
-            st.error("Projection file problem · Players matched, but every uploaded SaberSim projection is 0. DFS Lab will not build from an empty projection set.")
+            st.error("DFS Lab could not create usable projections for this slate.")
             st.stop()
         elif nonzero_proj < 6: st.warning(f"Projection check · Only {nonzero_proj} players have usable projections. The slate may be incomplete.")
-        else: st.success(f"Slate ready · {nonzero_proj} players have usable projections.")
+        else: st.success(f"DFS Lab projection engine ready · {nonzero_proj} players have usable projections." + (" · SaberSim comparison loaded." if ss_file else " · No SaberSim file used."))
         if nonzero_own==0: st.warning("Ownership not populated yet · Lineups can be built, but leverage and duplication ratings that depend on ownership are provisional.")
         st.session_state.setdefault("showdown_strategy",{})
         st.session_state.setdefault("showdown_context",{})
         st.session_state.setdefault("showdown_relationships",[])
+        st.session_state.setdefault("projection_overrides",{})
         st.session_state.setdefault("context_strength","Standard")
         st.session_state.setdefault("sd_use_score", False)
         st.session_state.setdefault("sd_script", "Neutral")
@@ -1960,6 +1973,7 @@ else:
                 current_script,current_team,_=infer_score_script(current_scores)
             scenario_df=apply_showdown_scenario(df,current_script,current_team,current_use_score,current_scores,st.session_state.get("sd_intensity","Standard"))
             scenario_df=apply_context_engine(scenario_df,st.session_state.get("showdown_context",{}),st.session_state.get("context_strength","Standard"))
+            scenario_df=apply_projection_overrides(scenario_df,st.session_state.get("projection_overrides",{}))
             view=scenario_df.copy()
             if team_filter:view=view[view["Team"].isin(team_filter)]
             if pos_filter:view=view[view["Position"].isin(pos_filter)]
@@ -1985,7 +1999,7 @@ else:
                         st.session_state["showdown_strategy"].pop(qid,None); st.rerun()
                 st.caption("Lock = every lineup • CPT = Captain every lineup • Out = never use")
 
-            ed=pd.DataFrame({"ID":view["ID"].astype(str),"Name":view["Name"],"Pos":view["Position"],"Team":view["Team"],"Flex $":view["FlexSalary"],"Proj":view["My Proj"].round(2),"Script Proj":view["Script Proj"].round(2),"DFS Lab":view["DFS Lab Proj"].round(2),"Δ%":view["Proj Change %"].round(1),"Own":view["My Own"].round(1),"CPT Own":view["CPT Own"].round(1),"Lock":False,"CPT Lock":False,"Exclude":False,"CPT Eligible":True,"Priority":"Neutral","Min Exposure":0,"Max Exposure":100,"CPT Min":0,"CPT Max":100})
+            ed=pd.DataFrame({"ID":view["ID"].astype(str),"Name":view["Name"],"Pos":view["Position"],"Team":view["Team"],"Flex $":view["FlexSalary"],"DFS Base":view["My Proj"].round(2),"Model":view["Model Proj"].round(2),"Your Proj":view["DFS Lab Proj"].round(2),"Δ%":view["Proj Change %"].round(1),"Own":view["My Own"].round(1),"CPT Own":view["CPT Own"].round(1),"Lock":False,"CPT Lock":False,"Exclude":False,"CPT Eligible":True,"Priority":"Neutral","Min Exposure":0,"Max Exposure":100,"CPT Min":0,"CPT Max":100})
             for x,r in ed.iterrows():
                 e=st.session_state["showdown_strategy"].get(str(r["ID"]),{})
                 for c,k,d in [("Lock","Lock",False),("CPT Lock","CPT Lock",False),("Exclude","Exclude",False),("CPT Eligible","CPT Eligible",True),("Priority","Priority","Neutral"),("Min Exposure","Min Exposure",0),("Max Exposure","Max Exposure",100),("CPT Min","CPT Min",0),("CPT Max","CPT Max",100)]: ed.at[x,c]=e.get(k,d)
@@ -1994,8 +2008,8 @@ else:
                 hide_index=True,
                 use_container_width=True,
                 height=650,
-                disabled=["ID","Name","Pos","Team","Flex $","Proj","Script Proj","DFS Lab","Δ%","Own","CPT Own"],
-                column_order=["Name","Lock","CPT Lock","Exclude","CPT Eligible","Priority","Pos","Team","Flex $","Proj","Script Proj","DFS Lab","Δ%","Own","CPT Own","Min Exposure","Max Exposure","CPT Min","CPT Max"],
+                disabled=["ID","Name","Pos","Team","Flex $","DFS Base","Model","Δ%","Own","CPT Own"],
+                column_order=["Name","Lock","CPT Lock","Exclude","CPT Eligible","Priority","Pos","Team","Flex $","DFS Base","Model","Your Proj","Δ%","Own","CPT Own","Min Exposure","Max Exposure","CPT Min","CPT Max"],
                 column_config={
                     "ID":None,
                     "Name":st.column_config.TextColumn("Player",width=190,pinned=True),
@@ -2021,6 +2035,10 @@ else:
                 key="v4_sdplayers",
             )
             for _,r in edited.iterrows():
+                pid=str(r["ID"]); model_val=float(view.loc[view["ID"].astype(str).eq(pid),"Model Proj"].iloc[0]) if not view.loc[view["ID"].astype(str).eq(pid)].empty else float(r["Your Proj"])
+                user_val=float(r["Your Proj"])
+                if abs(user_val-model_val)>0.01: st.session_state["projection_overrides"][pid]=user_val
+                else: st.session_state["projection_overrides"].pop(pid,None)
                 ex=bool(r["Exclude"]); cptlock=bool(r["CPT Lock"]) and not ex
                 st.session_state["showdown_strategy"][str(r["ID"]) ]={"Lock":bool(r["Lock"]) and not ex and not cptlock,"CPT Lock":cptlock,"Exclude":ex,"CPT Eligible":bool(r["CPT Eligible"]) and not ex,"Priority":"Exclude" if ex else str(r["Priority"]),"Min Exposure":float(r["Min Exposure"]),"Max Exposure":float(r["Max Exposure"]),"CPT Min":float(r["CPT Min"]),"CPT Max":float(r["CPT Max"])}
 
@@ -2111,7 +2129,7 @@ else:
             ctx_base=apply_showdown_scenario(df,ctx_script,ctx_team,ctx_use_score,ctx_scores,st.session_state.get("sd_intensity","Standard"))
             ctx_df=apply_context_engine(ctx_base,st.session_state["showdown_context"],context_strength)
             st.markdown("#### Market vs. model foundation")
-            st.caption("For now, 'Base' is SaberSim and 'DFS Lab' is scenario + your context layer. Sportsbook/usage/defense feeds will populate these factors automatically in the next data phase.")
+            st.caption("Base is now DFS Lab's independent nflverse/DK-prior projection. Scenario + context create the model projection; Your Proj can override the final optimizer input.")
             cp=ctx_df[["Name","My Proj","Script Proj","Context Adj %","DFS Lab Proj"]].copy()
             cp.columns=["Player","Base","Scenario","Context %","DFS Lab"]
             cp=cp.sort_values("Context %",key=lambda x:x.abs(),ascending=False)
@@ -2119,7 +2137,7 @@ else:
             why_name=st.selectbox("WHY? player",ctx_df["Name"].astype(str).tolist(),key="context_why_player")
             wr=ctx_df[ctx_df["Name"].astype(str)==str(why_name)].iloc[0]
             with st.expander(f"WHY? · {why_name}",expanded=True):
-                st.write(f"**SaberSim {wr['My Proj']:.2f} → Scenario {wr['Script Proj']:.2f} → DFS Lab {wr['DFS Lab Proj']:.2f}**")
+                st.write(f"**DFS Base {wr['My Proj']:.2f} → Scenario {wr['Script Proj']:.2f} → DFS Lab {wr['DFS Lab Proj']:.2f}**")
                 st.write(str(wr["Context Why"]))
                 st.caption("V5.2 does not invent historical splits. A context factor only moves the projection when you enter evidence for it.")
 
@@ -2180,7 +2198,7 @@ else:
             preview.columns=["Player","Pos","Team","Base","Scenario","Change %"]
             preview=preview.sort_values("Change %",key=lambda x:x.abs(),ascending=False).head(14)
             st.dataframe(preview,hide_index=True,use_container_width=True,height=410,column_config={"Player":st.column_config.TextColumn("Player",pinned=True,width=190),"Base":st.column_config.NumberColumn("Base",format="%.2f"),"Scenario":st.column_config.NumberColumn("Scenario",format="%.2f"),"Change %":st.column_config.NumberColumn("Change %",format="%.1f")})
-            st.caption("These are bounded scenario tilts applied to the uploaded baseline projections. They are not a claim that a final score can precisely predict individual fantasy points.")
+            st.caption("These are bounded scenario tilts applied to the DFS Lab baseline projections. They are not a claim that a final score can precisely predict individual fantasy points.")
             st.markdown("#### How V5.2 grades Showdown")
             st.caption("Projection 29–34% • Captain quality 18% • correlation 20% • leverage 11–15% • duplication proxy 10–15% • your takes 7%. The exact weights move with contest size/payout.")
             st.caption("The scenario engine changes the projection and construction inputs before the lineup is graded; it does not simply add points to the final grade.")
@@ -2190,6 +2208,7 @@ else:
         # Apply the scenario to the actual build, not just the preview.
         build_df=apply_showdown_scenario(df,effective_script,effective_team,use_score,team_scores,intensity)
         build_df=apply_context_engine(build_df,st.session_state.get("showdown_context",{}),st.session_state.get("context_strength","Standard"))
+        build_df=apply_projection_overrides(build_df,st.session_state.get("projection_overrides",{}))
         build_weights,corr_overrides=script_build_adjustments(construction_weights,effective_script,effective_team,use_score,team_scores,auto_shape)
         eff_qb_pc=cpt_qb_pc; eff_wrte_qb=wrte_qb; eff_rb_ctrl=rb_ctrl
         if corr_overrides:
