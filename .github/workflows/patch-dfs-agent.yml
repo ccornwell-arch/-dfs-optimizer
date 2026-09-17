@@ -1,4 +1,4 @@
-name: Patch DFS Lab Agent
+name: Patch DFS Lab Agent UX
 
 on:
   push:
@@ -16,111 +16,40 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Patch agent behavior
+      - name: Patch agent UX
         shell: bash
         run: |
           python - <<'PY'
           from pathlib import Path
-          import re, textwrap
 
-          p = Path('streamlit_app.py')
-          s = p.read_text()
+          p=Path('streamlit_app.py')
+          s=p.read_text()
 
-          if 'import difflib\n' not in s:
-              s = s.replace('import re\n', 'import re\nimport difflib\n', 1)
+          old="if not hits and any(x in q for x in ['he ','him ','his ','one ','them ','those ']):\n                        hits=st.session_state.get('agent_last_players',[])"
+          new="if not hits and re.search(r'\\b(?:he|him|his|one|them|those)\\b', q):\n                        hits=st.session_state.get('agent_last_players',[])"
+          if old in s:
+              s=s.replace(old,new,1)
 
-          mentioned_src = r'''
-          def _mentioned_players(qtext):
-              q=str(qtext or '').lower(); hits=[]
-              names_all=[str(x) for x in build_df['Name'].dropna().astype(str).unique()]
-              for nm in names_all:
-                  last=nm.split()[-1].lower()
-                  if nm.lower() in q or (len(last)>2 and re.search(r'\b'+re.escape(last)+r'\b',q)):
-                      hits.append(nm)
-              if not hits:
-                  words=[w for w in re.findall(r"[a-zA-Z][a-zA-Z'\-]+",q) if len(w)>=4]
-                  last_map={nm.split()[-1].lower():nm for nm in names_all}
-                  full_map={nm.lower():nm for nm in names_all}
-                  for w in words:
-                      m=difflib.get_close_matches(w,list(last_map.keys()),n=1,cutoff=.82)
-                      if m and last_map[m[0]] not in hits: hits.append(last_map[m[0]])
-                  if not hits:
-                      m=difflib.get_close_matches(q,list(full_map.keys()),n=1,cutoff=.72)
-                      if m: hits.append(full_map[m[0]])
-              if not hits and any(x in q for x in ['he ','him ','his ','one ','them ','those ']):
-                  hits=st.session_state.get('agent_last_players',[])
-              if hits: st.session_state['agent_last_players']=hits[:4]
-              return hits[:4]
-          '''
-          mentioned = textwrap.indent(textwrap.dedent(mentioned_src).strip('\n'), '                ')
-          s, n1 = re.subn(
-              r'                def _mentioned_players\(qtext\):.*?(?=\n                def build_agent_packet\(\):)',
-              lambda _m: mentioned,
-              s,
-              count=1,
-              flags=re.S,
-          )
-          if n1 != 1:
-              raise SystemExit(f'_mentioned_players patch matched {n1} times')
+          old2="""                    if recs:\n                        pr=recs[0]; return f\"**{pr['Name']} is at {float(pr['DFS Lab Proj']):.2f}.** Tell me what you dislike about the play, or I can test removing him from this build and compare the salary-feasible alternatives.\"\n                    return \"I couldn't resolve the player or request from the current slate. Rephrase it with the player's last name and I’ll evaluate that player against this exact lineup instead of giving you a generic lineup summary.\""" 
+          new2="""                    projection_high=any(x in q for x in ['too high','overprojected','over projected','projected high','projection is high'])\n                    projection_low=any(x in q for x in ['too low','underprojected','under projected','projected low','projection is low'])\n                    if recs and (projection_high or projection_low):\n                        pr=recs[0]; nm=str(pr['Name']); proj=float(pr['DFS Lab Proj'])\n                        direction='high' if projection_high else 'low'\n                        test1=max(0.0,proj-2.0) if projection_high else proj+2.0\n                        test2=max(0.0,proj-3.0) if projection_high else proj+3.0\n                        return f\"**Yes — you're challenging {nm}'s {proj:.2f} projection as too {direction}.** I would not ask you to repeat why. The next useful step is to stress-test the lineup with {nm} around **{test1:.1f}** and **{test2:.1f}** and see whether he still belongs in this six-player build. Those would be temporary scenario tests, not changes to the base projection.\"\n                    if recs:\n                        pr=recs[0]; return f\"**{pr['Name']} is at {float(pr['DFS Lab Proj']):.2f}.** I can evaluate that projection, compare him with another player, or test removing him from this exact lineup.\"\n                    return \"I couldn't resolve the player or request from the current slate. Rephrase it with the player's last name and I’ll evaluate that player against this exact lineup instead of giving you a generic lineup summary.\""" 
+          if old2 in s:
+              s=s.replace(old2,new2,1)
 
-          local_src = r'''
-          def local_agent_answer(qtext, packet):
-              q=str(qtext or '').lower().strip(); names=_mentioned_players(qtext)
-              recs=[]
-              for nm in names:
-                  pr=_player_record(nm)
-                  if pr is not None: recs.append(pr)
+          anchor="""                    older=st.session_state['dfs_lab_chat'][:-1]\n                    if older:\n                        with st.expander(f\"Earlier conversation · {len(older)}\",expanded=False):\n                            for uq,ar in reversed(older[-8:]): st.markdown(f\"**You:** {uq}\"); st.markdown(ar); st.divider()\n                if st.session_state.get('dfs_agent_error'):\n"""
+          replacement="""                    older=st.session_state['dfs_lab_chat'][:-1]\n                    if older:\n                        with st.expander(f\"Earlier conversation · {len(older)}\",expanded=False):\n                            for uq,ar in reversed(older[-8:]): st.markdown(f\"**You:** {uq}\"); st.markdown(ar); st.divider()\n\n                    with st.form('dfs_lab_agent_followup_form',clear_on_submit=True):\n                        follow_q=st.text_area('Continue the conversation',placeholder='Reply to DFS LAB…',height=80,key='dfs_agent_followup_text')\n                        follow_submit=st.form_submit_button('SEND FOLLOW-UP  ↗',type='primary',use_container_width=True)\n                    if follow_submit and follow_q.strip():\n                        st.session_state['dfs_agent_pending']=follow_q.strip()\n                        st.rerun()\n                if st.session_state.get('dfs_agent_error'):\n"""
+          if anchor in s and "dfs_lab_agent_followup_form" not in s:
+              s=s.replace(anchor,replacement,1)
 
-              negative=any(x in q for x in ["don't like","dont like","do not like","hate ","not sold","don't want","dont want","get rid","remove ","fade ","off of "])
-              if recs and negative:
-                  pr=recs[0]; nm=str(pr['Name']); proj=float(pr.get('DFS Lab Proj',0))
-                  rr=next((x for x in detail_rows if str(x.get('Player','')).lower()==nm.lower()),None)
-                  if rr:
-                      slot=str(rr.get('Slot','FLEX')).upper(); lineup_salary=int(packet['active_lineup']['salary'])
-                      old_cost=int(pr.get('CaptainSalary',pr.get('CPTSalary',0))) if slot=='CPT' else int(pr.get('FlexSalary',0))
-                      max_cost=50000-(lineup_salary-old_cost)
-                      used={str(x.get('Player','')) for x in detail_rows}
-                      sal_col='CaptainSalary' if slot=='CPT' and 'CaptainSalary' in build_df.columns else ('CPTSalary' if slot=='CPT' and 'CPTSalary' in build_df.columns else 'FlexSalary')
-                      alts=build_df[(~build_df['Name'].astype(str).isin(used)) & (pd.to_numeric(build_df[sal_col],errors='coerce').fillna(999999)<=max_cost)].copy()
-                      alts=alts.sort_values('DFS Lab Proj',ascending=False).head(4)
-                      cand=', '.join([f"{r['Name']} ({float(r['DFS Lab Proj']):.2f}, ${int(r[sal_col]):,})" for _,r in alts.iterrows()])
-                      extra=(f" Salary-feasible one-for-one candidates are: **{cand}**." if cand else " I don't see a clean one-for-one salary-feasible alternative in the current pool.")
-                      return f"**Then I would challenge {nm} in this lineup, not defend the pick.** He's in the **{slot}** slot at **{proj:.2f} projected DK points**. Your preference is a reason to test a version without him.{extra} Those are candidates, not a claim that the current lineup stays valid — a fresh rebuild is needed to verify construction/correlation and find the best replacement."
-                  return f"**Then I would treat {nm} as a fade for the next build.** DFS LAB has him at **{proj:.2f}**, but he isn't in the active six-player lineup I'm evaluating right now."
+          old3="""                    with st.expander('Agent status',expanded=False): st.caption(f\"DFS LAB Agent API fallback is active. Error: {st.session_state.get('dfs_agent_error','unknown')}\")"""
+          new3="""                    with st.expander('Agent status',expanded=False):\n                        _agent_err=str(st.session_state.get('dfs_agent_error',''))\n                        if 'credit' in _agent_err.lower() or 'quota' in _agent_err.lower():\n                            st.caption('AI connection is paused because the API account has no remaining credits. DFS LAB is using its built-in analysis until API credits are available.')\n                        else:\n                            st.caption('AI connection is temporarily unavailable. DFS LAB is using its built-in analysis for this response.')"""
+          if old3 in s:
+              s=s.replace(old3,new3,1)
 
-              if len(recs)>=2:
-                  a,b=recs[0],recs[1]; ap=float(a['DFS Lab Proj']); bp=float(b['DFS Lab Proj']); gap=abs(ap-bp)
-                  asal=int(a.get('FlexSalary',0)); bsal=int(b.get('FlexSalary',0)); sg=abs(asal-bsal)
-                  return f"**That's a real projection question.** DFS LAB has **{a['Name']} at {ap:.2f}** and **{b['Name']} at {bp:.2f}** — only **{gap:.2f} DK points apart**, with a **${sg:,} salary difference**. I wouldn't just accept that gap. We can challenge either assumption without changing the base model. **Lower {a['Name']}, lower {b['Name']}, adjust both, or investigate first.**"
-              m=re.search(r'(?:scored?|gets?|got|puts? up)\s+(-?\d+(?:\.\d+)?)',q)
-              if recs and m:
-                  actual=float(m.group(1)); nm=str(recs[0]['Name']); expected=float(recs[0]['DFS Lab Proj']); delta=actual-expected
-                  return f"**Scenario test:** {nm} {expected:.2f} → **{actual:.2f}** ({delta:+.2f}). I can keep that as a temporary Agent Scenario and rebuild around it without touching DFS LAB's base projection."
-              if recs:
-                  pr=recs[0]; return f"**{pr['Name']} is at {float(pr['DFS Lab Proj']):.2f}.** Tell me what you dislike about the play, or I can test removing him from this build and compare the salary-feasible alternatives."
-              return "I couldn't resolve the player or request from the current slate. Rephrase it with the player's last name and I’ll evaluate that player against this exact lineup instead of giving you a generic lineup summary."
-          '''
-          local = textwrap.indent(textwrap.dedent(local_src).strip('\n'), '                ')
-          s, n2 = re.subn(
-              r'                def local_agent_answer\(qtext, packet\):.*?(?=\n                def build_question_evidence\(qtext, packet\):)',
-              lambda _m: local,
-              s,
-              count=1,
-              flags=re.S,
-          )
-          if n2 != 1:
-              raise SystemExit(f'local_agent_answer patch matched {n2} times')
+          footer='st.caption("DFS LAB · Build the story. Test the lineup. Challenge the field.")'
+          css="""st.markdown(r'''<style>\n/* Agent readability + follow-up UX */\n[data-testid=\"stExpanderDetails\"]{background:#f7f9fc!important;color:#172235!important;}\n[data-testid=\"stExpanderDetails\"] p,[data-testid=\"stExpanderDetails\"] li,[data-testid=\"stExpanderDetails\"] span{color:#172235!important;-webkit-text-fill-color:#172235!important;}\n[data-testid=\"stExpanderDetails\"] hr{border-color:#c7d2df!important;}\n</style>''',unsafe_allow_html=True)\n\n"""+footer
+          if footer in s and 'Agent readability + follow-up UX' not in s:
+              s=s.replace(footer,css,1)
 
-          old = "On every message: infer what the user actually means even with typos, fragments, shorthand or follow-ups; resolve all players and conversation references; use DFS LAB CALCULATOR EVIDENCE for math; answer the exact question first; question DFS LAB's own projections when warranted; and never invent projections, salaries, lineup ranks, ownership, injuries, news, simulations or optimizer results."
-          new = old + " If the user expresses dislike, distrust, avoidance or a fade preference for a player, treat that as a request to evaluate replacing/fading that player in the active lineup: answer that preference directly, identify what the lineup is giving up, and discuss supported alternatives. Do not respond with a generic explanation of why the existing lineup was selected."
-          if old in s and new not in s:
-              s = s.replace(old, new, 1)
-
-          s = s.replace(
-              "st.caption('DFS LAB Agent is temporarily using the local evidence engine.')",
-              "st.caption(f\"DFS LAB Agent API fallback is active. Error: {st.session_state.get('dfs_agent_error','unknown')}\")",
-              1,
-          )
           p.write_text(s)
           PY
 
@@ -137,5 +66,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add streamlit_app.py
-          git commit -m "Fix DFS Lab agent preference handling"
+          git commit -m "Fix DFS Lab chat follow-up and readability"
           git push
