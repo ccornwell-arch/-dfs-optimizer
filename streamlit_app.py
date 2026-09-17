@@ -5,6 +5,7 @@ import io
 import os
 import json
 import re
+import difflib
 from collections import defaultdict
 
 import numpy as np
@@ -2598,16 +2599,26 @@ else:
                     return None if z.empty else z.iloc[0]
 
                 def _mentioned_players(qtext):
-                    q=qtext.lower(); hits=[]
-                    for nm in build_df['Name'].dropna().astype(str).unique():
+                    q=str(qtext or '').lower(); hits=[]
+                    names_all=[str(x) for x in build_df['Name'].dropna().astype(str).unique()]
+                    for nm in names_all:
                         last=nm.split()[-1].lower()
-                        if nm.lower() in q or (len(last)>2 and re.search(r'\\b'+re.escape(last)+r'\\b',q)):
+                        if nm.lower() in q or (len(last)>2 and re.search(r'\b'+re.escape(last)+r'\b',q)):
                             hits.append(nm)
+                    if not hits:
+                        words=[w for w in re.findall(r"[a-zA-Z][a-zA-Z'\-]+",q) if len(w)>=4]
+                        last_map={nm.split()[-1].lower():nm for nm in names_all}
+                        full_map={nm.lower():nm for nm in names_all}
+                        for w in words:
+                            m=difflib.get_close_matches(w,list(last_map.keys()),n=1,cutoff=.82)
+                            if m and last_map[m[0]] not in hits: hits.append(last_map[m[0]])
+                        if not hits:
+                            m=difflib.get_close_matches(q,list(full_map.keys()),n=1,cutoff=.72)
+                            if m: hits.append(full_map[m[0]])
                     if not hits and any(x in q for x in ['he ','him ','his ','one ','them ','those ']):
                         hits=st.session_state.get('agent_last_players',[])
                     if hits: st.session_state['agent_last_players']=hits[:4]
                     return hits[:4]
-
                 def build_agent_packet():
                     pool_cols=[c for c in ['ID','Name','Position','Team','DFS Lab Proj','FlexSalary','CPTSalary','DFS Base','Model Proj','Script Proj','Proj Change %'] if c in build_df.columns]
                     pool=build_df[pool_cols].copy().sort_values('DFS Lab Proj',ascending=False).head(60)
@@ -2626,25 +2637,40 @@ else:
                         'player_pool':pool.to_dict(orient='records')}
 
                 def local_agent_answer(qtext, packet):
-                    q=qtext.lower().strip(); names=_mentioned_players(qtext)
+                    q=str(qtext or '').lower().strip(); names=_mentioned_players(qtext)
                     recs=[]
                     for nm in names:
                         pr=_player_record(nm)
                         if pr is not None: recs.append(pr)
-                    # Comparison tool: two named players means compare, not generic first-player response.
+
+                    negative=any(x in q for x in ["don't like","dont like","do not like","hate ","not sold","don't want","dont want","get rid","remove ","fade ","off of "])
+                    if recs and negative:
+                        pr=recs[0]; nm=str(pr['Name']); proj=float(pr.get('DFS Lab Proj',0))
+                        rr=next((x for x in detail_rows if str(x.get('Player','')).lower()==nm.lower()),None)
+                        if rr:
+                            slot=str(rr.get('Slot','FLEX')).upper(); lineup_salary=int(packet['active_lineup']['salary'])
+                            old_cost=int(pr.get('CaptainSalary',pr.get('CPTSalary',0))) if slot=='CPT' else int(pr.get('FlexSalary',0))
+                            max_cost=50000-(lineup_salary-old_cost)
+                            used={str(x.get('Player','')) for x in detail_rows}
+                            sal_col='CaptainSalary' if slot=='CPT' and 'CaptainSalary' in build_df.columns else ('CPTSalary' if slot=='CPT' and 'CPTSalary' in build_df.columns else 'FlexSalary')
+                            alts=build_df[(~build_df['Name'].astype(str).isin(used)) & (pd.to_numeric(build_df[sal_col],errors='coerce').fillna(999999)<=max_cost)].copy()
+                            alts=alts.sort_values('DFS Lab Proj',ascending=False).head(4)
+                            cand=', '.join([f"{r['Name']} ({float(r['DFS Lab Proj']):.2f}, ${int(r[sal_col]):,})" for _,r in alts.iterrows()])
+                            extra=(f" Salary-feasible one-for-one candidates are: **{cand}**." if cand else " I don't see a clean one-for-one salary-feasible alternative in the current pool.")
+                            return f"**Then I would challenge {nm} in this lineup, not defend the pick.** He's in the **{slot}** slot at **{proj:.2f} projected DK points**. Your preference is a reason to test a version without him.{extra} Those are candidates, not a claim that the current lineup stays valid — a fresh rebuild is needed to verify construction/correlation and find the best replacement."
+                        return f"**Then I would treat {nm} as a fade for the next build.** DFS LAB has him at **{proj:.2f}**, but he isn't in the active six-player lineup I'm evaluating right now."
+
                     if len(recs)>=2:
                         a,b=recs[0],recs[1]; ap=float(a['DFS Lab Proj']); bp=float(b['DFS Lab Proj']); gap=abs(ap-bp)
                         asal=int(a.get('FlexSalary',0)); bsal=int(b.get('FlexSalary',0)); sg=abs(asal-bsal)
                         return f"**That's a real projection question.** DFS LAB has **{a['Name']} at {ap:.2f}** and **{b['Name']} at {bp:.2f}** — only **{gap:.2f} DK points apart**, with a **${sg:,} salary difference**. I wouldn't just accept that gap. We can challenge either assumption without changing the base model. **Lower {a['Name']}, lower {b['Name']}, adjust both, or investigate first.**"
-                    # Numerical outcome what-if.
-                    m=re.search(r'(?:scored?|gets?|got|puts? up)\\s+(-?\\d+(?:\\.\\d+)?)',q)
+                    m=re.search(r'(?:scored?|gets?|got|puts? up)\s+(-?\d+(?:\.\d+)?)',q)
                     if recs and m:
                         actual=float(m.group(1)); nm=str(recs[0]['Name']); expected=float(recs[0]['DFS Lab Proj']); delta=actual-expected
                         return f"**Scenario test:** {nm} {expected:.2f} → **{actual:.2f}** ({delta:+.2f}). I can keep that as a temporary Agent Scenario and rebuild around it without touching DFS LAB's base projection."
                     if recs:
-                        pr=recs[0]; return f"**{pr['Name']} is at {float(pr['DFS Lab Proj']):.2f}.** I can explain why, compare him with another player, or create a temporary projection scenario. Try **‘set {pr['Name'].split()[-1]} to 9’** and I'll stage the change for you."
-                    return "I'm looking at the active six-player build, its Game World and the player pool. Ask me to compare players, challenge a projection, test a score, or change an assumption. Projection changes stay temporary until you choose to apply them."
-
+                        pr=recs[0]; return f"**{pr['Name']} is at {float(pr['DFS Lab Proj']):.2f}.** Tell me what you dislike about the play, or I can test removing him from this build and compare the salary-feasible alternatives."
+                    return "I couldn't resolve the player or request from the current slate. Rephrase it with the player's last name and I’ll evaluate that player against this exact lineup instead of giving you a generic lineup summary."
                 def build_question_evidence(qtext, packet):
                     """Deterministic calculator layer. The model reasons; DFS LAB supplies the math."""
                     names=_mentioned_players(qtext)
@@ -2722,7 +2748,7 @@ else:
                         calc=build_question_evidence(qtext,packet)
                         instructions="""You are DFS LAB Agent, a sharp NFL DraftKings Showdown analyst embedded inside an optimizer. You are not a generic chatbot and you are not here to defend the optimizer.
 
-On every message: infer what the user actually means even with typos, fragments, shorthand or follow-ups; resolve all players and conversation references; use DFS LAB CALCULATOR EVIDENCE for math; answer the exact question first; question DFS LAB's own projections when warranted; and never invent projections, salaries, lineup ranks, ownership, injuries, news, simulations or optimizer results.
+On every message: infer what the user actually means even with typos, fragments, shorthand or follow-ups; resolve all players and conversation references; use DFS LAB CALCULATOR EVIDENCE for math; answer the exact question first; question DFS LAB's own projections when warranted; and never invent projections, salaries, lineup ranks, ownership, injuries, news, simulations or optimizer results. If the user expresses dislike, distrust, avoidance or a fade preference for a player, treat that as a request to evaluate replacing/fading that player in the active lineup: answer that preference directly, identify what the lineup is giving up, and discuss supported alternatives. Do not respond with a generic explanation of why the existing lineup was selected.
 
 If the user gives a hypothetical score, analyze that exact score. If the calculator re-scores the existing portfolio, clearly call it a re-score, not a fresh optimization. Never say a lineup is still optimal unless a fresh optimizer run proves it. For comparisons, discuss both players, the projection gap, salary/value context, and what it means to this six-player build. If a user challenges a projection, you may recommend a reversible Agent Scenario. Actual changes to projections, locks, exclusions, exposures, Game Worlds or lineup generation require confirmation.
 
@@ -2792,7 +2818,7 @@ Be conversational, concise, and useful. Sound like a strong DFS partner sitting 
                         with st.expander(f"Earlier conversation · {len(older)}",expanded=False):
                             for uq,ar in reversed(older[-8:]): st.markdown(f"**You:** {uq}"); st.markdown(ar); st.divider()
                 if st.session_state.get('dfs_agent_error'):
-                    with st.expander('Agent status',expanded=False): st.caption('DFS LAB Agent is temporarily using the local evidence engine.')
+                    with st.expander('Agent status',expanded=False): st.caption(f"DFS LAB Agent API fallback is active. Error: {st.session_state.get('dfs_agent_error','unknown')}")
                 st.write(f"DFS Lab selected **{lr['Captain']} at Captain** while preserving the {lr['Construction']} game construction because this combination ranked strongly under the current projection, correlation, salary and contest-risk settings. {lr.get('Strategy Notes','')}")
                 if float(lr.get('Scenario Delta',0))!=0: st.write(f"Your game thesis moved this lineup by **{float(lr['Scenario Delta']):+.2f} projected DK points** versus the unadjusted baseline.")
                 st.markdown("##### Challenge this lineup")
