@@ -2581,7 +2581,7 @@ else:
                     pr=build_df[build_df['Name'].astype(str).eq(nm)]
                     if pr.empty: continue
                     pr=pr.iloc[0]; role="Captain / ceiling engine" if j==0 else ("Primary projection piece" if float(pr.get('DFS Lab Proj',0))>=12 else "Salary relief / secondary path")
-                    detail_rows.append({"Slot":"CPT" if j==0 else f"FLEX {j}","Player":nm,"Pos":pr.get('Position',''),"Team":pr.get('Team',''),"DFS Lab":round(float(pr.get('DFS Lab Proj',0)),2),"Salary":int(pr.get('FlexSalary',0)) if j else int(pr.get('CPTSalary',0)),"Purpose":role})
+                    detail_rows.append({"Slot":"CPT" if j==0 else f"FLEX {j}","Player":nm,"Pos":pr.get('Position',''),"Team":pr.get('Team',''),"DFS Lab":round(float(pr.get('DFS Lab Proj',0)),2),"Salary":int(pr.get('FlexSalary',0)) if j else int(pr.get('CaptainSalary',pr.get('CPTSalary',0))),"Purpose":role})
                 if detail_rows:
                     st.dataframe(pd.DataFrame(detail_rows),hide_index=True,use_container_width=True,column_config={"Player":st.column_config.TextColumn("Player",pinned=True),"Salary":st.column_config.NumberColumn("Salary",format="$%d")})
                     low=min(detail_rows,key=lambda x:x["DFS Lab"])
@@ -2645,16 +2645,95 @@ else:
                         pr=recs[0]; return f"**{pr['Name']} is at {float(pr['DFS Lab Proj']):.2f}.** I can explain why, compare him with another player, or create a temporary projection scenario. Try **‘set {pr['Name'].split()[-1]} to 9’** and I'll stage the change for you."
                     return "I'm looking at the active six-player build, its Game World and the player pool. Ask me to compare players, challenge a projection, test a score, or change an assumption. Projection changes stay temporary until you choose to apply them."
 
+                def build_question_evidence(qtext, packet):
+                    """Deterministic calculator layer. The model reasons; DFS LAB supplies the math."""
+                    names=_mentioned_players(qtext)
+                    evidence={"mentioned_players":[],"comparison":None,"what_if":None,"active_lineup_test":None}
+                    for nm in names:
+                        pr=_player_record(nm)
+                        if pr is None: continue
+                        rr=next((x for x in detail_rows if str(x.get('Player','')).lower()==str(nm).lower()),None)
+                        evidence["mentioned_players"].append({
+                            "name":nm,
+                            "projection":round(float(pr.get('DFS Lab Proj',0)),2),
+                            "flex_salary":int(pr.get('FlexSalary',0)),
+                            "captain_salary":int(pr.get('CaptainSalary',pr.get('CPTSalary',0))),
+                            "position":str(pr.get('Position','')),
+                            "team":str(pr.get('Team','')),
+                            "in_active_lineup":bool(rr),
+                            "slot":rr.get('Slot') if rr else None,
+                            "purpose":rr.get('Purpose') if rr else None,
+                        })
+                    if len(evidence["mentioned_players"])>=2:
+                        a,b=evidence["mentioned_players"][:2]
+                        evidence["comparison"]={
+                            "players":[a['name'],b['name']],
+                            "projection_gap":round(abs(a['projection']-b['projection']),2),
+                            "salary_gap":abs(a['flex_salary']-b['flex_salary']),
+                            "better_points_per_dollar": (a['name'] if (a['projection']/max(a['flex_salary'],1))>(b['projection']/max(b['flex_salary'],1)) else b['name'])
+                        }
+                    num=None
+                    pats=[r'(?:score|scores|scored|gets?|got|puts? up|project(?:ed)?(?: for)?|at|to)\s*(?:about\s*)?(-?\d+(?:\.\d+)?)',r'(-?\d+(?:\.\d+)?)\s*(?:dk\s*)?points?']
+                    for pat in pats:
+                        m=re.search(pat,qtext,re.I)
+                        if m:
+                            try: num=float(m.group(1)); break
+                            except Exception: pass
+                    if num is not None and evidence["mentioned_players"]:
+                        target=evidence["mentioned_players"][0]
+                        current=float(target['projection']); delta=float(num-current)
+                        evidence["what_if"]={"player":target['name'],"current_projection":current,"assumed_projection":num,"projection_delta":round(delta,2)}
+                        if target['in_active_lineup']:
+                            mult=1.5 if str(target.get('slot','')).upper()=='CPT' else 1.0
+                            revised=float(packet['active_lineup']['projection']) + delta*mult
+                            rescored=[]
+                            for _,r in result.iterrows():
+                                names_in=[str(r.get('Captain',''))]+[str(r.get('FLEX'+str(i),'')) for i in range(1,6)]
+                                adj=float(r.get('Projection',0))
+                                if target['name'] in names_in:
+                                    adj += delta*(1.5 if str(r.get('Captain',''))==target['name'] else 1.0)
+                                rescored.append((adj,int(r.get('Rank',0)),str(r.get('Captain','')),names_in))
+                            rescored.sort(key=lambda x:x[0],reverse=True)
+                            active_players=[str(x.get('Player','')) for x in packet['active_lineup']['players']]
+                            active_key=set(active_players)
+                            new_rank=None
+                            for ix,x in enumerate(rescored,1):
+                                if set(x[3])==active_key and x[2]==packet['active_lineup']['captain']:
+                                    new_rank=ix; break
+                            better=sum(1 for x in rescored if x[0]>revised+1e-9)
+                            evidence["active_lineup_test"]={
+                                "original_lineup_projection":round(float(packet['active_lineup']['projection']),2),
+                                "revised_lineup_projection":round(revised,2),
+                                "lineup_projection_change":round(delta*mult,2),
+                                "existing_generated_lineups_now_above_it":int(better),
+                                "counterfactual_rank_within_existing_portfolio":new_rank,
+                                "portfolio_size":len(rescored),
+                                "note":"This re-scores the already-generated portfolio; it is not a fresh optimizer run."
+                            }
+                    return evidence
+
                 def run_ai_agent(qtext, packet, history):
                     try:
                         from openai import OpenAI
                         try: api_key=st.secrets.get('OPENAI_API_KEY',None)
                         except Exception: api_key=os.getenv('OPENAI_API_KEY')
                         if not api_key: return None
-                        hist='\\n'.join([f"USER: {x[0]}\\nDFS LAB: {x[1]}" for x in history[-8:]])
-                        instructions="""You are DFS LAB Agent, an NFL DraftKings Showdown analyst AND scenario operator. First infer intent and identify every player/entity in the question; never latch onto only the first player when the user is comparing two. Use only supplied evidence for numbers. You may question DFS LAB's own projection rather than defend it. Distinguish evidence from football inference. If the user doubts a projection, explain the gap and offer a reversible Agent Scenario: lower player A, lower player B, adjust both, or investigate first. If the user proposes a new projection, explain the effect and say it can be staged as an Agent Scenario; never claim it was applied unless the UI actually applies it. Understand pronouns/follow-ups from conversation. Analyze freely, but changes to projections, locks, exclusions, exposures, worlds or generated lineups require user confirmation. Never invent injuries, news, ownership or simulation results."""
-                        prompt=f"{instructions}\\nRECENT CONVERSATION:\\n{hist}\\nCURRENT EVIDENCE:\\n{json.dumps(packet,default=str)}\\nUSER:\\n{qtext}"
-                        resp=OpenAI(api_key=api_key).responses.create(model='gpt-5.6-luna',input=prompt,max_output_tokens=1000)
+                        hist='\n'.join([f"USER: {x[0]}\nDFS LAB: {x[1]}" for x in history[-10:]])
+                        calc=build_question_evidence(qtext,packet)
+                        instructions="""You are DFS LAB Agent, a sharp NFL DraftKings Showdown analyst embedded inside an optimizer. You are not a generic chatbot and you are not here to defend the optimizer.
+
+On every message: infer what the user actually means even with typos, fragments, shorthand or follow-ups; resolve all players and conversation references; use DFS LAB CALCULATOR EVIDENCE for math; answer the exact question first; question DFS LAB's own projections when warranted; and never invent projections, salaries, lineup ranks, ownership, injuries, news, simulations or optimizer results.
+
+If the user gives a hypothetical score, analyze that exact score. If the calculator re-scores the existing portfolio, clearly call it a re-score, not a fresh optimization. Never say a lineup is still optimal unless a fresh optimizer run proves it. For comparisons, discuss both players, the projection gap, salary/value context, and what it means to this six-player build. If a user challenges a projection, you may recommend a reversible Agent Scenario. Actual changes to projections, locks, exclusions, exposures, Game Worlds or lineup generation require confirmation.
+
+Be conversational, concise, and useful. Sound like a strong DFS partner sitting next to the user. Avoid canned filler such as 'I can inspect...' when evidence already answers the question. If evidence is insufficient, say exactly what is missing and give the best supported observation."""
+                        prompt=f"{instructions}\n\nRECENT CONVERSATION:\n{hist}\n\nCURRENT DFS LAB STATE:\n{json.dumps(packet,default=str)}\n\nDFS LAB CALCULATOR EVIDENCE FOR THIS QUESTION:\n{json.dumps(calc,default=str)}\n\nUSER MESSAGE:\n{qtext}"
+                        resp=OpenAI(api_key=api_key).responses.create(
+                            model='gpt-5.6-sol',
+                            reasoning={"effort":"medium"},
+                            input=prompt,
+                            max_output_tokens=1400
+                        )
                         return resp.output_text
                     except Exception as e:
                         st.session_state['dfs_agent_error']=str(e); return None
