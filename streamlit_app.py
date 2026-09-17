@@ -1989,11 +1989,40 @@ st.markdown("""<style>
 [data-testid="stSidebarCollapseButton"] button{background:#1d1d1f!important;color:white!important;border-radius:999px!important;min-width:42px!important;min-height:42px!important;box-shadow:0 4px 16px rgba(0,0,0,.18)!important;}
 [data-testid="stSidebarCollapseButton"] svg{fill:white!important;color:white!important;}
 </style>""",unsafe_allow_html=True)
-st.markdown('''<div class="apple-hero"><div class="apple-eyebrow">DFS LAB</div><div class="apple-title">DFS LAB</div><div class="apple-sub">Build lineups around how you think the game will happen.</div><span class="pill">V6.3.1 • Lineup Explorer</span></div>''',unsafe_allow_html=True)
+st.markdown(r"""
+<style>
+/* DFS LAB V6.3.2 — product design system */
+:root{--lab-bg:#e9edf3;--lab-canvas:#f2f4f7;--lab-panel:#ffffff;--lab-sidebar:#e3e8ef;--lab-ink:#101828;--lab-muted:#667085;--lab-line:#d6dce5;--lab-blue:#1267d6;--lab-blue2:#2f7eea;}
+[data-testid="stAppViewContainer"]{background:linear-gradient(135deg,#e6ebf2 0%,#f4f6f9 46%,#e9eef5 100%)!important;color:var(--lab-ink)!important;}
+[data-testid="stHeader"]{background:rgba(242,244,247,.82)!important;backdrop-filter:blur(18px)!important;border-bottom:1px solid rgba(16,24,40,.06)!important;}
+.block-container{max-width:1500px!important;padding-top:1.25rem!important;}
+section[data-testid="stSidebar"]{background:linear-gradient(180deg,#e0e6ee,#edf0f5)!important;border-right:1px solid #cbd3df!important;box-shadow:10px 0 32px rgba(25,39,62,.08)!important;}
+section[data-testid="stSidebar"] *{color:var(--lab-ink)!important;-webkit-text-fill-color:initial!important;}
+section[data-testid="stSidebar"] [data-baseweb="select"]>div,section[data-testid="stSidebar"] input{background:rgba(255,255,255,.82)!important;border:1px solid #cbd3df!important;box-shadow:none!important;}
+.apple-hero{background:linear-gradient(120deg,#111b2d 0%,#182944 62%,#173760 100%)!important;border:1px solid rgba(255,255,255,.08)!important;box-shadow:0 20px 50px rgba(26,45,75,.16)!important;border-radius:24px!important;padding:28px 32px!important;}
+.apple-hero .apple-eyebrow{color:#79b8ff!important}.apple-hero .apple-title{color:#fff!important;font-size:2.55rem!important}.apple-hero .apple-sub{color:#c9d4e3!important}.apple-hero .pill{background:rgba(58,139,253,.16)!important;color:#9ac8ff!important;border:1px solid rgba(121,184,255,.22)!important;}
+[data-testid="stMetric"]{background:rgba(255,255,255,.88)!important;border:1px solid var(--lab-line)!important;border-radius:16px!important;box-shadow:0 8px 24px rgba(31,50,81,.06)!important;}
+[data-testid="stDataFrame"]{background:#fff!important;border:1px solid var(--lab-line)!important;border-radius:16px!important;box-shadow:0 8px 26px rgba(31,50,81,.05)!important;}
+[data-testid="stTabs"]{background:transparent!important;}
+button[data-baseweb="tab"]{padding-top:.7rem!important;padding-bottom:.7rem!important;}
+.stButton>button{border-radius:12px!important;min-height:44px!important;font-weight:750!important;}
+.stButton>button[kind="primary"],[data-testid="stDownloadButton"]>button{background:linear-gradient(90deg,var(--lab-blue),var(--lab-blue2))!important;color:#fff!important;-webkit-text-fill-color:#fff!important;border:0!important;box-shadow:0 8px 20px rgba(18,103,214,.20)!important;}
+.stButton>button[kind="primary"] *,[data-testid="stDownloadButton"]>button *{color:#fff!important;-webkit-text-fill-color:#fff!important;opacity:1!important;}
+/* Make Streamlit's native collapse control look like a product control, not a black orb. */
+[data-testid="stSidebarCollapseButton"] button{background:var(--lab-blue)!important;color:#fff!important;border:1px solid rgba(255,255,255,.5)!important;border-radius:10px!important;min-width:54px!important;min-height:40px!important;box-shadow:0 6px 18px rgba(18,103,214,.22)!important;}
+[data-testid="stSidebarCollapseButton"] svg{fill:#fff!important;color:#fff!important;stroke:#fff!important;}
+[data-testid="stSidebarCollapseButton"] button:hover{background:#0b5fc8!important;}
+.card-title,h1,h2,h3,h4{color:var(--lab-ink)!important}.card-sub,.muted,[data-testid="stCaptionContainer"]{color:var(--lab-muted)!important;}
+.lineup-card{background:#fff!important;border:1px solid var(--lab-line)!important;box-shadow:0 10px 28px rgba(31,50,81,.06)!important;}
+@media(max-width:900px){.apple-hero{padding:22px 24px!important}.apple-hero .apple-title{font-size:2.1rem!important}.block-container{padding-left:1rem!important;padding-right:1rem!important;}}
+</style>
+""",unsafe_allow_html=True)
+
+st.markdown('''<div class="apple-hero"><div class="apple-eyebrow">DFS LAB</div><div class="apple-title">DFS LAB</div><div class="apple-sub">Build lineups around how you think the game will happen.</div><span class="pill">V6.3.2 • Design System</span></div>''',unsafe_allow_html=True)
 
 with st.sidebar:
-    st.markdown("### DFS LAB Controls  ‹")
-    st.caption("Use the ‹ control at the top edge to hide this panel. When hidden, use › to bring it back.")
+    st.markdown("### DFS LAB Controls")
+    st.caption("Use the blue Hide control at the top edge to collapse this panel. It stays available as Controls when collapsed.")
     st.markdown("### Contest")
     mode=st.segmented_control("Mode",["Classic","Showdown"],default="Showdown")
     preset=st.selectbox("Contest preset",["Large GPP","Small-field GPP","Single Entry","Winner Take All","Cash-ish"])
@@ -2023,7 +2052,7 @@ if ss_file is not None:
 elif st.session_state.get("dfs_lab_ss_bytes"):
     ss_file=io.BytesIO(st.session_state["dfs_lab_ss_bytes"]); ss_file.name=st.session_state.get("dfs_lab_ss_name","SaberSim.csv")
 
-if not dk_file:
+if dk_file is None:
     st.info("Upload the DraftKings slate to open DFS LAB.")
     st.stop()
 if mode=="Classic" and not ss_file:
@@ -2166,7 +2195,7 @@ else:
             d,e=st.columns(2)
             with d:max_k=st.selectbox("Max kickers",[0,1,2],index=2)
             with e:max_dst=st.selectbox("Max defenses",[0,1,2],index=1)
-            build_btn=st.button("Generate Showdown lineups",type="primary",use_container_width=True,key="v4_sd_build")
+            build_btn=st.button("Generate 100 Lineups",type="primary",use_container_width=True,key="v4_sd_build")
 
         with tabs[1]:
             st.markdown('<div class="card-title">Player + Captain Exposure</div><div class="card-sub">Overall exposure and Captain exposure are controlled separately.</div>',unsafe_allow_html=True)
@@ -2556,4 +2585,4 @@ else:
     except Exception as e:
         st.error(f"Showdown build error: {e}")
 
-st.caption("DFS LAB • V6.3.1 • Game Worlds • Lineup Explorer • Contest Intelligence")
+st.caption("DFS LAB • V6.3.2 • Design System • Game Worlds • Lineup Explorer")
