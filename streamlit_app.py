@@ -1117,6 +1117,93 @@ def showdown_aggression(field_size, payout_style, entry_format="Single Entry"):
     return float(np.clip(aggr + 0.08 + entry_bump, 0.05, 1.0))
 
 
+
+
+# --- V6.3 Game Worlds -------------------------------------------------------
+GAME_WORLDS = {
+    "Balanced shootout": {"family":"shootout", "desc":"Both offenses succeed; scoring is spread across primary pieces."},
+    "BUF passing ceiling": {"family":"pass_ceiling", "team":"BUF", "desc":"Buffalo scoring concentrates through its quarterback and pass catchers."},
+    "DET passing ceiling": {"family":"pass_ceiling", "team":"DET", "desc":"Detroit scoring concentrates through its quarterback and pass catchers."},
+    "Allen rushing ceiling": {"family":"qb_rush", "team":"BUF", "player":"Josh Allen", "desc":"Josh Allen captures an outsized share of Buffalo touchdowns with rushing production."},
+    "DET RB-led win": {"family":"rb_control", "team":"DET", "desc":"Detroit controls enough of the game for its running backs and control pieces to matter."},
+    "BUF RB-led win": {"family":"rb_control", "team":"BUF", "desc":"Buffalo controls enough of the game for its running backs and control pieces to matter."},
+    "BUF leads / DET comeback": {"family":"comeback", "lead":"BUF", "trail":"DET", "desc":"Buffalo scores first and Detroit answers with elevated second-half passing volume."},
+    "DET leads / BUF comeback": {"family":"comeback", "lead":"DET", "trail":"BUF", "desc":"Detroit scores first and Buffalo answers with elevated passing volume."},
+    "Low-scoring upset path": {"family":"low", "desc":"Scoring disappoints; kickers, defenses and concentrated touchdown paths gain importance."},
+}
+
+def contest_world_weights(entry_format, field_size, script="Neutral"):
+    # Probabilities are portfolio exploration weights, not claims about real-world game odds.
+    if entry_format == "Single Entry":
+        w={"Balanced shootout":36,"BUF passing ceiling":15,"DET passing ceiling":15,"Allen rushing ceiling":8,"DET RB-led win":7,"BUF RB-led win":7,"BUF leads / DET comeback":5,"DET leads / BUF comeback":5,"Low-scoring upset path":2}
+    elif entry_format == "3-Max":
+        w={"Balanced shootout":27,"BUF passing ceiling":16,"DET passing ceiling":16,"Allen rushing ceiling":10,"DET RB-led win":8,"BUF RB-led win":8,"BUF leads / DET comeback":6,"DET leads / BUF comeback":6,"Low-scoring upset path":3}
+    elif entry_format == "20-Max":
+        w={"Balanced shootout":20,"BUF passing ceiling":16,"DET passing ceiling":16,"Allen rushing ceiling":11,"DET RB-led win":9,"BUF RB-led win":9,"BUF leads / DET comeback":8,"DET leads / BUF comeback":8,"Low-scoring upset path":3}
+    else:
+        w={"Balanced shootout":13,"BUF passing ceiling":15,"DET passing ceiling":15,"Allen rushing ceiling":12,"DET RB-led win":10,"BUF RB-led win":10,"BUF leads / DET comeback":10,"DET leads / BUF comeback":10,"Low-scoring upset path":5}
+    if script in ["Shootout","Pass-heavy shootout"]:
+        for k in ["Balanced shootout","BUF passing ceiling","DET passing ceiling","BUF leads / DET comeback","DET leads / BUF comeback"]: w[k]*=1.35
+        w["Low-scoring upset path"]*=0.35
+    elif script in ["Low-scoring game","Defensive / field-goal battle","Ground-and-pound"]:
+        w["Low-scoring upset path"]*=3.0; w["DET RB-led win"]*=1.35; w["BUF RB-led win"]*=1.35; w["Balanced shootout"]*=0.45
+    # Very large fields explore tails a little more.
+    if field_size >= 50000 and entry_format == "150-Max":
+        w["Balanced shootout"]*=0.8; w["Low-scoring upset path"]*=1.35; w["Allen rushing ceiling"]*=1.15
+    return w
+
+def choose_game_world(rng, entry_format, field_size, script):
+    weights=contest_world_weights(entry_format, field_size, script)
+    names=list(weights); probs=np.array([weights[n] for n in names],dtype=float); probs/=probs.sum()
+    return rng.choice(names,p=probs)
+
+def game_world_bonus(row, world_name, influence=50):
+    cfg=GAME_WORLDS.get(world_name,{}); fam=cfg.get("family"); scale=float(np.clip(influence,0,100))/100.0
+    team=row["Team"]; b=0.0
+    if fam=="shootout":
+        if row["is_QB"]: b+=2.0
+        if row["is_passcatcher"]: b+=1.5
+        if row["is_DST"]: b-=1.2
+    elif fam=="pass_ceiling":
+        same=team==cfg.get("team")
+        if same and row["is_QB"]: b+=3.2
+        if same and row["is_passcatcher"]: b+=2.4
+        if same and row["is_RB"]: b-=0.5
+        if not same and (row["is_QB"] or row["is_passcatcher"]): b+=0.8
+    elif fam=="qb_rush":
+        if str(row["Name"])==cfg.get("player"): b+=4.2
+        elif team==cfg.get("team") and row["is_passcatcher"]: b+=0.7
+        elif team==cfg.get("team") and row["is_RB"]: b-=0.8
+    elif fam=="rb_control":
+        same=team==cfg.get("team")
+        if same and row["is_RB"]: b+=3.0
+        if same and (row["is_DST"] or row["is_K"]): b+=1.6
+        if same and row["is_passcatcher"]: b-=0.5
+        if not same and (row["is_QB"] or row["is_passcatcher"]): b+=0.8
+    elif fam=="comeback":
+        if team==cfg.get("trail") and row["is_QB"]: b+=2.5
+        if team==cfg.get("trail") and row["is_passcatcher"]: b+=2.0
+        if team==cfg.get("lead") and row["is_RB"]: b+=1.8
+        if team==cfg.get("lead") and row["is_K"]: b+=0.7
+    elif fam=="low":
+        if row["is_DST"]: b+=2.8
+        if row["is_K"]: b+=2.2
+        if row["is_RB"]: b+=1.0
+        if row["is_QB"] or row["is_passcatcher"]: b-=1.0
+    return b*(0.45+0.85*scale)
+
+def world_construction_weights(base_weights, world_name, entry_format):
+    allowed={k:float(base_weights.get(k,0))>0 for k in ["3-3","4-2","5-1"]}
+    fam=GAME_WORLDS.get(world_name,{}).get("family")
+    if fam in ["shootout","comeback"]: desired={"3-3":58,"4-2":38,"5-1":4}
+    elif fam in ["pass_ceiling","qb_rush"]: desired={"3-3":42,"4-2":50,"5-1":8}
+    elif fam=="rb_control": desired={"3-3":30,"4-2":55,"5-1":15}
+    else: desired={"3-3":34,"4-2":50,"5-1":16}
+    if entry_format=="Single Entry": desired["5-1"]*=0.35; desired["3-3"]*=1.18
+    elif entry_format=="150-Max": desired["5-1"]*=1.35
+    return {k:(desired[k] if allowed[k] else 0.0) for k in desired}
+
+
 def showdown_script_bonus(row, script, script_team):
     team = row["Team"]
     opp = row["Opponent"]
@@ -1348,7 +1435,7 @@ def apply_context_engine(df, context_map=None, strength="Standard"):
     out["Context Why"]=reasons
     return out
 
-def showdown_base_objective(df, aggr, strategy_map, script, script_team, exposure_state=None, cpt_exposure_state=None, built_count=0):
+def showdown_base_objective(df, aggr, strategy_map, script, script_team, exposure_state=None, cpt_exposure_state=None, built_count=0, game_world=None, world_influence=50):
     proj_col = "DFS Lab Proj" if "DFS Lab Proj" in df.columns else ("Script Proj" if "Script Proj" in df.columns else "My Proj")
     proj = df[proj_col].to_numpy(float)
     own = np.clip(df["My Own"].to_numpy(float), 0.1, None)
@@ -1372,6 +1459,7 @@ def showdown_base_objective(df, aggr, strategy_map, script, script_team, exposur
         strat = strategy_map.get(str(r["ID"]), {})
         objective[i] += PRIORITY_BONUS.get(strat.get("Priority", "Neutral"), 0.0)
         objective[i] += showdown_script_bonus(r, script, script_team)
+        if game_world: objective[i] += game_world_bonus(r, game_world, world_influence)
         if exposure_state is not None and built_count > 0:
             current = 100.0 * exposure_state.get(str(r["ID"]), 0) / built_count
             mn = float(strat.get("Min Exposure", 0)); mx = float(strat.get("Max Exposure", 100))
@@ -1389,12 +1477,12 @@ def solve_showdown_one(
     script, script_team, cpt_qb_passcatchers, wrte_cpt_qb_pair_pct, rb_cpt_dst_k_pct,
     max_k, max_dst, min_unique, previous_lineups,
     exposure_state=None, cpt_exposure_state=None, built_count=0, noise_scale=0.18,
-    relationship_rules=None, forced_overall_ids=None, forced_cpt_ids=None
+    relationship_rules=None, forced_overall_ids=None, forced_cpt_ids=None, game_world=None, world_influence=50
 ):
     n = len(df); s = len(SHOWDOWN_SLOTS); total_vars = n*s
     c = np.zeros(total_vars); lb = np.zeros(total_vars); ub = np.ones(total_vars); integrality = np.ones(total_vars)
     active = df["ActiveForBuild"].to_numpy(bool)
-    base = showdown_base_objective(df, aggr, strategy_map, script, script_team, exposure_state, cpt_exposure_state, built_count)
+    base = showdown_base_objective(df, aggr, strategy_map, script, script_team, exposure_state, cpt_exposure_state, built_count, game_world, world_influence)
     noise = np.exp(rng.normal(0, noise_scale, size=n))
 
     def vidx(i,j): return i*s+j
@@ -1584,7 +1672,7 @@ def solve_showdown_one(
     return chosen
 
 
-def showdown_lineup_details(df, chosen, strategy_map, script, script_team):
+def showdown_lineup_details(df, chosen, strategy_map, script, script_team, game_world=None):
     slot_map={slot:i for slot,i in chosen}
     idxs=[i for _,i in chosen]
     cpt_i=slot_map["CPT"]
@@ -1642,7 +1730,7 @@ def showdown_lineup_details(df, chosen, strategy_map, script, script_team):
         "Total Own":round(total_own,1),"CPT Own":round(float(cpt["CPT Own"]),1),
         "Correlation Raw":round(corr,2),"User Fit Raw":round(fit,2),
         "Dup Raw":dup_raw,"Captain":cpt["Name"],"Captain Pos":cpt["Position"],
-        "Construction":construction,"Story":story,"Strategy Notes":"; ".join(notes) if notes else "Game-script build"
+        "Construction":construction,"Story":story,"Game World":game_world or script,"World Thesis":GAME_WORLDS.get(game_world,{}).get("desc", "Game-script build"),"Strategy Notes":"; ".join(notes) if notes else "Game-script build"
     }
 
 
@@ -1696,14 +1784,16 @@ def generate_showdown_lineups(df, field_size, payout_style, count, attempts, min
                               construction_weights, script, script_team, strategy_map,
                               entry_format,
                               cpt_qb_passcatchers, wrte_cpt_qb_pair_pct, rb_cpt_dst_k_pct,
-                              max_k, max_dst, min_unique, seed, relationship_rules=None):
+                              max_k, max_dst, min_unique, seed, relationship_rules=None, world_influence=50):
     aggr=showdown_aggression(field_size,payout_style,entry_format); rng=np.random.default_rng(seed)
     teams=[t for t in df["Team"].dropna().unique().tolist() if t]
     rows=[]; exposure=defaultdict(int); cpt_exp=defaultdict(int); previous=[]; seen=set()
     prog=st.progress(0,text="Building Showdown lineups...")
     for attempt in range(attempts):
         if len(rows)>=count: break
-        target=choose_construction_target(rng,teams,construction_weights,script,script_team)
+        game_world=choose_game_world(rng,entry_format,field_size,script)
+        world_weights=world_construction_weights(construction_weights,game_world,entry_format)
+        target=choose_construction_target(rng,teams,world_weights,script,script_team)
         # Exact minimum-exposure scheduling: only force a minimum when all remaining
         # accepted lineups are needed to reach it. Existing objective steering tries
         # to satisfy the target earlier and avoid a last-lineup pileup.
@@ -1717,7 +1807,7 @@ def generate_showdown_lineups(df, field_size, payout_style, count, attempts, min
         chosen=solve_showdown_one(df,aggr,rng,strategy_map,min_salary,max_salary,target,script,script_team,
                                   cpt_qb_passcatchers,wrte_cpt_qb_pair_pct,rb_cpt_dst_k_pct,max_k,max_dst,
                                   min_unique,previous,exposure,cpt_exp,len(rows),noise_scale=.14+.13*aggr,
-                                  relationship_rules=relationship_rules,forced_overall_ids=forced_overall,forced_cpt_ids=forced_cpt)
+                                  relationship_rules=relationship_rules,forced_overall_ids=forced_overall,forced_cpt_ids=forced_cpt,game_world=game_world,world_influence=world_influence)
         if not chosen: continue
         ids=tuple(sorted(str(df.loc[i,"ID"]) for _,i in chosen))
         cpt_id=str(df.loc[[i for slot,i in chosen if slot=="CPT"][0],"ID"])
@@ -1736,7 +1826,7 @@ def generate_showdown_lineups(df, field_size, payout_style, count, attempts, min
                     if cexp>float(strat.get("CPT Max",100))+3: reject=True; break
         if reject: continue
         seen.add(key)
-        detail=showdown_lineup_details(df,chosen,strategy_map,script,script_team)
+        detail=showdown_lineup_details(df,chosen,strategy_map,script,script_team,game_world)
         row=dict(detail)
         for slot,i in chosen:
             row[slot]=df.loc[i,"Name"]; row[slot+"_ID"]=str(df.loc[i,"ID"])
@@ -2298,7 +2388,7 @@ else:
             preview=preview.sort_values("Change %",key=lambda x:x.abs(),ascending=False).head(14)
             st.dataframe(preview,hide_index=True,use_container_width=True,height=410,column_config={"Player":st.column_config.TextColumn("Player",pinned=True,width=190),"Base":st.column_config.NumberColumn("Base",format="%.2f"),"Scenario":st.column_config.NumberColumn("Scenario",format="%.2f"),"Change %":st.column_config.NumberColumn("Change %",format="%.1f")})
             st.caption("These are bounded scenario tilts applied to the DFS Lab baseline projections. They are not a claim that a final score can precisely predict individual fantasy points.")
-            st.markdown("#### How V6.2 grades Showdown")
+            st.markdown("#### How V6.3 grades Showdown")
             st.caption("Projection 29–34% • Captain quality 18% • correlation 20% • leverage 11–15% • duplication proxy 10–15% • your takes 7%. The exact weights move with contest size/payout.")
             st.caption("The scenario engine changes the projection and construction inputs before the lineup is graded; it does not simply add points to the final grade.")
 
@@ -2323,7 +2413,7 @@ else:
                     for y in range(x+1,len(rb_ids)):
                         active_relationships.append({"enabled":True,"rule":"Never Together","a":{"kind":"Player","id":rb_ids[x]},"b":{"kind":"Player","id":rb_ids[y]}})
         if build_btn:
-            result=generate_showdown_lineups(build_df,field_size,payout_style,lineup_count,max(350,lineup_count*15),min_salary,max_salary,build_weights,effective_script,effective_team,strategy_map,entry_format,eff_qb_pc,eff_wrte_qb,eff_rb_ctrl,max_k,max_dst,min_unique,seed,relationship_rules=active_relationships)
+            result=generate_showdown_lineups(build_df,field_size,payout_style,lineup_count,max(350,lineup_count*15),min_salary,max_salary,build_weights,effective_script,effective_team,strategy_map,entry_format,eff_qb_pc,eff_wrte_qb,eff_rb_ctrl,max_k,max_dst,min_unique,seed,relationship_rules=active_relationships,world_influence=intensity)
             st.session_state["showdown_result_v4"]=result
             if result is None or result.empty:
                 st.error("No legal lineup found. Check minimum salary, locks/outs, Captain eligibility, allowed team builds, and Captain-pairing rules. Try one change at a time; DFS Lab will preserve your player settings.")
@@ -2336,6 +2426,11 @@ else:
             if result is None or result.empty: st.info("Set your build, player takes and script, then generate lineups.")
             else:
                 m1,m2,m3,m4=st.columns(4); m1.metric("A / A+",int(result["Rating"].isin(["A","A+"]).sum())); m2.metric("Top projection",f"{result['Projection'].max():.1f}"); m3.metric("Avg salary left",f"${int(result['Salary Left'].mean()):,}"); m4.metric("Built",len(result))
+                st.markdown("#### Portfolio game worlds")
+                world_counts=result["Game World"].value_counts().rename_axis("World").reset_index(name="Lineups") if "Game World" in result.columns else pd.DataFrame()
+                if not world_counts.empty:
+                    world_counts["Share %"]=(100*world_counts["Lineups"]/len(result)).round(1)
+                    st.dataframe(world_counts,hide_index=True,use_container_width=True,height=min(330,42+35*len(world_counts)))
                 st.markdown("#### Lineup Lab")
                 st.caption("Select a lineup to see why DFS Lab built it for this contest and game thesis. Historical data stays under the hood; this explanation is slate-specific.")
                 lineup_choices=[f"#{int(r['Rank'])} · {r['Captain']} CPT · {r['Construction']} · {r['Projection']:.1f} pts" for _,r in result.iterrows()]
@@ -2343,8 +2438,9 @@ else:
                 li=lineup_choices.index(pick); lr=result.iloc[li]
                 risk = "lower" if entry_format=="Single Entry" else ("moderate" if entry_format in ["3-Max","20-Max"] else "higher")
                 contest_reason=(f"{entry_format} with {int(field_size):,} entries. DFS Lab uses {risk} tolerance for fragile salary-relief plays and weights tournament ceiling/correlation accordingly.")
-                st.markdown(f"**Why this lineup exists**  \n**Contest:** {entry_format} · {int(field_size):,} entries · {payout_style}  \n**Game thesis:** {effective_script} · influence {int(intensity)}%  \n**Construction:** {lr['Construction']} · **Captain:** {lr['Captain']}  \n**Projection:** {lr['Projection']:.2f} · **Salary left:** ${int(lr['Salary Left']):,}")
+                st.markdown(f"**Why this lineup exists**  \n**Contest:** {entry_format} · {int(field_size):,} entries · {payout_style}  \n**Game thesis:** {effective_script} · influence {int(intensity)}%  \n**Game world:** {lr.get('Game World',effective_script)}  \n**Construction:** {lr['Construction']} · **Captain:** {lr['Captain']}  \n**Projection:** {lr['Projection']:.2f} · **Salary left:** ${int(lr['Salary Left']):,}")
                 st.write(contest_reason)
+                st.write(f"**World thesis:** {lr.get('World Thesis','')}")
                 st.write(f"DFS Lab selected **{lr['Captain']} at Captain** while preserving the {lr['Construction']} game construction because this combination ranked strongly under the current projection, correlation, salary and contest-risk settings. {lr.get('Strategy Notes','')}")
                 if float(lr.get('Scenario Delta',0))!=0:
                     st.write(f"Your game thesis moved this lineup by **{float(lr['Scenario Delta']):+.2f} projected DK points** versus the unadjusted baseline.")
@@ -2407,4 +2503,4 @@ else:
     except Exception as e:
         st.error(f"Showdown build error: {e}")
 
-st.caption("V6.2.1 • Projection Engine • Contest Intelligence • Scenario Engine • Lineup Lab")
+st.caption("V6.3 • Projection Engine • Game Worlds • Contest Intelligence • Scenario Engine • Lineup Lab")
