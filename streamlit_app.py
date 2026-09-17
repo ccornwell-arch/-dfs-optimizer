@@ -1,6 +1,7 @@
 
 import csv
 import math
+import io
 from collections import defaultdict
 
 import numpy as np
@@ -9,7 +10,7 @@ import streamlit as st
 from scipy.optimize import Bounds, LinearConstraint, milp
 from scipy.sparse import lil_matrix
 
-st.set_page_config(page_title="DFS Lab V6.1", page_icon="🏈", layout="wide")
+st.set_page_config(page_title="DFS LAB", page_icon="🏈", layout="wide", initial_sidebar_state="expanded")
 
 st.markdown("""
 <style>
@@ -1966,29 +1967,33 @@ st.markdown("""
 st.markdown("""
 <style>
 /* DFS Lab V5 — dark iPad control deck */
-:root{--v5-bg:#080d17;--v5-panel:#101827;--v5-line:rgba(148,163,184,.16);--v5-text:#f3f6fb;--v5-muted:#94a3b8;}
-[data-testid="stAppViewContainer"]{background:radial-gradient(circle at 8% 0%,rgba(47,129,247,.16),transparent 28%),radial-gradient(circle at 92% 8%,rgba(124,58,237,.10),transparent 25%),var(--v5-bg)!important;color:var(--v5-text)!important;}
+:root{--v5-bg:#f5f5f7;--v5-panel:#ffffff;--v5-line:rgba(0,0,0,.10);--v5-text:#1d1d1f;--v5-muted:#6e6e73;}
+[data-testid="stAppViewContainer"]{background:linear-gradient(180deg,#fbfbfd 0%,#f5f5f7 52%,#f2f2f4 100%)!important;color:var(--v5-text)!important;}
 [data-testid="stHeader"]{background:transparent!important}.block-container{max-width:1480px;padding-top:1rem}
-.apple-hero{background:linear-gradient(135deg,rgba(20,30,48,.96),rgba(10,16,28,.94))!important;border:1px solid rgba(96,165,250,.20)!important;box-shadow:0 22px 65px rgba(0,0,0,.30)!important}
+.apple-hero{background:rgba(255,255,255,.88)!important;border:1px solid rgba(0,0,0,.08)!important;box-shadow:0 18px 50px rgba(0,0,0,.07)!important}
 .apple-title,.card-title,h1,h2,h3,h4{color:var(--v5-text)!important}.apple-sub,.card-sub,.muted{color:var(--v5-muted)!important}.pill{background:rgba(47,129,247,.15)!important;color:#8ec5ff!important}
-[data-testid="stMetric"]{background:linear-gradient(180deg,rgba(21,31,49,.94),rgba(14,22,36,.94))!important;border:1px solid var(--v5-line)!important;box-shadow:none!important}[data-testid="stMetricLabel"],[data-testid="stMetricValue"]{color:var(--v5-text)!important}
+[data-testid="stMetric"]{background:#fff!important;border:1px solid var(--v5-line)!important;box-shadow:0 8px 24px rgba(0,0,0,.04)!important}[data-testid="stMetricLabel"],[data-testid="stMetricValue"]{color:var(--v5-text)!important}
 .stButton>button[kind="primary"]{background:linear-gradient(90deg,#1769d2,#2f81f7)!important;box-shadow:0 8px 24px rgba(47,129,247,.22)}
-.lineup-card{background:linear-gradient(145deg,rgba(21,31,49,.98),rgba(13,21,34,.98));border:1px solid var(--v5-line);border-radius:18px;padding:16px 18px;margin:10px 0;box-shadow:0 12px 32px rgba(0,0,0,.18)}.lineup-rank{font-size:.78rem;font-weight:800;color:#8ec5ff}.lineup-rank span{background:rgba(47,129,247,.14);padding:3px 7px;border-radius:999px}.lineup-cpt{font-size:1.15rem;font-weight:800;color:#fff;margin-top:7px}.lineup-flex{font-size:.92rem;color:#cbd5e1;margin-top:5px}.lineup-meta{font-size:.80rem;color:#94a3b8;margin-top:9px}
+.lineup-card{background:#fff;border:1px solid var(--v5-line);border-radius:18px;padding:16px 18px;margin:10px 0;box-shadow:0 10px 30px rgba(0,0,0,.05)}.lineup-rank{font-size:.78rem;font-weight:800;color:#0071e3}.lineup-rank span{background:rgba(0,113,227,.10);padding:3px 7px;border-radius:999px}.lineup-cpt{font-size:1.15rem;font-weight:800;color:#1d1d1f;margin-top:7px}.lineup-flex{font-size:.92rem;color:#424245;margin-top:5px}.lineup-meta{font-size:.80rem;color:#6e6e73;margin-top:9px}
 @media(max-width:800px){.apple-title{font-size:1.85rem!important}.apple-hero{padding:21px!important}.block-container{padding-left:.8rem!important;padding-right:.8rem!important}.lineup-card{padding:14px}}
 </style>
 """,unsafe_allow_html=True)
 
 
 st.markdown("""<style>
-[data-testid="stAppViewContainer"] label, [data-testid="stSidebar"] label {color:#e8edf7 !important;}
-.stCaption, [data-testid="stCaptionContainer"], .card-sub {color:#b7c0d1 !important;}
-[data-testid="stTabs"] button p {color:#d7deea !important;}
-[data-testid="stTabs"] button[aria-selected="true"] p {color:#ffffff !important;}
-[data-testid="stMarkdownContainer"] p, [data-testid="stMarkdownContainer"] li {color:#dce3ef;}
+[data-testid="stAppViewContainer"] label {color:#1d1d1f !important;}
+.stCaption, [data-testid="stCaptionContainer"], .card-sub {color:#6e6e73 !important;}
+[data-testid="stTabs"] button p {color:#6e6e73 !important;}
+[data-testid="stTabs"] button[aria-selected="true"] p {color:#1d1d1f !important;}
+[data-testid="stMarkdownContainer"] p, [data-testid="stMarkdownContainer"] li {color:#303033;}
+[data-testid="stSidebarCollapseButton"] button{background:#1d1d1f!important;color:white!important;border-radius:999px!important;min-width:42px!important;min-height:42px!important;box-shadow:0 4px 16px rgba(0,0,0,.18)!important;}
+[data-testid="stSidebarCollapseButton"] svg{fill:white!important;color:white!important;}
 </style>""",unsafe_allow_html=True)
-st.markdown('''<div class="apple-hero"><div class="apple-eyebrow">DFS LAB</div><div class="apple-title">Classic + Showdown.</div><div class="apple-sub">One optimizer, two different strategy engines. Showdown adds Captain exposure, game scripts, construction control, correlation and duplication-aware ratings.</div><span class="pill">V6.2 • Contest Intelligence</span></div>''',unsafe_allow_html=True)
+st.markdown('''<div class="apple-hero"><div class="apple-eyebrow">DFS LAB</div><div class="apple-title">DFS LAB</div><div class="apple-sub">Build lineups around how you think the game will happen.</div><span class="pill">V6.3.1 • Lineup Explorer</span></div>''',unsafe_allow_html=True)
 
 with st.sidebar:
+    st.markdown("### DFS LAB Controls  ‹")
+    st.caption("Use the ‹ control at the top edge to hide this panel. When hidden, use › to bring it back.")
     st.markdown("### Contest")
     mode=st.segmented_control("Mode",["Classic","Showdown"],default="Showdown")
     preset=st.selectbox("Contest preset",["Large GPP","Small-field GPP","Single Entry","Winner Take All","Cash-ish"])
@@ -2004,11 +2009,22 @@ with st.sidebar:
 
 st.markdown('<div class="card-title">Slate files</div><div class="card-sub">DraftKings is the only required file. DFS Lab can create its own baseline projection; SaberSim is now optional and used only as a comparison source.</div>',unsafe_allow_html=True)
 u1,u2=st.columns(2)
-with u1: dk_file=st.file_uploader("DraftKings salaries/template · required",type=["csv"],key=f"dk_{mode}")
-with u2: ss_file=st.file_uploader("SaberSim · optional comparison",type=["csv"],key=f"ss_{mode}")
+with u1: dk_file=st.file_uploader("DraftKings salaries/template · required",type=["csv"],key="dfs_lab_dk_upload")
+with u2: ss_file=st.file_uploader("SaberSim · optional comparison",type=["csv"],key="dfs_lab_ss_upload")
+
+# Keep a working copy of uploaded bytes during ordinary Streamlit reruns. This prevents
+# widget refreshes from forcing the user to remove/re-add the same slate.
+if dk_file is not None:
+    st.session_state["dfs_lab_dk_bytes"]=dk_file.getvalue(); st.session_state["dfs_lab_dk_name"]=getattr(dk_file,"name","DKSalaries.csv")
+elif st.session_state.get("dfs_lab_dk_bytes"):
+    dk_file=io.BytesIO(st.session_state["dfs_lab_dk_bytes"]); dk_file.name=st.session_state.get("dfs_lab_dk_name","DKSalaries.csv")
+if ss_file is not None:
+    st.session_state["dfs_lab_ss_bytes"]=ss_file.getvalue(); st.session_state["dfs_lab_ss_name"]=getattr(ss_file,"name","SaberSim.csv")
+elif st.session_state.get("dfs_lab_ss_bytes"):
+    ss_file=io.BytesIO(st.session_state["dfs_lab_ss_bytes"]); ss_file.name=st.session_state.get("dfs_lab_ss_name","SaberSim.csv")
 
 if not dk_file:
-    st.info("Upload the DraftKings slate to open DFS Lab.")
+    st.info("Upload the DraftKings slate to open DFS LAB.")
     st.stop()
 if mode=="Classic" and not ss_file:
     st.info("DFS Lab-only projections are enabled for Showdown first. Classic still needs the projection file in this V6 test build.")
@@ -2038,8 +2054,10 @@ if mode=="Classic":
             for x,r in ed.iterrows():
                 e=st.session_state["strategy_master"].get(str(r["ID"]),{})
                 for c,k,d in [("Lock","Lock",False),("Exclude","Exclude",False),("Priority","Priority","Neutral"),("Min Exposure","Min Exposure",0),("Max Exposure","Max Exposure",100)]: ed.at[x,c]=e.get(k,d)
-            edited=st.data_editor(
-                ed,
+            st.caption("Make all of your player/Captain changes, then tap Apply changes once. This prevents the screen from dimming after every checkbox.")
+            with st.form("showdown_player_editor_form", clear_on_submit=False):
+                edited=st.data_editor(
+                    ed,
                 hide_index=True,
                 use_container_width=True,
                 height=620,
@@ -2123,7 +2141,7 @@ else:
         max_salary=50000
         min_unique=st.sidebar.selectbox("Minimum unique players",[1,2,3],index=0)
 
-        tabs=st.tabs(["Build","Players","Relationships","Context","Scripts","Lineup Lab","Exposure"])
+        tabs=st.tabs(["Build","Players","Relationships","Game View","Scripts","Lineup Lab","Exposure"])
         with tabs[0]:
             st.markdown('<div class="card-title">Showdown Build</div><div class="card-sub">Control how the six-man portfolio is shaped before the optimizer starts solving.</div>',unsafe_allow_html=True)
             st.markdown("#### Allowed team builds")
@@ -2195,8 +2213,10 @@ else:
             for x,r in ed.iterrows():
                 e=st.session_state["showdown_strategy"].get(str(r["ID"]),{})
                 for c,k,d in [("Lock","Lock",False),("CPT Lock","CPT Lock",False),("Exclude","Exclude",False),("CPT Eligible","CPT Eligible",True),("Priority","Priority","Neutral"),("Min Exposure","Min Exposure",0),("Max Exposure","Max Exposure",100),("CPT Min","CPT Min",0),("CPT Max","CPT Max",100)]: ed.at[x,c]=e.get(k,d)
-            edited=st.data_editor(
-                ed,
+            st.caption("Make all of your player/Captain changes, then tap Apply changes once. This prevents the screen from dimming after every checkbox.")
+            with st.form("showdown_player_editor_form", clear_on_submit=False):
+                edited=st.data_editor(
+                    ed,
                 hide_index=True,
                 use_container_width=True,
                 height=650,
@@ -2224,16 +2244,18 @@ else:
                     "CPT Min":st.column_config.NumberColumn("CPT Min",min_value=0,max_value=100,step=5,width=74),
                     "CPT Max":st.column_config.NumberColumn("CPT Max",min_value=0,max_value=100,step=5,width=74),
                 },
-                key="v4_sdplayers",
-            )
-            for _,r in edited.iterrows():
-                pid=str(r["ID"]); model_val=float(view.loc[view["ID"].astype(str).eq(pid),"Model Proj"].iloc[0]) if not view.loc[view["ID"].astype(str).eq(pid)].empty else float(r["Your Proj"])
-                user_val=float(r["Your Proj"])
-                if abs(user_val-model_val)>0.01: st.session_state["projection_overrides"][pid]=user_val
-                else: st.session_state["projection_overrides"].pop(pid,None)
-                ex=bool(r["Exclude"]); cptlock=bool(r["CPT Lock"]) and not ex
-                st.session_state["showdown_strategy"][str(r["ID"]) ]={"Lock":bool(r["Lock"]) and not ex and not cptlock,"CPT Lock":cptlock,"Exclude":ex,"CPT Eligible":bool(r["CPT Eligible"]) and not ex,"Priority":"Exclude" if ex else str(r["Priority"]),"Min Exposure":float(r["Min Exposure"]),"Max Exposure":float(r["Max Exposure"]),"CPT Min":float(r["CPT Min"]),"CPT Max":float(r["CPT Max"])}
-
+                    key="v4_sdplayers",
+                )
+                apply_player_changes=st.form_submit_button("Apply player changes",type="primary",use_container_width=True)
+            if apply_player_changes:
+                for _,r in edited.iterrows():
+                    pid=str(r["ID"]); model_val=float(view.loc[view["ID"].astype(str).eq(pid),"Model Proj"].iloc[0]) if not view.loc[view["ID"].astype(str).eq(pid)].empty else float(r["Your Proj"])
+                    user_val=float(r["Your Proj"])
+                    if abs(user_val-model_val)>0.01: st.session_state["projection_overrides"][pid]=user_val
+                    else: st.session_state["projection_overrides"].pop(pid,None)
+                    ex=bool(r["Exclude"]); cptlock=bool(r["CPT Lock"]) and not ex
+                    st.session_state["showdown_strategy"][str(r["ID"]) ]={"Lock":bool(r["Lock"]) and not ex and not cptlock,"CPT Lock":cptlock,"Exclude":ex,"CPT Eligible":bool(r["CPT Eligible"]) and not ex,"Priority":"Exclude" if ex else str(r["Priority"]),"Min Exposure":float(r["Min Exposure"]),"Max Exposure":float(r["Max Exposure"]),"CPT Min":float(r["CPT Min"]),"CPT Max":float(r["CPT Max"])}
+                st.success("Player settings applied.")
         with tabs[2]:
             st.markdown('<div class="card-title">Relationships</div><div class="card-sub">Teach DFS Lab which players, positions and team roles belong together — or should never appear together.</div>',unsafe_allow_html=True)
             st.caption("Hard relationship rules are enforced by the optimizer. Use Player for a specific matchup or Team + Position for broader football logic.")
@@ -2283,7 +2305,7 @@ else:
             max_one_rb=st.toggle("Max 1 RB from the same team",value=st.session_state.get("max_one_rb_team",False),key="max_one_rb_team",help="Useful when two same-team RBs are direct alternatives. Leave off when a backfield can realistically support two players together.")
 
         with tabs[3]:
-            st.markdown('<div class="card-title">Context Engine · V5.2</div><div class="card-sub">Add matchup, role and situational information without letting small samples overpower the SaberSim baseline. This first build is manual and explainable; automated feeds plug into this same layer next.</div>',unsafe_allow_html=True)
+            st.markdown('<div class="card-title">Game View</div><div class="card-sub">The football signals DFS LAB is using for this slate. Neutral inputs stay out of the way; open Model details only when you want to audit them.</div>',unsafe_allow_html=True)
             st.info("Ratings are confidence-shrunk and capped. Defense and current usage carry more weight than travel or primetime splits.")
             context_strength=st.select_slider("Context influence",options=["Conservative","Standard","Aggressive"],key="context_strength")
             rating_opts=[-3,-2,-1,0,1,2,3]
@@ -2327,7 +2349,7 @@ else:
             cp.columns=["Player","Base","Scenario","Context %","DFS Lab"] + (["SaberSim"] if "SaberSim Proj" in ctx_df.columns else [])
             cp=cp.sort_values("Context %",key=lambda x:x.abs(),ascending=False)
             st.dataframe(cp,hide_index=True,use_container_width=True,height=390,column_config={"Player":st.column_config.TextColumn("Player",pinned=True,width=185),"Base":st.column_config.NumberColumn("Base",format="%.2f"),"Scenario":st.column_config.NumberColumn("Scenario",format="%.2f"),"Context %":st.column_config.NumberColumn("Context %",format="%.1f"),"DFS Lab":st.column_config.NumberColumn("DFS Lab",format="%.2f")})
-            st.caption("Historical evidence is used under the hood. Slate- and lineup-specific explanations now live in Lineup Lab after lineups are generated.")
+            st.caption("Neutral means DFS LAB found no reason to move the projection. Detailed model inputs remain available above for auditing; Lineup Lab explains what matters for each lineup.")
 
         with tabs[4]:
             st.markdown('<div class="card-title">Scenario Engine</div><div class="card-sub">Use a football story, a predicted score, or both. Your game thesis changes projections, correlation and lineup construction. Use the 0–100 influence control to decide how strongly DFS Lab should commit to it.</div>',unsafe_allow_html=True)
@@ -2426,28 +2448,59 @@ else:
             if result is None or result.empty: st.info("Set your build, player takes and script, then generate lineups.")
             else:
                 m1,m2,m3,m4=st.columns(4); m1.metric("A / A+",int(result["Rating"].isin(["A","A+"]).sum())); m2.metric("Top projection",f"{result['Projection'].max():.1f}"); m3.metric("Avg salary left",f"${int(result['Salary Left'].mean()):,}"); m4.metric("Built",len(result))
-                st.markdown("#### Portfolio game worlds")
+                st.markdown("#### Explore game worlds")
                 world_counts=result["Game World"].value_counts().rename_axis("World").reset_index(name="Lineups") if "Game World" in result.columns else pd.DataFrame()
+                world_filter="All worlds"
                 if not world_counts.empty:
                     world_counts["Share %"]=(100*world_counts["Lineups"]/len(result)).round(1)
-                    st.dataframe(world_counts,hide_index=True,use_container_width=True,height=min(330,42+35*len(world_counts)))
-                st.markdown("#### Lineup Lab")
-                st.caption("Select a lineup to see why DFS Lab built it for this contest and game thesis. Historical data stays under the hood; this explanation is slate-specific.")
-                lineup_choices=[f"#{int(r['Rank'])} · {r['Captain']} CPT · {r['Construction']} · {r['Projection']:.1f} pts" for _,r in result.iterrows()]
+                    world_options=["All worlds"]+[f"{r['World']} · {int(r['Lineups'])} lineups" for _,r in world_counts.iterrows()]
+                    world_pick=st.selectbox("Highlight a world",world_options,key="world_explorer_pick")
+                    if world_pick!="All worlds": world_filter=world_pick.rsplit(" · ",1)[0]
+                    wc=world_counts if world_filter=="All worlds" else world_counts[world_counts["World"].eq(world_filter)]
+                    st.dataframe(wc,hide_index=True,use_container_width=True,height=min(330,42+35*len(wc)))
+                filtered_result=result if world_filter=="All worlds" else result[result["Game World"].astype(str).eq(world_filter)]
+                if world_filter!="All worlds" and not filtered_result.empty:
+                    w1,w2,w3=st.columns(3); w1.metric("Lineups in world",len(filtered_result)); w2.metric("Top projection",f"{filtered_result['Projection'].max():.1f}"); w3.metric("Avg salary left",f"${int(filtered_result['Salary Left'].mean()):,}")
+                    st.caption(str(filtered_result.iloc[0].get("World Thesis","")))
+                st.markdown("#### Lineup Explorer")
+                st.caption("Highlight a lineup and DFS LAB will analyze all six players together — not just the Captain.")
+                lineup_choices=[f"#{int(r['Rank'])} · {r['Captain']} CPT · {r['Construction']} · {r['Projection']:.1f} pts" for _,r in filtered_result.iterrows()]
                 pick=st.selectbox("Analyze lineup",lineup_choices,key="lineup_lab_pick")
-                li=lineup_choices.index(pick); lr=result.iloc[li]
+                li=lineup_choices.index(pick); lr=filtered_result.iloc[li]
                 risk = "lower" if entry_format=="Single Entry" else ("moderate" if entry_format in ["3-Max","20-Max"] else "higher")
                 contest_reason=(f"{entry_format} with {int(field_size):,} entries. DFS Lab uses {risk} tolerance for fragile salary-relief plays and weights tournament ceiling/correlation accordingly.")
                 st.markdown(f"**Why this lineup exists**  \n**Contest:** {entry_format} · {int(field_size):,} entries · {payout_style}  \n**Game thesis:** {effective_script} · influence {int(intensity)}%  \n**Game world:** {lr.get('Game World',effective_script)}  \n**Construction:** {lr['Construction']} · **Captain:** {lr['Captain']}  \n**Projection:** {lr['Projection']:.2f} · **Salary left:** ${int(lr['Salary Left']):,}")
                 st.write(contest_reason)
                 st.write(f"**World thesis:** {lr.get('World Thesis','')}")
+                roster_names=[str(lr['Captain'])]+[str(lr.get('FLEX'+str(i),'')) for i in range(1,6)]
+                roster_names=[x for x in roster_names if x]
+                detail_rows=[]
+                for j,nm in enumerate(roster_names):
+                    pr=build_df[build_df['Name'].astype(str).eq(nm)]
+                    if pr.empty: continue
+                    pr=pr.iloc[0]; role="Captain / ceiling engine" if j==0 else ("Primary projection piece" if float(pr.get('DFS Lab Proj',0))>=12 else "Salary relief / secondary path")
+                    detail_rows.append({"Slot":"CPT" if j==0 else f"FLEX {j}","Player":nm,"Pos":pr.get('Position',''),"Team":pr.get('Team',''),"DFS Lab":round(float(pr.get('DFS Lab Proj',0)),2),"Salary":int(pr.get('FlexSalary',0)) if j else int(pr.get('CPTSalary',0)),"Purpose":role})
+                if detail_rows:
+                    st.dataframe(pd.DataFrame(detail_rows),hide_index=True,use_container_width=True,column_config={"Player":st.column_config.TextColumn("Player",pinned=True),"Salary":st.column_config.NumberColumn("Salary",format="$%d")})
+                    low=min(detail_rows,key=lambda x:x["DFS Lab"])
+                    st.write(f"**Weakest projection link:** {low['Player']} ({low['DFS Lab']:.2f}). DFS LAB is using this spot as {low['Purpose'].lower()} within the six-player construction.")
+                st.markdown("##### Ask DFS LAB")
+                ai_q=st.text_input("Ask about this lineup or world",placeholder="Why is this player here? What kills this lineup? What if BUF wins by 14?",key="dfs_lab_question")
+                if ai_q:
+                    q=ai_q.lower()
+                    if "kill" in q or "fail" in q or "break" in q:
+                        st.info(f"This lineup is most vulnerable if the {lr.get('Game World',effective_script)} thesis fails, if {lr['Captain']} does not reach a Captain-level ceiling, or if its lowest-projection salary-relief piece contributes almost nothing.")
+                    elif "why" in q and ("lineup" in q or "built" in q):
+                        st.info(f"DFS LAB built this six-player unit for {lr.get('Game World',effective_script)}: {lr.get('World Thesis','')} It preserves a {lr['Construction']} construction with {lr['Captain']} at CPT while balancing projection, salary, correlation and the {entry_format} contest profile.")
+                    elif "world" in q:
+                        st.info(f"This lineup belongs to {lr.get('Game World',effective_script)}. {lr.get('World Thesis','')} The current portfolio contains {len(filtered_result) if world_filter!='All worlds' else int((result['Game World']==lr.get('Game World')).sum())} lineup(s) in that world.")
+                    else:
+                        st.info("DFS LAB has the active lineup, world, contest and player pool in context. In this first mini-AI layer, use questions about why the lineup exists, what could make it fail, or its game world. V6.4 will add simulation evidence and natural-language re-simulation.")
                 st.write(f"DFS Lab selected **{lr['Captain']} at Captain** while preserving the {lr['Construction']} game construction because this combination ranked strongly under the current projection, correlation, salary and contest-risk settings. {lr.get('Strategy Notes','')}")
                 if float(lr.get('Scenario Delta',0))!=0:
                     st.write(f"Your game thesis moved this lineup by **{float(lr['Scenario Delta']):+.2f} projected DK points** versus the unadjusted baseline.")
                 st.markdown("##### Challenge this lineup")
                 st.caption("Choose a player you would rather use. DFS Lab will show the salary/projection contrast. Full conversational AI control comes after the optimizer evidence layer is validated.")
-                roster_names=[str(lr['Captain'])]+[str(lr.get('FLEX'+str(i),'')) for i in range(1,6)]
-                roster_names=[x for x in roster_names if x]
                 out_player=st.selectbox("Replace",roster_names,key="lab_out")
                 pool_names=[x for x in build_df['Name'].astype(str).tolist() if x not in roster_names]
                 in_player=st.selectbox("With",pool_names,key="lab_in")
@@ -2468,8 +2521,8 @@ else:
                 cols=["Rank","Rating","Rating Score","Projection","Salary","Salary Left","Captain","Captain Pos","CPT Own","Construction","Dup Risk","Projection Grade","Captain Grade","Correlation Grade","Leverage Grade","Duplication Grade","Story","CPT","FLEX1","FLEX2","FLEX3","FLEX4","FLEX5"]
                 st.dataframe(result[[c for c in cols if c in result.columns]],hide_index=True,use_container_width=True,height=610)
                 d1,d2=st.columns(2)
-                with d1: st.download_button("Download analysis CSV",result.to_csv(index=False),"showdown_lineups_v6_1.csv","text/csv",use_container_width=True)
-                with d2: st.download_button("Download DK-format lineup CSV",showdown_upload_csv(result),"showdown_dk_upload_v6_1.csv","text/csv",use_container_width=True)
+                with d1: st.download_button("Download analysis CSV",result.to_csv(index=False),"showdown_lineups_v6_3_1.csv","text/csv",use_container_width=True)
+                with d2: st.download_button("Download DK-format lineup CSV",showdown_upload_csv(result),"showdown_dk_upload_v6_3_1.csv","text/csv",use_container_width=True)
                 pick=st.number_input("Inspect lineup rank",min_value=1,max_value=len(result),value=1,step=1)
                 r=result.iloc[int(pick)-1]
                 st.write(f"**{r['Rating']} ({r['Rating Score']})** — {r['Story']}")
@@ -2503,4 +2556,4 @@ else:
     except Exception as e:
         st.error(f"Showdown build error: {e}")
 
-st.caption("V6.3 • Projection Engine • Game Worlds • Contest Intelligence • Scenario Engine • Lineup Lab")
+st.caption("DFS LAB • V6.3.1 • Game Worlds • Lineup Explorer • Contest Intelligence")
