@@ -2069,8 +2069,65 @@ st.markdown("""<style>
 st.markdown("""<style>
 .lineup-count-readout{margin-top:8px;padding:10px 12px;border-radius:12px;background:#eaf3ff;border:1px solid #b8d4f6;color:#24364b}.lineup-count-readout b{font-size:1.25rem;color:#1268c4}
 .agent-scenario{display:flex;gap:14px;align-items:center;flex-wrap:wrap;padding:13px 15px;margin:10px 0;border-radius:14px;background:#e8f3ff;border:1px solid #9fc8f5;color:#183653}.agent-scenario b{color:#0a62b7}.scenario-proposal{padding:15px;margin:12px 0;border-radius:15px;background:#f3efff;border:1px solid #c7b9f4;color:#252a3a}.scenario-proposal span{color:#68758a;font-size:.82rem}
-[data-testid=\"stExpander\"] label,[data-testid=\"stExpander\"] p{color:#dbe7f5!important}.stRadio label{color:#dbe7f5!important}
+[data-testid=\"stExpander\"] label,
+[data-testid=\"stExpander\"] label p,
+[data-testid=\"stExpander\"] [data-testid=\"stWidgetLabel\"] p,
+[data-testid=\"stExpander\"] p{
+  color:#253247!important;
+  -webkit-text-fill-color:#253247!important;
+  opacity:1!important;
+}
+.stRadio label,.stRadio label p{
+  color:#253247!important;
+  -webkit-text-fill-color:#253247!important;
+  opacity:1!important;
+}
 </style>""",unsafe_allow_html=True)
+st.markdown("""<style>
+/* Final iPad contrast pass */
+html, body, [data-testid="stAppViewContainer"] {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif !important;
+}
+[data-testid="stAppViewContainer"] [data-testid="stWidgetLabel"] p,
+[data-testid="stAppViewContainer"] label p,
+[data-testid="stAppViewContainer"] [data-testid="stCaptionContainer"] p {
+  color:#253247 !important;
+  -webkit-text-fill-color:#253247 !important;
+  opacity:1 !important;
+  font-weight:600 !important;
+}
+[data-testid="stSegmentedControl"] label,
+[data-testid="stSegmentedControl"] button,
+[data-testid="stSegmentedControl"] [role="radio"] {
+  background:#243041 !important;
+  border-color:#506078 !important;
+  color:#ffffff !important;
+  -webkit-text-fill-color:#ffffff !important;
+  opacity:1 !important;
+}
+[data-testid="stSegmentedControl"] label *,
+[data-testid="stSegmentedControl"] button *,
+[data-testid="stSegmentedControl"] [role="radio"] * {
+  color:#ffffff !important;
+  -webkit-text-fill-color:#ffffff !important;
+  opacity:1 !important;
+  font-weight:700 !important;
+}
+[data-testid="stSegmentedControl"] label:has(input:checked),
+[data-testid="stSegmentedControl"] button[aria-checked="true"],
+[data-testid="stSegmentedControl"] button[aria-pressed="true"],
+[data-testid="stSegmentedControl"] [role="radio"][aria-checked="true"] {
+  background:#2563eb !important;
+  border-color:#2563eb !important;
+}
+[data-baseweb="button-group"] button,
+[data-baseweb="button-group"] button * {
+  color:#ffffff !important;
+  -webkit-text-fill-color:#ffffff !important;
+  opacity:1 !important;
+}
+</style>""", unsafe_allow_html=True)
+
 st.markdown('''<div class="apple-hero"><div class="apple-eyebrow">NFL SHOWDOWN COMMAND CENTER</div><div class="apple-title">DFS LAB</div><div class="apple-sub">Build lineups around how you think the game will happen.</div><div class="hero-actions"><span class="pill">LIVE SLATE</span><span class="hero-hint">Build · Explore · Challenge</span></div></div>''',unsafe_allow_html=True)
 
 st.markdown("""<div class="command-strip"><div><span class="command-live">● LIVE</span><b> BUILD CONTROL CENTER</b><span class="command-copy"> Contest · Game type · Entries · Strategy</span></div><div class="command-arrow">OPEN BELOW ↓</div></div>""", unsafe_allow_html=True)
