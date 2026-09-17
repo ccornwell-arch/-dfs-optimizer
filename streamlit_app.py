@@ -2053,7 +2053,7 @@ section[data-testid="stSidebar"]{background:linear-gradient(180deg,#c8d1dd,#d8e0
 </style>
 """,unsafe_allow_html=True)
 
-st.markdown('''<div class="apple-hero"><div class="apple-eyebrow">DFS LAB</div><div class="apple-title">DFS LAB</div><div class="apple-sub">Build lineups around how you think the game will happen.</div><span class="pill">V6.4 • Agent Beta</span></div>''',unsafe_allow_html=True)
+st.markdown('''<div class="apple-hero"><div class="apple-eyebrow">NFL SHOWDOWN COMMAND CENTER</div><div class="apple-title">DFS LAB</div><div class="apple-sub">Build lineups around how you think the game will happen.</div><div class="hero-actions"><span class="pill">LIVE SLATE</span><span class="hero-hint">Build · Explore · Challenge</span></div></div>''',unsafe_allow_html=True)
 
 with st.sidebar:
     st.markdown("### DFS LAB Controls")
@@ -2757,4 +2757,51 @@ hr{border-color:rgba(255,255,255,.10)!important;}
 </style>
 """,unsafe_allow_html=True)
 
-st.caption("DFS LAB • V6.4 • Agent Beta • Game Worlds • Lineup Explorer")
+st.caption("DFS LAB · Build the story. Test the lineup. Challenge the field.")
+
+
+st.markdown(r"""
+<style>
+/* DFS LAB Dynamic Shell — final cascade */
+:root{--page:#d8e0ea;--page2:#cdd7e4;--navy:#15243a;--navy2:#173f6d;--card:#f7f9fc;--card2:#edf2f7;--ink:#172235;--muted:#52647a;--line:#b8c5d5;--blue:#1473e6;--cyan:#4aa3ff;--good:#167c65;--warn:#8a5b00;}
+html,body,.stApp,[data-testid="stAppViewContainer"],[data-testid="stMain"]{background:linear-gradient(145deg,var(--page) 0%,#e8edf3 46%,var(--page2) 100%)!important;color:var(--ink)!important;}
+[data-testid="stHeader"]{background:#263243!important;border-bottom:1px solid rgba(255,255,255,.10)!important;}
+.block-container{max-width:1420px!important;padding-top:1.4rem!important;}
+/* Typography must work on the LIGHT workspace. */
+[data-testid="stAppViewContainer"] h1,[data-testid="stAppViewContainer"] h2,[data-testid="stAppViewContainer"] h3,[data-testid="stAppViewContainer"] h4,[data-testid="stAppViewContainer"] h5,[data-testid="stAppViewContainer"] .card-title,[data-testid="stAppViewContainer"] [data-testid="stMarkdownContainer"] p,[data-testid="stAppViewContainer"] [data-testid="stMarkdownContainer"] li,[data-testid="stAppViewContainer"] label{color:var(--ink)!important;-webkit-text-fill-color:var(--ink)!important;}
+[data-testid="stAppViewContainer"] .card-sub,[data-testid="stAppViewContainer"] [data-testid="stCaptionContainer"],[data-testid="stAppViewContainer"] small{color:var(--muted)!important;-webkit-text-fill-color:var(--muted)!important;}
+.apple-hero{position:relative;overflow:hidden;background:linear-gradient(118deg,#14243b 0%,#183b64 58%,#1262a7 100%)!important;border:1px solid rgba(255,255,255,.20)!important;border-radius:28px!important;padding:30px 38px!important;box-shadow:0 22px 55px rgba(27,48,78,.22)!important;}
+.apple-hero:after{content:"";position:absolute;width:360px;height:360px;right:-100px;top:-180px;border-radius:50%;background:radial-gradient(circle,rgba(94,183,255,.32),rgba(94,183,255,0) 68%);pointer-events:none;}
+.apple-hero .apple-title{color:#fff!important;-webkit-text-fill-color:#fff!important;font-size:2.65rem!important;letter-spacing:-.045em!important}.apple-hero .apple-sub{color:#d9e8f8!important;-webkit-text-fill-color:#d9e8f8!important;font-size:1.08rem!important}.apple-hero .apple-eyebrow{color:#8fc7ff!important;-webkit-text-fill-color:#8fc7ff!important;letter-spacing:.14em!important}.hero-actions{display:flex;align-items:center;gap:12px;margin-top:17px}.hero-hint{color:#c7d9ec;font-size:.83rem;font-weight:700}.pill{background:rgba(45,151,255,.18)!important;color:#d8ecff!important;-webkit-text-fill-color:#d8ecff!important;border:1px solid rgba(137,200,255,.35)!important;}
+/* Light cards with real separation instead of a flat sheet. */
+[data-testid="stMetric"],.lineup-card,[data-testid="stVerticalBlockBorderWrapper"]>div{background:linear-gradient(145deg,var(--card),#eef3f8)!important;border:1px solid #b8c5d5!important;box-shadow:0 12px 28px rgba(34,53,78,.10)!important;color:var(--ink)!important;}
+.lineup-card{border-radius:20px!important;transition:transform .18s ease,box-shadow .18s ease,border-color .18s ease!important}.lineup-card:hover{transform:translateY(-3px);border-color:#7eafe7!important;box-shadow:0 18px 36px rgba(34,72,120,.16)!important}.lineup-card .lineup-cpt,.lineup-card .lineup-flex,.lineup-card .lineup-meta{color:var(--ink)!important}.lineup-card .lineup-meta{color:var(--muted)!important}
+/* Inputs are clearly interactive, not white-on-white. */
+[data-baseweb="select"]>div,[data-baseweb="input"]>div,input,textarea,[data-testid="stFileUploaderDropzone"]{background:#f8fafc!important;border:1px solid #aebdce!important;color:var(--ink)!important;border-radius:14px!important;}
+[data-baseweb="select"] span,[data-baseweb="select"] svg,input::placeholder,textarea::placeholder{color:#53657b!important;-webkit-text-fill-color:#53657b!important;}
+[data-testid="stFileUploader"] label,[data-testid="stFileUploader"] small,[data-testid="stFileUploader"] span,[data-testid="stFileUploader"] p{color:#33465e!important;-webkit-text-fill-color:#33465e!important;}
+[data-testid="stFileUploaderDropzone"] button{background:#e4ebf4!important;color:#20344e!important;-webkit-text-fill-color:#20344e!important;border:1px solid #b3c1d1!important;}
+/* Alerts: dark readable type on tinted surfaces. */
+[data-testid="stAlert"]{border-radius:16px!important;border:1px solid rgba(71,91,116,.20)!important;box-shadow:0 7px 18px rgba(38,56,80,.06)!important;}
+[data-testid="stAlert"] *{color:#23354a!important;-webkit-text-fill-color:#23354a!important;}
+/* Tabs become a floating command strip. */
+[data-testid="stTabs"] [data-baseweb="tab-list"]{gap:7px;background:rgba(37,52,72,.92)!important;border:1px solid rgba(255,255,255,.12)!important;padding:7px!important;border-radius:16px!important;box-shadow:0 10px 24px rgba(34,49,69,.14)!important;overflow-x:auto!important;}
+[data-testid="stTabs"] button[data-baseweb="tab"]{border-radius:11px!important;padding:.72rem 1.05rem!important;transition:all .16s ease!important}[data-testid="stTabs"] button[data-baseweb="tab"] p{color:#c8d4e2!important;-webkit-text-fill-color:#c8d4e2!important;font-weight:800!important}[data-testid="stTabs"] button[aria-selected="true"]{background:linear-gradient(135deg,#1876df,#3a8ef0)!important;box-shadow:0 5px 14px rgba(20,115,230,.30)!important}[data-testid="stTabs"] button[aria-selected="true"] p{color:white!important;-webkit-text-fill-color:white!important;}
+/* Sidebar is a real control deck. */
+section[data-testid="stSidebar"]{background:linear-gradient(180deg,#1d2a3b,#25354a)!important;border-right:1px solid rgba(255,255,255,.12)!important;box-shadow:14px 0 35px rgba(25,38,56,.18)!important;}
+section[data-testid="stSidebar"] h1,section[data-testid="stSidebar"] h2,section[data-testid="stSidebar"] h3,section[data-testid="stSidebar"] p,section[data-testid="stSidebar"] label,section[data-testid="stSidebar"] [data-testid="stCaptionContainer"]{color:#edf4fb!important;-webkit-text-fill-color:#edf4fb!important;}
+section[data-testid="stSidebar"] [data-baseweb="select"]>div,section[data-testid="stSidebar"] input{background:#f4f7fb!important;color:#172235!important;-webkit-text-fill-color:#172235!important;border-color:#91a4ba!important;}
+/* Make BOTH Streamlit sidebar controls impossible to miss on iPad. */
+[data-testid="stSidebarCollapseButton"],[data-testid="stSidebarCollapsedControl"]{display:flex!important;visibility:visible!important;opacity:1!important;z-index:100000!important;}
+[data-testid="stSidebarCollapseButton"] button,[data-testid="stSidebarCollapsedControl"] button{display:flex!important;visibility:visible!important;opacity:1!important;background:linear-gradient(135deg,#1473e6,#4a9cf5)!important;color:white!important;-webkit-text-fill-color:white!important;border:2px solid rgba(255,255,255,.75)!important;border-radius:999px!important;width:48px!important;height:48px!important;min-width:48px!important;min-height:48px!important;box-shadow:0 7px 20px rgba(20,70,130,.30)!important;}
+[data-testid="stSidebarCollapseButton"] svg,[data-testid="stSidebarCollapsedControl"] svg{color:white!important;fill:white!important;width:22px!important;height:22px!important;}
+/* Buttons */
+.stButton>button{background:#e8eef6!important;color:#1c314b!important;-webkit-text-fill-color:#1c314b!important;border:1px solid #aebdce!important;box-shadow:0 4px 10px rgba(35,53,76,.06)!important;transition:transform .14s ease,box-shadow .14s ease!important}.stButton>button:hover{transform:translateY(-2px);box-shadow:0 8px 18px rgba(35,70,115,.12)!important}.stButton>button:active{transform:scale(.98)!important}.stButton>button[kind="primary"],[data-testid="stFormSubmitButton"] button,[data-testid="stDownloadButton"] button{background:linear-gradient(100deg,#126fd8,#3b91ef)!important;color:white!important;-webkit-text-fill-color:white!important;border:0!important;}
+[data-testid="stFormSubmitButton"] button *,[data-testid="stDownloadButton"] button *{color:white!important;-webkit-text-fill-color:white!important;}
+/* Generate motion without turning the app into a toy. */
+@keyframes labRise{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}@keyframes labPulse{0%,100%{filter:brightness(1)}50%{filter:brightness(1.12)}}
+.apple-hero{animation:labRise .38s ease both}.lineup-card{animation:labRise .28s ease both}[data-testid="stProgress"]>div>div{background:linear-gradient(90deg,#1473e6,#5b62ef,#16a6c9)!important;animation:labPulse 1.2s ease-in-out infinite!important;}
+@media(max-width:900px){.block-container{padding-left:.8rem!important;padding-right:.8rem!important}.apple-hero{padding:23px 24px!important}.apple-hero .apple-title{font-size:2.15rem!important}.hero-hint{display:none}[data-testid="stSidebarCollapseButton"] button,[data-testid="stSidebarCollapsedControl"] button{width:52px!important;height:52px!important;min-width:52px!important;min-height:52px!important;}}
+@media(prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important;transition:none!important}}
+</style>
+""",unsafe_allow_html=True)
