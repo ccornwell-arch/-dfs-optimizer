@@ -2009,13 +2009,21 @@ else:
         st.session_state.setdefault("sd_use_score", False)
         st.session_state.setdefault("sd_script", "Neutral")
         st.session_state.setdefault("sd_script_team", "None")
-        st.session_state.setdefault("sd_intensity", "Standard")
+        # V6.2.1 migration: older sessions stored Conservative/Standard/Aggressive text.
+        _old_intensity = st.session_state.get("sd_intensity", 50)
+        if isinstance(_old_intensity, str):
+            _old_intensity = {"Conservative": 30, "Standard": 50, "Aggressive": 75}.get(_old_intensity, 50)
+        try:
+            _old_intensity = int(float(_old_intensity))
+        except Exception:
+            _old_intensity = 50
+        st.session_state["sd_intensity"] = max(0, min(100, _old_intensity))
         st.session_state.setdefault("sd_auto_shape", True)
         if len(teams) >= 2:
             st.session_state.setdefault("sd_score_0", 24)
             st.session_state.setdefault("sd_score_1", 21)
         q1,q2,q3,q4=st.columns(4); q1.metric("Players",len(df)); q2.metric("Teams",len(teams)); q3.metric("Field",f"{int(field_size):,}"); q4.metric("Pool",lineup_count)
-        if bool(df["CPT Own Estimated"].any()): st.warning("Your SaberSim file does not appear to include Captain ownership. V4 is using a neutral fallback for CPT leverage. Overall ownership is still used normally.")
+        if bool(df["CPT Own Estimated"].any()): st.warning("Your SaberSim file does not appear to include Captain ownership. DFS Lab is using a neutral fallback for CPT leverage. Overall ownership is still used normally.")
 
         # Showdown-specific sidebar controls.
         salary_style=st.sidebar.selectbox("Salary strategy",["Optimal","Balanced","GPP","Unique","Custom"],index=2)
@@ -2065,7 +2073,7 @@ else:
                 current_scores={teams[0]:float(st.session_state.get("sd_score_0",24)),teams[1]:float(st.session_state.get("sd_score_1",21))}
             if current_script=="Auto from score" and current_use_score:
                 current_script,current_team,_=infer_score_script(current_scores)
-            scenario_df=apply_showdown_scenario(df,current_script,current_team,current_use_score,current_scores,st.session_state.get("sd_intensity","Standard"))
+            scenario_df=apply_showdown_scenario(df,current_script,current_team,current_use_score,current_scores,st.session_state.get("sd_intensity",50))
             scenario_df=apply_context_engine(scenario_df,st.session_state.get("showdown_context",{}),st.session_state.get("context_strength","Standard"))
             scenario_df=apply_projection_overrides(scenario_df,st.session_state.get("projection_overrides",{}))
             view=scenario_df.copy()
@@ -2220,7 +2228,7 @@ else:
             ctx_use_score=bool(st.session_state.get("sd_use_score",False)); ctx_scores={}
             if len(teams)>=2: ctx_scores={teams[0]:float(st.session_state.get("sd_score_0",24)),teams[1]:float(st.session_state.get("sd_score_1",21))}
             if ctx_script=="Auto from score" and ctx_use_score: ctx_script,ctx_team,_=infer_score_script(ctx_scores)
-            ctx_base=apply_showdown_scenario(df,ctx_script,ctx_team,ctx_use_score,ctx_scores,st.session_state.get("sd_intensity","Standard"))
+            ctx_base=apply_showdown_scenario(df,ctx_script,ctx_team,ctx_use_score,ctx_scores,st.session_state.get("sd_intensity",50))
             ctx_df=apply_context_engine(ctx_base,st.session_state["showdown_context"],context_strength)
             st.markdown("#### Market vs. model foundation")
             st.caption("Base is now DFS Lab's independent nflverse/DK-prior projection. Scenario + context create the model projection; Your Proj can override the final optimizer input.")
@@ -2399,4 +2407,4 @@ else:
     except Exception as e:
         st.error(f"Showdown build error: {e}")
 
-st.caption("V5.2.1 • Classic + Showdown • Relationships • Context Engine • Scenario Engine • Control Deck")
+st.caption("V6.2.1 • Projection Engine • Contest Intelligence • Scenario Engine • Lineup Lab")
