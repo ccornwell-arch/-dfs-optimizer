@@ -56,7 +56,7 @@ jobs:
 
           s, n1 = re.subn(
               r'                def _mentioned_players\(qtext\):.*?\n\n                def build_agent_packet\(\):',
-              mentioned,
+              lambda _m: mentioned,
               s,
               count=1,
               flags=re.S,
@@ -106,7 +106,7 @@ jobs:
 
           s, n2 = re.subn(
               r'                def local_agent_answer\(qtext, packet\):.*?\n\n                def build_question_evidence\(qtext, packet\):',
-              local,
+              lambda _m: local,
               s,
               count=1,
               flags=re.S,
