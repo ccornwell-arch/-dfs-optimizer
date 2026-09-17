@@ -1851,7 +1851,8 @@ def generate_showdown_lineups(df, field_size, payout_style, count, attempts, min
         for slot,i in chosen:
             pid=str(df.loc[i,"ID"]); exposure[pid]+=1
             if slot=="CPT": cpt_exp[pid]+=1
-        if attempt%10==0: prog.progress(min(1.0,len(rows)/max(1,count)),text=f"Built {len(rows)} / {count}")
+        # Update after every accepted lineup so the UI never appears frozen.
+        prog.progress(min(1.0,len(rows)/max(1,count)), text=f"Built {len(rows)} / {count}")
     prog.empty()
     out=pd.DataFrame(rows)
     if out.empty:return out
@@ -2158,6 +2159,21 @@ html, body, [data-testid="stAppViewContainer"] {
   color:#ffffff !important;
   -webkit-text-fill-color:#ffffff !important;
   opacity:1 !important;
+}
+</style>""", unsafe_allow_html=True)
+
+st.markdown("""<style>
+/* Final primary-button contrast */
+.stButton > button[kind="primary"],
+.stButton > button[kind="primary"] * {
+  background: #1559c7 !important;
+  color: #ffffff !important;
+  -webkit-text-fill-color: #ffffff !important;
+  border-color: #1559c7 !important;
+  font-weight: 800 !important;
+}
+.stButton > button[kind="primary"]:hover {
+  background: #0f4cae !important;
 }
 </style>""", unsafe_allow_html=True)
 
