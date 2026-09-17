@@ -9,7 +9,7 @@ import streamlit as st
 from scipy.optimize import Bounds, LinearConstraint, milp
 from scipy.sparse import lil_matrix
 
-st.set_page_config(page_title="DFS Tournament Builder V2.6", page_icon="🏈", layout="wide")
+st.set_page_config(page_title="DFS Lab V6.0.1", page_icon="🏈", layout="wide")
 
 st.markdown("""
 <style>
@@ -116,6 +116,20 @@ h1, h2, h3 {
     background: linear-gradient(90deg, #16a34a, #22c55e);
     border: 0;
     color: white;
+}
+
+/* High-contrast download buttons, including iPad Safari */
+[data-testid="stDownloadButton"] > button {
+    background: #2563eb !important;
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
+    border: 1px solid #3b82f6 !important;
+    border-radius: 12px !important;
+    font-weight: 800 !important;
+}
+[data-testid="stDownloadButton"] > button * {
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
 }
 
 /* ---------- Dataframes ---------- */
@@ -400,7 +414,8 @@ def slot_eligibility(df):
 
 
 def player_objective(df, aggr, strategy_map, preferred_stack_teams, team_strategy_map, exposure_state=None, built_count=0):
-    proj = df["My Proj"].to_numpy(float)
+    proj_col = "DFS Lab Proj" if "DFS Lab Proj" in df.columns else ("Script Proj" if "Script Proj" in df.columns else "My Proj")
+    proj = df[proj_col].to_numpy(float)
     own = np.clip(df["My Own"].to_numpy(float), 0.05, None)
 
     # Projection remains the backbone.
@@ -802,348 +817,1469 @@ def calculate_exposure_table(df, result, strategy_map):
 
 
 # -----------------------------
-# UI
+
+
 # -----------------------------
+# Showdown engine
+# -----------------------------
+SHOWDOWN_SLOTS = ["CPT", "FLEX1", "FLEX2", "FLEX3", "FLEX4", "FLEX5"]
+
+
+def _first_existing(columns, candidates):
+    lookup = {str(c).strip().lower(): c for c in columns}
+    for cand in candidates:
+        if cand.lower() in lookup:
+            return lookup[cand.lower()]
+    return None
+
+
+def load_showdown_dk_template(uploaded_file):
+    """Load a DraftKings Showdown CSV/template and preserve CPT/FLEX identifiers when present."""
+    raw = uploaded_file.getvalue().decode("utf-8-sig", errors="ignore").splitlines()
+    reader = csv.reader(raw)
+    header = None
+    for row in reader:
+        if "Position" in row and "Name" in row and "Salary" in row:
+            header = row
+            break
+    if header is None:
+        raise ValueError("Could not locate the DraftKings player header.")
+
+    idx = {name: i for i, name in enumerate(header)}
+    required = ["Position", "Name", "Salary", "TeamAbbrev"]
+    for c in required:
+        if c not in idx:
+            raise ValueError(f"DraftKings file is missing {c}.")
+
+    rows = []
+    for row in reader:
+        if not row or len(row) <= max(idx.values()):
+            continue
+        name = row[idx["Name"]].strip()
+        if not name:
+            continue
+        try:
+            salary = int(float(row[idx["Salary"]]))
+        except Exception:
+            continue
+        rp = row[idx.get("Roster Position", idx["Position"])].strip() if ("Roster Position" in idx or "Position" in idx) else ""
+        pid = row[idx["ID"]].strip() if "ID" in idx else name
+        name_id = row[idx["Name + ID"]].strip() if "Name + ID" in idx else name
+        gi = row[idx["Game Info"]].strip() if "Game Info" in idx else ""
+        avg = 0.0
+        if "AvgPointsPerGame" in idx:
+            try:
+                avg = float(row[idx["AvgPointsPerGame"]] or 0)
+            except Exception:
+                avg = 0.0
+        rows.append({
+            "Position": row[idx["Position"]].strip(),
+            "Name": name,
+            "RawID": str(pid),
+            "Name + ID": name_id,
+            "Roster Position": rp,
+            "RawSalary": salary,
+            "Game Info": gi,
+            "Team": row[idx["TeamAbbrev"]].strip(),
+            "AvgPointsPerGame": avg,
+        })
+    raw_df = pd.DataFrame(rows)
+    if raw_df.empty:
+        raise ValueError("No Showdown players were found in the DraftKings file.")
+
+    # DK files vary: some expose CPT/FLEX as separate rows, others expose one row with CPT/FLEX eligibility.
+    # Collapse to one player while retaining the exact identifier for each roster position when possible.
+    collapsed = []
+    for (name, team), g in raw_df.groupby(["Name", "Team"], sort=False):
+        g = g.copy()
+        cpt_rows = g[g["Roster Position"].str.contains("CPT", case=False, na=False)]
+        flex_rows = g[g["Roster Position"].str.contains("FLEX", case=False, na=False)]
+
+        # If CPT-specific row has the larger salary, use it. FLEX base salary is the smallest observed salary.
+        flex_row = (flex_rows.sort_values("RawSalary").iloc[0] if not flex_rows.empty else g.sort_values("RawSalary").iloc[0])
+        cpt_row = (cpt_rows.sort_values("RawSalary", ascending=False).iloc[0] if not cpt_rows.empty else None)
+        flex_salary = int(g["RawSalary"].min())
+        cpt_salary = int(cpt_row["RawSalary"]) if cpt_row is not None and int(cpt_row["RawSalary"]) > flex_salary else int(round(flex_salary * 1.5))
+
+        collapsed.append({
+            "Position": str(flex_row["Position"]),
+            "Name": name,
+            "ID": str(flex_row["RawID"]),
+            "FLEX_ID": str(flex_row["RawID"]),
+            "FLEX_NameID": str(flex_row["Name + ID"]),
+            "CPT_ID": str(cpt_row["RawID"]) if cpt_row is not None else str(flex_row["RawID"]),
+            "CPT_NameID": str(cpt_row["Name + ID"]) if cpt_row is not None else str(flex_row["Name + ID"]),
+            "FlexSalary": flex_salary,
+            "CaptainSalary": cpt_salary,
+            "Game Info": str(flex_row["Game Info"]),
+            "Team": team,
+            "AvgPointsPerGame": float(flex_row["AvgPointsPerGame"]),
+        })
+    return pd.DataFrame(collapsed).reset_index(drop=True)
+
+
+
+def _dk_fantasy_points_from_stats(stats):
+    """DraftKings-style fantasy points from nflverse weekly player stats."""
+    def col(name):
+        return pd.to_numeric(stats[name], errors="coerce").fillna(0.0) if name in stats.columns else pd.Series(0.0, index=stats.index)
+    pts = (col("passing_yards") * 0.04 + col("passing_tds") * 4 - col("interceptions")
+           + col("rushing_yards") * 0.10 + col("rushing_tds") * 6
+           + col("receptions") * 1.0 + col("receiving_yards") * 0.10 + col("receiving_tds") * 6
+           - col("rushing_fumbles_lost") - col("receiving_fumbles_lost") - col("sack_fumbles_lost"))
+    # DK 300-yard passing and 100-yard rushing/receiving bonuses.
+    pts += (col("passing_yards") >= 300).astype(float) * 3
+    pts += (col("rushing_yards") >= 100).astype(float) * 3
+    pts += (col("receiving_yards") >= 100).astype(float) * 3
+    return pts
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _load_nflverse_projection_inputs(season):
+    import nflreadpy as nfl
+    cur = nfl.load_player_stats([int(season)], summary_level="week").to_pandas()
+    prev = nfl.load_player_stats([int(season)-1], summary_level="week").to_pandas()
+    return cur, prev
+
+def dfs_lab_projection_engine(dk):
+    """V1 independent baseline. Uses nflverse weekly production plus DK slate context.
+
+    The model deliberately shrinks small 2026 samples toward prior-season per-game
+    production and the DK slate's AvgPointsPerGame. DK Avg is a stabilizing prior,
+    not the final projection. No SaberSim values are used here.
+    """
+    out=dk.copy()
+    # Determine season from game info, with a safe current-year fallback.
+    season=2026
+    try:
+        import re
+        m=re.search(r"(20\\d{2})", " ".join(out["Game Info"].astype(str).tolist()))
+        if m: season=int(m.group(1))
+    except Exception: pass
+    out["DFS Lab Data"]="DK prior only"
+    out["DFS Lab Base Proj"]=pd.to_numeric(out.get("AvgPointsPerGame",0),errors="coerce").fillna(0.0)
+    try:
+        cur,prev=_load_nflverse_projection_inputs(season)
+        def summarize(x):
+            if x is None or x.empty: return pd.DataFrame(columns=["Name","FPPG","Games"])
+            x=x.copy(); x["_fp"]=_dk_fantasy_points_from_stats(x)
+            name_col=_first_existing(x.columns,["player_display_name","player_name","Name"])
+            if not name_col: return pd.DataFrame(columns=["Name","FPPG","Games"])
+            x["Name"]=x[name_col].astype(str).str.strip()
+            # Rows with actual football participation; avoids future schedule placeholders.
+            if "week" in x.columns: x=x[pd.to_numeric(x["week"],errors="coerce").notna()]
+            return x.groupby("Name",as_index=False).agg(FPPG=("_fp","mean"),Games=("_fp","size"))
+        cs=summarize(cur).rename(columns={"FPPG":"CurFPPG","Games":"CurGames"})
+        ps=summarize(prev).rename(columns={"FPPG":"PrevFPPG","Games":"PrevGames"})
+        out=out.merge(cs,on="Name",how="left").merge(ps,on="Name",how="left")
+        for c in ["CurFPPG","CurGames","PrevFPPG","PrevGames"]: out[c]=pd.to_numeric(out[c],errors="coerce").fillna(0.0)
+        dkavg=pd.to_numeric(out["AvgPointsPerGame"],errors="coerce").fillna(0.0)
+        # Early season: 2026 production matters, but one hot/cold game cannot own the model.
+        cur_w=np.minimum(out["CurGames"],4.0)*0.12
+        prev_w=np.where(out["PrevGames"]>0,0.32,0.0)
+        prior_w=np.maximum(0.20,1.0-cur_w-prev_w)
+        denom=cur_w+prev_w+prior_w
+        raw=(cur_w*out["CurFPPG"]+prev_w*out["PrevFPPG"]+prior_w*dkavg)/denom
+        # Salary is a weak slate-relative sanity prior, never the main projection.
+        sal=pd.to_numeric(out["FlexSalary"],errors="coerce").fillna(0.0)
+        sal_prior=np.maximum(0.5, sal/1000.0*2.05)
+        pos=out["Position"].astype(str).str.upper()
+        skill=~pos.isin(["K","PK","DST","D/ST"])
+        raw=np.where(skill,0.90*raw+0.10*sal_prior,raw)
+        out["DFS Lab Base Proj"]=np.maximum(0.0,raw).round(3)
+        out["DFS Lab Data"]=np.where(out["CurGames"]>0,"2026 + 2025 + DK prior",np.where(out["PrevGames"]>0,"2025 + DK prior","DK prior fallback"))
+    except Exception as e:
+        out["DFS Lab Data"]="DK prior fallback"
+        out.attrs["projection_warning"]=f"Live nflverse data could not load ({e}). DFS Lab used the DK slate prior for this run."
+    return out
+
+def apply_projection_overrides(df, override_map=None):
+    out=df.copy(); override_map=override_map or {}
+    out["Model Proj"]=pd.to_numeric(out.get("DFS Lab Proj",out.get("My Proj",0)),errors="coerce").fillna(0.0)
+    finals=[]; flags=[]
+    for _,r in out.iterrows():
+        val=override_map.get(str(r["ID"]),None)
+        if val is None or float(val)<0: finals.append(float(r["Model Proj"])); flags.append(False)
+        else: finals.append(float(val)); flags.append(True)
+    out["DFS Lab Proj"]=np.array(finals).round(3); out["Projection Override"]=flags
+    return out
+
+def prepare_showdown_pool(dk_file, ss_file=None):
+    """Create the Showdown pool. DFS Lab projections work with DK alone; SaberSim is optional comparison data."""
+    dk=load_showdown_dk_template(dk_file)
+    dk=dk.drop_duplicates(subset=["ID"],keep="first").drop_duplicates(subset=["Name","Team"],keep="first")
+    df=dfs_lab_projection_engine(dk)
+    df["SaberSim Proj"]=np.nan; df["My Own"]=0.0; df["CPT Own"]=0.0; df["CPT Own Estimated"]=True
+    if ss_file is not None:
+        ss_raw=pd.read_csv(ss_file)
+        name_col=_first_existing(ss_raw.columns,["Name","Player","Player Name"]); proj_col=_first_existing(ss_raw.columns,["My Proj","Projection","Proj"])
+        own_col=_first_existing(ss_raw.columns,["My Own","Ownership","Own","Projected Ownership"])
+        roster_col=_first_existing(ss_raw.columns,["Roster Position","Roster Pos","Slot","Lineup Position","Position Type"])
+        if name_col and proj_col:
+            x=ss_raw.copy(); x["Name"]=x[name_col].astype(str).str.strip(); x["_proj"]=pd.to_numeric(x[proj_col],errors="coerce").fillna(0.0)
+            x["_own"]=pd.to_numeric(x[own_col],errors="coerce").fillna(0.0) if own_col else 0.0
+            rows=[]
+            for name,g in x.groupby("Name",sort=False):
+                g=g.copy()
+                flex=None; cpt=None
+                if roster_col:
+                    slot=g[roster_col].astype(str).str.upper(); fg=g[slot.str.contains("FLEX",na=False)]; cg=g[slot.str.contains("CPT|CAPTAIN",regex=True,na=False)]
+                    if not fg.empty:flex=fg.iloc[0]
+                    if not cg.empty:cpt=cg.iloc[0]
+                if flex is None: flex=g.sort_values("_proj",ascending=True).iloc[0]
+                if cpt is None and len(g)>1: cpt=g.sort_values("_proj",ascending=False).iloc[0]
+                rows.append({"Name":name,"SaberSim Proj":float(flex["_proj"]),"My Own":float(flex["_own"]),"CPT Own":float(cpt["_own"]) if cpt is not None else max(.1,float(flex["_own"])*.18),"CPT Own Estimated":cpt is None})
+            ss=pd.DataFrame(rows).drop_duplicates("Name")
+            base_cols=[c for c in df.columns if c not in ["SaberSim Proj","My Own","CPT Own","CPT Own Estimated"]]
+            df=df[base_cols].merge(ss,on="Name",how="left")
+            for c in ["SaberSim Proj","My Own","CPT Own"]: df[c]=pd.to_numeric(df[c],errors="coerce").fillna(0.0)
+            df["CPT Own Estimated"]=df["CPT Own Estimated"].fillna(True).astype(bool)
+    # Compatibility: My Proj is now DFS Lab's independent baseline, not SaberSim.
+    df["My Proj"]=pd.to_numeric(df["DFS Lab Base Proj"],errors="coerce").fillna(0.0)
+    away=[];home=[];matchup=[]
+    for g in df["Game Info"]:
+        a,h,m=parse_matchup(g);away.append(a);home.append(h);matchup.append(m)
+    df["Away"]=away;df["Home"]=home;df["Matchup"]=matchup
+    teams=[t for t in df["Team"].dropna().unique().tolist() if t]
+    if len(teams)==2:
+        opp={teams[0]:teams[1],teams[1]:teams[0]};df["Opponent"]=df["Team"].map(opp).fillna("")
+    else: df["Opponent"]=np.where(df["Team"]==df["Away"],df["Home"],df["Away"])
+    pos=df["Position"].astype(str).str.upper();df["is_QB"]=pos.eq("QB");df["is_RB"]=pos.eq("RB");df["is_WR"]=pos.eq("WR");df["is_TE"]=pos.eq("TE");df["is_DST"]=pos.isin(["DST","D/ST"]);df["is_K"]=pos.isin(["K","PK"]);df["is_passcatcher"]=df["is_WR"]|df["is_TE"]
+    df["ActiveForBuild"]=(df["My Proj"]>0.01)&(df["FlexSalary"]>0)
+    return df.reset_index(drop=True)
+
+def showdown_aggression(field_size, payout_style):
+    aggr = contest_aggression(field_size, payout_style)
+    return min(1.0, aggr + 0.08)
+
+
+def showdown_script_bonus(row, script, script_team):
+    team = row["Team"]
+    opp = row["Opponent"]
+    same = team == script_team if script_team else False
+    bonus = 0.0
+    if script in ["Shootout", "Pass-heavy shootout"]:
+        if row["is_QB"]: bonus += 1.8
+        if row["is_passcatcher"]: bonus += 1.2
+        if row["is_RB"]: bonus += 0.35
+        if row["is_DST"]: bonus -= 1.1
+    elif script in ["Low-scoring game", "Defensive / field-goal battle", "Ground-and-pound"]:
+        if row["is_RB"]: bonus += 1.0
+        if row["is_K"]: bonus += 1.1
+        if row["is_DST"]: bonus += 1.2
+        if row["is_QB"] or row["is_passcatcher"]: bonus -= 0.25
+    elif script in ["Team dominates", "Team plays from ahead"]:
+        if same and row["is_RB"]: bonus += 1.4
+        if same and row["is_DST"]: bonus += 1.3
+        if same and row["is_K"]: bonus += 0.8
+        if same and row["is_QB"]: bonus += 0.35
+        if (not same) and row["is_QB"]: bonus += 0.6
+        if (not same) and row["is_passcatcher"]: bonus += 0.7
+    elif script == "Team wins close":
+        if same: bonus += 0.35
+        if row["is_QB"] or row["is_passcatcher"] or row["is_RB"]: bonus += 0.25
+    elif script == "Team passing comeback":
+        if same and row["is_QB"]: bonus += 1.6
+        if same and row["is_passcatcher"]: bonus += 1.15
+        if same and row["is_RB"]: bonus -= 0.35
+        if (not same) and row["is_RB"]: bonus += 0.8
+        if (not same) and row["is_DST"]: bonus += 0.25
+    return bonus
+
+
+
+def infer_score_script(team_scores):
+    """Translate a predicted final score into a broad Showdown game environment."""
+    if not team_scores or len(team_scores) < 2:
+        return "Neutral", "", {"total": 0, "margin": 0, "winner": "", "loser": ""}
+    ordered = sorted(team_scores.items(), key=lambda kv: kv[1], reverse=True)
+    winner, win_pts = ordered[0]
+    loser, lose_pts = ordered[1]
+    total = float(win_pts + lose_pts)
+    margin = float(win_pts - lose_pts)
+    if total <= 41:
+        script = "Low-scoring game"
+    elif total >= 55 and margin <= 10:
+        script = "Pass-heavy shootout"
+    elif margin >= 17:
+        script = "Team dominates"
+    elif margin >= 8:
+        script = "Team plays from ahead"
+    else:
+        script = "Team wins close"
+    return script, winner, {"total": total, "margin": margin, "winner": winner, "loser": loser}
+
+
+def _scenario_intensity_scale(level):
+    return {"Conservative": 0.65, "Standard": 1.0, "Aggressive": 1.30}.get(level, 1.0)
+
+
+def score_projection_multiplier(row, team_scores, intensity="Standard"):
+    """Conservative, transparent heuristic for translating a predicted score into role-based projection movement.
+    It is intentionally bounded; the goal is to tilt a baseline projection, not replace a projection model.
+    """
+    if not team_scores or row["Team"] not in team_scores or row["Opponent"] not in team_scores:
+        return 1.0
+    team_pts = float(team_scores[row["Team"]])
+    opp_pts = float(team_scores[row["Opponent"]])
+    total = team_pts + opp_pts
+    margin = team_pts - opp_pts
+    scale = _scenario_intensity_scale(intensity)
+
+    # Baselines roughly represent an ordinary NFL scoring environment. Effects are kept modest.
+    team_env = np.clip((team_pts - 23.5) / 55.0, -0.12, 0.12)
+    total_env = np.clip((total - 47.0) / 85.0, -0.09, 0.09)
+    lead = np.clip(margin / 70.0, -0.12, 0.12)
+    trail = np.clip((-margin) / 70.0, -0.12, 0.12)
+
+    delta = 0.0
+    if row["is_QB"]:
+        delta += 0.75 * team_env + 0.75 * total_env + 0.45 * max(0.0, trail) - 0.20 * max(0.0, lead)
+    elif row["is_passcatcher"]:
+        delta += 0.75 * team_env + 0.90 * total_env + 0.65 * max(0.0, trail) - 0.18 * max(0.0, lead)
+    elif row["is_RB"]:
+        delta += 0.70 * team_env + 0.20 * total_env + 0.90 * max(0.0, lead) - 0.65 * max(0.0, trail)
+    elif row["is_K"]:
+        delta += 0.45 * team_env
+        if total <= 44: delta += 0.045
+        if 16 <= team_pts <= 29: delta += 0.030
+        if team_pts < 13: delta -= 0.070
+    elif row["is_DST"]:
+        # Defense is driven more by opponent suppression than own-team scoring.
+        delta += np.clip((20.5 - opp_pts) / 75.0, -0.13, 0.13)
+        if total <= 42: delta += 0.045
+        if margin >= 7: delta += 0.035
+
+    delta = float(np.clip(delta * scale, -0.20, 0.20))
+    return 1.0 + delta
+
+
+def named_script_projection_multiplier(row, script, script_team, intensity="Standard"):
+    """Small projection tilts for a user's football story. These stack with score-driven tilts."""
+    scale = _scenario_intensity_scale(intensity)
+    same = bool(script_team) and row["Team"] == script_team
+    d = 0.0
+    if script in ["Shootout", "Pass-heavy shootout"]:
+        if row["is_QB"]: d += 0.055
+        if row["is_passcatcher"]: d += 0.065
+        if row["is_RB"]: d += 0.010
+        if row["is_DST"]: d -= 0.065
+    elif script in ["Low-scoring game", "Defensive / field-goal battle"]:
+        if row["is_RB"]: d += 0.035
+        if row["is_K"]: d += 0.060
+        if row["is_DST"]: d += 0.075
+        if row["is_QB"] or row["is_passcatcher"]: d -= 0.035
+    elif script == "Ground-and-pound":
+        if row["is_RB"]: d += 0.070
+        if row["is_K"] or row["is_DST"]: d += 0.035
+        if row["is_QB"] or row["is_passcatcher"]: d -= 0.025
+    elif script in ["Team dominates", "Team plays from ahead"]:
+        if same and row["is_RB"]: d += 0.070
+        if same and row["is_DST"]: d += 0.070
+        if same and row["is_K"]: d += 0.035
+        if (not same) and row["is_QB"]: d += 0.035
+        if (not same) and row["is_passcatcher"]: d += 0.045
+        if same and row["is_passcatcher"] and script == "Team dominates": d -= 0.015
+    elif script == "Team wins close":
+        if same: d += 0.018
+        if row["is_QB"] or row["is_passcatcher"] or row["is_RB"]: d += 0.012
+    elif script == "Team passing comeback":
+        if same and row["is_QB"]: d += 0.075
+        if same and row["is_passcatcher"]: d += 0.065
+        if same and row["is_RB"]: d -= 0.040
+        if (not same) and row["is_RB"]: d += 0.045
+    return 1.0 + float(np.clip(d * scale, -0.12, 0.12))
+
+
+def apply_showdown_scenario(df, script, script_team, use_score=False, team_scores=None, intensity="Standard"):
+    out = df.copy()
+    multipliers = []
+    for _, r in out.iterrows():
+        m = named_script_projection_multiplier(r, script, script_team, intensity)
+        if use_score:
+            m *= score_projection_multiplier(r, team_scores or {}, intensity)
+        multipliers.append(float(np.clip(m, 0.75, 1.25)))
+    out["Scenario Mult"] = multipliers
+    out["Script Proj"] = (out["My Proj"].astype(float) * out["Scenario Mult"]).round(3)
+    out["Proj Change %"] = ((out["Scenario Mult"] - 1.0) * 100).round(1)
+    return out
+
+
+def script_build_adjustments(base_weights, script, script_team, use_score=False, team_scores=None, auto_shape=True):
+    """Tilt only the construction shapes the user has allowed.
+    4-2 and 5-1 are orientation-free; directional scripts choose the heavy team later.
+    """
+    allowed={k: float(base_weights.get(k,0)) > 0 for k in ["3-3","4-2","5-1"]}
+    weights={k:(1.0 if allowed[k] else 0.0) for k in allowed}
+    if not auto_shape:
+        return weights, None
+
+    margin=0.0; total=0.0
+    if use_score and team_scores and len(team_scores)>=2:
+        vals=sorted([float(v) for v in team_scores.values()], reverse=True)
+        margin=vals[0]-vals[1]; total=sum(vals)
+
+    if script in ["Shootout","Pass-heavy shootout"] or total>=55:
+        desired={"3-3":62,"4-2":34,"5-1":4}; corr={"qb_pc":2,"wrte_qb":90,"rb_ctrl":30}
+    elif script in ["Low-scoring game","Defensive / field-goal battle","Ground-and-pound"] or (use_score and total and total<=41):
+        desired={"3-3":46,"4-2":46,"5-1":8}; corr={"qb_pc":1,"wrte_qb":70,"rb_ctrl":75}
+    elif script=="Team dominates" or margin>=17:
+        desired={"3-3":18,"4-2":56,"5-1":26}; corr={"qb_pc":1,"wrte_qb":70,"rb_ctrl":80}
+    elif script=="Team plays from ahead" or margin>=8:
+        desired={"3-3":34,"4-2":54,"5-1":12}; corr={"qb_pc":1,"wrte_qb":75,"rb_ctrl":70}
+    elif script=="Team passing comeback":
+        desired={"3-3":56,"4-2":40,"5-1":4}; corr={"qb_pc":2,"wrte_qb":90,"rb_ctrl":40}
+    elif script=="Team wins close" or (use_score and margin<=6):
+        desired={"3-3":62,"4-2":34,"5-1":4}; corr={"qb_pc":2,"wrte_qb":85,"rb_ctrl":50}
+    else:
+        desired={"3-3":50,"4-2":45,"5-1":5}; corr=None
+    weights={k:(desired[k] if allowed[k] else 0.0) for k in desired}
+    if sum(weights.values())<=0: weights={"3-3":1.0,"4-2":0.0,"5-1":0.0}
+    return weights,corr
+
+CONTEXT_FACTOR_WEIGHTS = {
+    "Defense": 0.045,
+    "Usage": 0.050,
+    "Home/Rest": 0.020,
+    "Travel": 0.015,
+    "Time/Split": 0.010,
+}
+CONTEXT_RATING_LABELS = {
+    -3: "Strong negative", -2: "Negative", -1: "Slight negative", 0: "Neutral",
+    1: "Slight positive", 2: "Positive", 3: "Strong positive",
+}
+
+def apply_context_engine(df, context_map=None, strength="Standard"):
+    """Explainable context layer. Ratings are deliberately bounded and confidence-shrunk.
+    This is the V5.2 foundation for future automated defensive/usage/travel/split feeds.
+    """
+    out = df.copy()
+    context_map = context_map or {}
+    strength_scale = {"Conservative":0.65, "Standard":1.0, "Aggressive":1.25}.get(strength,1.0)
+    adjs=[]; reasons=[]
+    for _, r in out.iterrows():
+        cfg=context_map.get(str(r["ID"]),{})
+        confidence=float(cfg.get("Confidence",50))/100.0
+        total=0.0; parts=[]
+        for key,w in CONTEXT_FACTOR_WEIGHTS.items():
+            rating=int(cfg.get(key,0) or 0)
+            delta=rating*w*confidence*strength_scale
+            total += delta
+            if rating:
+                parts.append(f"{key}: {CONTEXT_RATING_LABELS.get(rating,str(rating))} ({delta*100:+.1f}%)")
+        # Prevent a collection of small/contextual splits from overwhelming the baseline model.
+        total=float(np.clip(total,-0.18,0.18))
+        adjs.append(total)
+        note=str(cfg.get("Note","") or "").strip()
+        reason=" • ".join(parts) if parts else "No context adjustment"
+        if note: reason += f" • {note}"
+        reasons.append(reason)
+    out["Context Adj %"]=(np.array(adjs)*100).round(1)
+    base_col="Script Proj" if "Script Proj" in out.columns else "My Proj"
+    out["DFS Lab Proj"]=(out[base_col].astype(float)*(1.0+np.array(adjs))).round(3)
+    out["Context Why"]=reasons
+    return out
+
+def showdown_base_objective(df, aggr, strategy_map, script, script_team, exposure_state=None, cpt_exposure_state=None, built_count=0):
+    proj_col = "DFS Lab Proj" if "DFS Lab Proj" in df.columns else ("Script Proj" if "Script Proj" in df.columns else "My Proj")
+    proj = df[proj_col].to_numpy(float)
+    own = np.clip(df["My Own"].to_numpy(float), 0.1, None)
+    objective = proj.copy()
+    leverage = np.log((proj + 2.0) / (own + 2.0))
+    objective += (0.65 + 2.0 * aggr) * leverage
+
+    for i, r in df.iterrows():
+        strat = strategy_map.get(str(r["ID"]), {})
+        objective[i] += PRIORITY_BONUS.get(strat.get("Priority", "Neutral"), 0.0)
+        objective[i] += showdown_script_bonus(r, script, script_team)
+        if exposure_state is not None and built_count > 0:
+            current = 100.0 * exposure_state.get(str(r["ID"]), 0) / built_count
+            mn = float(strat.get("Min Exposure", 0)); mx = float(strat.get("Max Exposure", 100))
+            if current < mn: objective[i] += min(5.5, 0.11 * (mn-current))
+            if current > mx - 5: objective[i] -= min(5.0, 0.12 * max(0, current-(mx-5)))
+    return objective
+
+
+def _add_constraint(rows, lows, highs, coeff, low, high):
+    rows.append(coeff); lows.append(low); highs.append(high)
+
+
+def solve_showdown_one(
+    df, aggr, rng, strategy_map, min_salary, max_salary, construction_target,
+    script, script_team, cpt_qb_passcatchers, wrte_cpt_qb_pair_pct, rb_cpt_dst_k_pct,
+    max_k, max_dst, min_unique, previous_lineups,
+    exposure_state=None, cpt_exposure_state=None, built_count=0, noise_scale=0.18,
+    relationship_rules=None, forced_overall_ids=None, forced_cpt_ids=None
+):
+    n = len(df); s = len(SHOWDOWN_SLOTS); total_vars = n*s
+    c = np.zeros(total_vars); lb = np.zeros(total_vars); ub = np.ones(total_vars); integrality = np.ones(total_vars)
+    active = df["ActiveForBuild"].to_numpy(bool)
+    base = showdown_base_objective(df, aggr, strategy_map, script, script_team, exposure_state, cpt_exposure_state, built_count)
+    noise = np.exp(rng.normal(0, noise_scale, size=n))
+
+    def vidx(i,j): return i*s+j
+
+    # Objective and bounds. Captain objective includes 1.5 scoring plus captain-specific leverage.
+    for i, r in df.iterrows():
+        strat = strategy_map.get(str(r["ID"]), {})
+        excluded = bool(strat.get("Exclude", False)) or strat.get("Priority") == "Exclude"
+        cpt_ok = bool(strat.get("CPT Eligible", True)) and not excluded
+        for j, slot in enumerate(SHOWDOWN_SLOTS):
+            if not active[i] or excluded:
+                ub[vidx(i,j)] = 0
+                continue
+            if slot == "CPT" and not cpt_ok:
+                ub[vidx(i,j)] = 0
+            if slot == "CPT":
+                cpt_own = max(float(r["CPT Own"]), 0.1)
+                cpt_proj = float(r["DFS Lab Proj"] if "DFS Lab Proj" in r.index else (r["Script Proj"] if "Script Proj" in r.index else r["My Proj"]))
+                cpt_lev = math.log((1.5*cpt_proj+2)/(cpt_own+1.5))
+                val = 1.5*base[i] + (0.5 + 1.5*aggr)*cpt_lev
+                # Position priors are soft, never hard rules.
+                if r["is_WR"]: val += 0.55
+                if r["is_TE"]: val += 0.25
+                if r["is_QB"]: val += 0.10
+                if r["is_K"] or r["is_DST"]: val -= 0.35
+                # Captain exposure steering.
+                if cpt_exposure_state is not None and built_count > 0:
+                    curr = 100*cpt_exposure_state.get(str(r["ID"]),0)/built_count
+                    mn = float(strat.get("CPT Min",0)); mx = float(strat.get("CPT Max",100))
+                    if curr < mn: val += min(6.0, .13*(mn-curr))
+                    if curr > mx-4: val -= min(6.0, .14*max(0,curr-(mx-4)))
+                c[vidx(i,j)] = -val*noise[i]
+            else:
+                c[vidx(i,j)] = -base[i]*noise[i]
+
+    rows=[]; lows=[]; highs=[]
+    # One player per slot.
+    for j in range(s):
+        _add_constraint(rows,lows,highs,{vidx(i,j):1.0 for i in range(n)},1,1)
+    # Player at most once. Group by DraftKings ID as a second safety net in case
+    # an upstream file ever contains duplicate player rows.
+    for pid, idxs in df.groupby(df["ID"].astype(str)).groups.items():
+        coeff={}
+        for i in idxs:
+            for j in range(s):
+                coeff[vidx(int(i),j)] = 1.0
+        _add_constraint(rows,lows,highs,coeff,0,1)
+
+    # Overall locks and captain locks.
+    for i,r in df.iterrows():
+        strat = strategy_map.get(str(r["ID"]), {})
+        if bool(strat.get("CPT Lock", False)) and not bool(strat.get("Exclude", False)):
+            _add_constraint(rows,lows,highs,{vidx(i,0):1.0},1,1)
+        elif bool(strat.get("Lock", False)) and not bool(strat.get("Exclude", False)):
+            _add_constraint(rows,lows,highs,{vidx(i,j):1.0 for j in range(s)},1,1)
+
+    # Portfolio minimum exposure enforcement. When a target becomes mathematically
+    # due, the player is forced into the current solve so minimums are real targets,
+    # not just preference boosts.
+    forced_overall_ids=set(forced_overall_ids or [])
+    forced_cpt_ids=set(forced_cpt_ids or [])
+    for i,r in df.iterrows():
+        pid=str(r["ID"])
+        if pid in forced_cpt_ids:
+            _add_constraint(rows,lows,highs,{vidx(i,0):1.0},1,1)
+        elif pid in forced_overall_ids:
+            _add_constraint(rows,lows,highs,{vidx(i,j):1.0 for j in range(s)},1,1)
+
+    # Relationship Rules Engine. A/B selectors can represent a player or a
+    # team-position group. Hard rules are translated directly into MILP constraints.
+    def selected_coeff(indices):
+        out={}
+        for ii in indices:
+            for jj in range(s): out[vidx(int(ii),jj)]=1.0
+        return out
+    def resolve_side(side):
+        if not side: return []
+        if side.get("kind")=="Player":
+            return df.index[df["ID"].astype(str).eq(str(side.get("id","")))].tolist()
+        team=side.get("team","Any"); pos=side.get("position","Any")
+        mask=df["ActiveForBuild"].copy()
+        if team!="Any": mask &= df["Team"].eq(team)
+        if pos!="Any": mask &= df["Position"].eq(pos)
+        return df.index[mask].tolist()
+    for rule in (relationship_rules or []):
+        if not rule.get("enabled",True): continue
+        aidx=resolve_side(rule.get("a")); bidx=resolve_side(rule.get("b"))
+        if not aidx or not bidx: continue
+        rtype=rule.get("rule","Never Together")
+        if rtype=="Never Together":
+            # Pairwise prevents any selected A from appearing with any selected B.
+            for ai in aidx:
+                for bi in bidx:
+                    if ai==bi: continue
+                    coeff={}
+                    for jj in range(s):
+                        coeff[vidx(int(ai),jj)]=coeff.get(vidx(int(ai),jj),0)+1
+                        coeff[vidx(int(bi),jj)]=coeff.get(vidx(int(bi),jj),0)+1
+                    _add_constraint(rows,lows,highs,coeff,0,1)
+        elif rtype=="Require B when A used":
+            bcoeff=selected_coeff(bidx)
+            for ai in aidx:
+                coeff=dict(bcoeff)
+                for jj in range(s): coeff[vidx(int(ai),jj)]=coeff.get(vidx(int(ai),jj),0)-1
+                _add_constraint(rows,lows,highs,coeff,0,np.inf)
+
+    # Salary by slot.
+    salary_coeff={}
+    for i,r in df.iterrows():
+        salary_coeff[vidx(i,0)] = float(r["CaptainSalary"])
+        for j in range(1,s): salary_coeff[vidx(i,j)] = float(r["FlexSalary"])
+    _add_constraint(rows,lows,highs,salary_coeff,float(min_salary),float(max_salary))
+
+    # At least one from each team and optional exact construction.
+    teams = [t for t in df["Team"].dropna().unique().tolist() if t]
+    if len(teams) >= 2:
+        for t in teams[:2]:
+            coeff={}
+            for i in df.index[df["Team"].eq(t)]:
+                for j in range(s): coeff[vidx(i,j)] = 1.0
+            _add_constraint(rows,lows,highs,coeff,1,5)
+        if construction_target:
+            team0, count0 = construction_target
+            coeff={}
+            for i in df.index[df["Team"].eq(team0)]:
+                for j in range(s): coeff[vidx(i,j)] = 1.0
+            _add_constraint(rows,lows,highs,coeff,count0,count0)
+
+    # Position caps.
+    for mask,maxn in [(df["is_K"],max_k),(df["is_DST"],max_dst)]:
+        coeff={}
+        for i in df.index[mask]:
+            for j in range(s): coeff[vidx(i,j)] = 1.0
+        if coeff: _add_constraint(rows,lows,highs,coeff,0,float(maxn))
+
+    # Captain-specific correlation rules. Use randomized enforcement for percentage-based rules.
+    for cpt in df.index[df["ActiveForBuild"]]:
+        r=df.loc[cpt]
+        # QB captain -> require same-team pass catchers.
+        if r["is_QB"] and cpt_qb_passcatchers > 0:
+            pcs=df.index[df["ActiveForBuild"] & df["Team"].eq(r["Team"]) & df["is_passcatcher"]].tolist()
+            coeff={}
+            for i in pcs:
+                for j in range(1,s): coeff[vidx(i,j)] = coeff.get(vidx(i,j),0)+1
+            coeff[vidx(cpt,0)] = coeff.get(vidx(cpt,0),0)-float(cpt_qb_passcatchers)
+            _add_constraint(rows,lows,highs,coeff,0,np.inf)
+
+        # WR/TE captain -> pair same-team QB in chosen percentage of solves.
+        if r["is_passcatcher"] and rng.random() < wrte_cpt_qb_pair_pct/100.0:
+            qbs=df.index[df["ActiveForBuild"] & df["Team"].eq(r["Team"]) & df["is_QB"]].tolist()
+            if qbs:
+                coeff={}
+                for q in qbs:
+                    for j in range(1,s): coeff[vidx(q,j)] = coeff.get(vidx(q,j),0)+1
+                coeff[vidx(cpt,0)] = coeff.get(vidx(cpt,0),0)-1
+                _add_constraint(rows,lows,highs,coeff,0,np.inf)
+
+        # RB captain -> same team DST or K in chosen percentage of solves.
+        if r["is_RB"] and rng.random() < rb_cpt_dst_k_pct/100.0:
+            partners=df.index[df["ActiveForBuild"] & df["Team"].eq(r["Team"]) & (df["is_DST"]|df["is_K"])].tolist()
+            if partners:
+                coeff={}
+                for p in partners:
+                    for j in range(1,s): coeff[vidx(p,j)] = coeff.get(vidx(p,j),0)+1
+                coeff[vidx(cpt,0)] = coeff.get(vidx(cpt,0),0)-1
+                _add_constraint(rows,lows,highs,coeff,0,np.inf)
+
+    # Portfolio uniqueness relative to previously accepted lineups.
+    if min_unique > 0:
+        for prev in previous_lineups:
+            coeff={}
+            for i in prev:
+                for j in range(s): coeff[vidx(i,j)] = 1.0
+            _add_constraint(rows,lows,highs,coeff,0,6-min_unique)
+
+    A=lil_matrix((len(rows),total_vars),dtype=float)
+    for rr,coeff in enumerate(rows):
+        for col,val in coeff.items(): A[rr,col]=val
+    result=milp(c=c, integrality=integrality, bounds=Bounds(lb,ub),
+                constraints=LinearConstraint(A.tocsr(),np.array(lows),np.array(highs)),
+                options={"time_limit":8.0})
+    if not result.success or result.x is None: return None
+    chosen=[]
+    for j,slot in enumerate(SHOWDOWN_SLOTS):
+        vals=[(result.x[vidx(i,j)],i) for i in range(n)]
+        _,i=max(vals); chosen.append((slot,int(i)))
+    return chosen
+
+
+def showdown_lineup_details(df, chosen, strategy_map, script, script_team):
+    slot_map={slot:i for slot,i in chosen}
+    idxs=[i for _,i in chosen]
+    cpt_i=slot_map["CPT"]
+    cpt=df.loc[cpt_i]
+    flex_idxs=[i for slot,i in chosen if slot!="CPT"]
+    p=df.loc[idxs]
+    proj_col = "Script Proj" if "Script Proj" in df.columns else "My Proj"
+    projection=1.5*float(cpt[proj_col])+float(df.loc[flex_idxs,proj_col].sum())
+    base_projection=1.5*float(cpt["My Proj"])+float(df.loc[flex_idxs,"My Proj"].sum())
+    salary=int(cpt["CaptainSalary"])+int(df.loc[flex_idxs,"FlexSalary"].sum())
+    total_own=float(p["My Own"].sum())
+
+    # Popularity / duplication proxy: log joint ownership + salary usage. Relative ranking is used later.
+    cpt_prob=max(float(cpt["CPT Own"]),0.1)/100.0
+    flex_probs=[max(float(df.loc[i,"My Own"]),0.1)/100.0 for i in flex_idxs]
+    log_pop=math.log(cpt_prob)+sum(math.log(x) for x in flex_probs)
+    salary_left=50000-salary
+    dup_raw=log_pop - 0.00022*salary_left
+
+    corr=0.0; notes=[]
+    cpt_team=cpt["Team"]
+    if cpt["is_QB"]:
+        n_pc=int(((p["Team"]==cpt_team)&p["is_passcatcher"]).sum())
+        corr += 1.7*min(n_pc,3); notes.append(f"QB CPT + {n_pc} pass catcher(s)")
+    elif cpt["is_passcatcher"]:
+        has_qb=bool(((p["Team"]==cpt_team)&p["is_QB"]).any())
+        corr += 2.0 if has_qb else 0.4
+        notes.append("CPT paired with QB" if has_qb else "WR/TE CPT without QB leverage")
+    elif cpt["is_RB"]:
+        has_control=bool(((p["Team"]==cpt_team)&(p["is_DST"]|p["is_K"])).any())
+        corr += 1.4 if has_control else 0.5
+        if has_control: notes.append("RB CPT + team control piece")
+    if script_team:
+        script_count=int((p["Team"]==script_team).sum())
+        corr += 0.25*script_count
+    if salary_left>=500: corr += min(1.2,salary_left/2500)
+
+    fit=0.0
+    for i in idxs:
+        pr=strategy_map.get(str(df.loc[i,"ID"]),{}).get("Priority","Neutral")
+        if pr=="Core": fit+=2.2
+        elif pr=="Like": fit+=1.0
+        elif pr=="Fade": fit-=1.3
+    cpt_pr=strategy_map.get(str(cpt["ID"]),{}).get("Priority","Neutral")
+    if cpt_pr in ["Core","Like"]: fit += 0.8
+
+    teams=p["Team"].value_counts().to_dict()
+    construction="-".join(str(v) for v in sorted(teams.values(), reverse=True)) if teams else ""
+    story=f"{script}"
+    if script_team: story += f" • {script_team}"
+    story += f" • {cpt['Name']} CPT • {construction}"
+
+    return {
+        "Projection":round(projection,2),"Base Projection":round(base_projection,2),"Scenario Delta":round(projection-base_projection,2),"Salary":salary,"Salary Left":salary_left,
+        "Total Own":round(total_own,1),"CPT Own":round(float(cpt["CPT Own"]),1),
+        "Correlation Raw":round(corr,2),"User Fit Raw":round(fit,2),
+        "Dup Raw":dup_raw,"Captain":cpt["Name"],"Captain Pos":cpt["Position"],
+        "Construction":construction,"Story":story,"Strategy Notes":"; ".join(notes) if notes else "Game-script build"
+    }
+
+
+def add_showdown_ratings(out, aggr):
+    if out.empty: return out
+    proj=out["Projection"].rank(pct=True)
+    captain=(out["Projection"] - 0.5*out["Salary Left"]/1000).rank(pct=True)
+    corr=out["Correlation Raw"].rank(pct=True)
+    lev=(-out["Total Own"]).rank(pct=True)
+    dup=(-out["Dup Raw"]).rank(pct=True)  # lower popularity proxy = better
+    fit=out["User Fit Raw"].rank(pct=True)
+    w_proj=0.34-0.05*aggr; w_cpt=.18; w_corr=.20; w_lev=.11+.04*aggr; w_dup=.10+.05*aggr; w_fit=.07
+    comp=(w_proj*proj+w_cpt*captain+w_corr*corr+w_lev*lev+w_dup*dup+w_fit*fit)/(w_proj+w_cpt+w_corr+w_lev+w_dup+w_fit)
+    rel=comp.rank(pct=True,method="average")
+    def grade(p):
+        if p>=.95:return "A+"
+        if p>=.85:return "A"
+        if p>=.70:return "A-"
+        if p>=.50:return "B+"
+        if p>=.30:return "B"
+        if p>=.15:return "B-"
+        if p>=.05:return "C+"
+        return "C"
+    out["Rating Score"]=(68+31*rel).round(1); out["Rating"]=[grade(x) for x in rel]
+    out["Projection Grade"]=[percentile_label(x,out["Projection"]) for x in out["Projection"]]
+    out["Captain Grade"]=[percentile_label(x,out["Projection"]-0.5*out["Salary Left"]/1000) for x in out["Projection"]-0.5*out["Salary Left"]/1000]
+    out["Correlation Grade"]=[percentile_label(x,out["Correlation Raw"]) for x in out["Correlation Raw"]]
+    out["Leverage Grade"]=[percentile_label(-x,-out["Total Own"]) for x in out["Total Own"]]
+    out["Duplication Grade"]=[percentile_label(-x,-out["Dup Raw"]) for x in out["Dup Raw"]]
+    q1=out["Dup Raw"].quantile(.33); q2=out["Dup Raw"].quantile(.67)
+    out["Dup Risk"]=["Low" if x<=q1 else "Medium" if x<=q2 else "High" for x in out["Dup Raw"]]
+    return out
+
+
+def choose_construction_target(rng, teams, weights, script, script_team):
+    # 4-2 means four players from either team; 5-1 means five from either team.
+    if len(teams)!=2: return None
+    labels=["3-3","4-2","5-1"]
+    probs=np.array([max(0,float(weights.get(k,0))) for k in labels],dtype=float)
+    if probs.sum()<=0: probs=np.array([1,0,0],dtype=float)
+    probs=probs/probs.sum()
+    label=rng.choice(labels,p=probs)
+    a,b=map(int,label.split("-"))
+    if a==b: return (teams[0],a)
+    directional=script in ["Team dominates","Team plays from ahead","Team wins close"] and script_team in teams
+    heavy_team=script_team if directional else (teams[0] if rng.random()<0.5 else teams[1])
+    return (heavy_team,max(a,b))
+
+def generate_showdown_lineups(df, field_size, payout_style, count, attempts, min_salary, max_salary,
+                              construction_weights, script, script_team, strategy_map,
+                              cpt_qb_passcatchers, wrte_cpt_qb_pair_pct, rb_cpt_dst_k_pct,
+                              max_k, max_dst, min_unique, seed, relationship_rules=None):
+    aggr=showdown_aggression(field_size,payout_style); rng=np.random.default_rng(seed)
+    teams=[t for t in df["Team"].dropna().unique().tolist() if t]
+    rows=[]; exposure=defaultdict(int); cpt_exp=defaultdict(int); previous=[]; seen=set()
+    prog=st.progress(0,text="Building Showdown lineups...")
+    for attempt in range(attempts):
+        if len(rows)>=count: break
+        target=choose_construction_target(rng,teams,construction_weights,script,script_team)
+        # Exact minimum-exposure scheduling: only force a minimum when all remaining
+        # accepted lineups are needed to reach it. Existing objective steering tries
+        # to satisfy the target earlier and avoid a last-lineup pileup.
+        remaining=count-len(rows)
+        forced_overall=[]; forced_cpt=[]
+        for pid,strat in strategy_map.items():
+            need=max(0, int(math.ceil(float(strat.get("Min Exposure",0))*count/100.0))-exposure[pid])
+            cneed=max(0, int(math.ceil(float(strat.get("CPT Min",0))*count/100.0))-cpt_exp[pid])
+            if need>=remaining and need>0: forced_overall.append(pid)
+            if cneed>=remaining and cneed>0: forced_cpt.append(pid)
+        chosen=solve_showdown_one(df,aggr,rng,strategy_map,min_salary,max_salary,target,script,script_team,
+                                  cpt_qb_passcatchers,wrte_cpt_qb_pair_pct,rb_cpt_dst_k_pct,max_k,max_dst,
+                                  min_unique,previous,exposure,cpt_exp,len(rows),noise_scale=.14+.13*aggr,
+                                  relationship_rules=relationship_rules,forced_overall_ids=forced_overall,forced_cpt_ids=forced_cpt)
+        if not chosen: continue
+        ids=tuple(sorted(str(df.loc[i,"ID"]) for _,i in chosen))
+        cpt_id=str(df.loc[[i for slot,i in chosen if slot=="CPT"][0],"ID"])
+        key=(cpt_id,ids)
+        if key in seen: continue
+
+        # Exposure hard-ish caps.
+        reject=False
+        if len(rows)>=8:
+            for slot,i in chosen:
+                pid=str(df.loc[i,"ID"]); strat=strategy_map.get(pid,{})
+                overall=100*(exposure[pid]+1)/(len(rows)+1)
+                if overall>float(strat.get("Max Exposure",100))+3: reject=True; break
+                if slot=="CPT":
+                    cexp=100*(cpt_exp[pid]+1)/(len(rows)+1)
+                    if cexp>float(strat.get("CPT Max",100))+3: reject=True; break
+        if reject: continue
+        seen.add(key)
+        detail=showdown_lineup_details(df,chosen,strategy_map,script,script_team)
+        row=dict(detail)
+        for slot,i in chosen:
+            row[slot]=df.loc[i,"Name"]; row[slot+"_ID"]=str(df.loc[i,"ID"])
+            row[slot+"_NameID"] = df.loc[i,"CPT_NameID"] if slot=="CPT" else df.loc[i,"FLEX_NameID"]
+        rows.append(row); previous.append([i for _,i in chosen])
+        for slot,i in chosen:
+            pid=str(df.loc[i,"ID"]); exposure[pid]+=1
+            if slot=="CPT": cpt_exp[pid]+=1
+        if attempt%10==0: prog.progress(min(1.0,len(rows)/max(1,count)),text=f"Built {len(rows)} / {count}")
+    prog.empty()
+    out=pd.DataFrame(rows)
+    if out.empty:return out
+    out=add_showdown_ratings(out,aggr).sort_values(["Rating Score","Projection"],ascending=[False,False]).reset_index(drop=True)
+    out.insert(0,"Rank",np.arange(1,len(out)+1))
+    return out
+
+
+def showdown_exposure_table(df,result,strategy_map):
+    if result is None or result.empty:return pd.DataFrame()
+    total=defaultdict(int); cpt=defaultdict(int); n=len(result)
+    for _,r in result.iterrows():
+        cpt[r["CPT"]]+=1; total[r["CPT"]]+=1
+        for col in ["FLEX1","FLEX2","FLEX3","FLEX4","FLEX5"]: total[r[col]]+=1
+    rows=[]
+    for _,p in df.iterrows():
+        strat=strategy_map.get(str(p["ID"]),{})
+        rows.append({"ID":str(p["ID"]),"Name":p["Name"],"Pos":p["Position"],"Team":p["Team"],
+                     "Flex $":int(p["FlexSalary"]),"Proj":round(float(p["My Proj"]),2),"Proj Own":round(float(p["My Own"]),1),
+                     "CPT Own":round(float(p["CPT Own"]),1),"Actual %":round(100*total[p["Name"]]/n,1),
+                     "CPT Actual %":round(100*cpt[p["Name"]]/n,1),"Lineups":total[p["Name"]],
+                     "Min %":float(strat.get("Min Exposure",0)),"Max %":float(strat.get("Max Exposure",100)),
+                     "CPT Min %":float(strat.get("CPT Min",0)),"CPT Max %":float(strat.get("CPT Max",100))})
+    return pd.DataFrame(rows).sort_values(["Actual %","Proj"],ascending=[False,False]).reset_index(drop=True)
+
+
+def showdown_upload_csv(result):
+    cols=["CPT","FLEX1","FLEX2","FLEX3","FLEX4","FLEX5"]
+    rows=[]
+    for _,r in result.iterrows():
+        rows.append([r.get(c+"_NameID",r[c]) for c in cols])
+    return pd.DataFrame(rows,columns=["CPT","FLEX","FLEX","FLEX","FLEX","FLEX"]).to_csv(index=False)
+
+
+# -----------------------------
+# V4 Apple-style UI
+# -----------------------------
+st.markdown("""
+<style>
+:root{--ink:#111827;--muted:#6b7280;--line:rgba(17,24,39,.09);--surface:rgba(255,255,255,.82);--accent:#0071e3;--good:#15803d;--warn:#a16207;}
+html,body,[class*="css"]{font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","SF Pro Text","Segoe UI",sans-serif;}
+[data-testid="stAppViewContainer"]{background:radial-gradient(circle at 5% -10%,rgba(0,113,227,.08),transparent 28%),radial-gradient(circle at 95% 10%,rgba(99,102,241,.05),transparent 26%),#f5f5f7;}
+.block-container{max-width:1480px;padding-top:1.05rem;padding-bottom:3rem;}
+[data-testid="stSidebar"]{background:rgba(255,255,255,.95);border-right:1px solid var(--line);}
+[data-testid="stSidebar"] *{color:var(--ink)!important;}
+[data-testid="stSidebar"] [data-baseweb="select"]>div,[data-testid="stSidebar"] input{background:#fff!important;color:var(--ink)!important;border-color:rgba(17,24,39,.12)!important;border-radius:12px!important;}
+.apple-hero{background:linear-gradient(135deg,rgba(255,255,255,.94),rgba(255,255,255,.72));border:1px solid rgba(255,255,255,.85);border-radius:28px;padding:28px 30px;box-shadow:0 16px 50px rgba(17,24,39,.08);backdrop-filter:blur(20px);margin-bottom:16px;}
+.apple-eyebrow{font-size:.79rem;font-weight:800;color:var(--accent);text-transform:uppercase;letter-spacing:.09em;}.apple-title{font-size:2.3rem;line-height:1.03;font-weight:800;color:var(--ink);letter-spacing:-.05em;margin-top:5px;}.apple-sub{font-size:1rem;color:var(--muted);margin-top:8px;max-width:820px;}
+.pill{display:inline-block;padding:5px 10px;border-radius:999px;background:#eef6ff;color:#0066cc;font-size:.78rem;font-weight:750;margin-top:13px;}
+.card-title{color:var(--ink);font-size:1.08rem;font-weight:780;letter-spacing:-.02em;margin-top:5px;}.card-sub{color:var(--muted);font-size:.92rem;margin-bottom:10px;}
+[data-testid="stMetric"]{background:rgba(255,255,255,.75);border:1px solid rgba(17,24,39,.07);border-radius:18px;padding:12px 14px;box-shadow:0 7px 24px rgba(17,24,39,.04);}
+[data-testid="stDataFrame"]{border-radius:18px;overflow:hidden;border:1px solid rgba(17,24,39,.08);}
+.stButton>button{border-radius:13px;font-weight:750;padding:.65rem 1rem}.stButton>button[kind="primary"]{background:#0071e3;color:#fff;border:0;}
+button[data-baseweb="tab"]{font-weight:750;}
+hr{border-color:rgba(17,24,39,.07)!important;}
+
+/* V6.0.1 iPad sidebar fix.
+   IMPORTANT: let Streamlit own the sidebar transform/width so its native << button
+   can actually collapse it. The main canvas then expands into the released space. */
+[data-testid="stMain"], [data-testid="stMainBlockContainer"], .block-container{max-width:100%!important;width:100%!important;}
+section[data-testid="stSidebar"]{box-shadow:14px 0 38px rgba(0,0,0,.18);}
+section[data-testid="stSidebar"][aria-expanded="false"]{box-shadow:none!important;}
+</style>
+""",unsafe_allow_html=True)
 
 st.markdown("""
-<div class="hero">
-  <div class="hero-title">🏈 DFS Tournament Builder</div>
-  <div class="hero-sub">Build lineups around your football takes, then rate them by projection, correlation, leverage and fit.</div>
-  <div class="hero-chip">V2.6 • Custom strategy engine</div>
-</div>
+<style>
+/* V4.3 iPad readability + scenario engine */
+[data-testid="stSidebar"] {
+    background: #f5f5f7 !important;
+    border-right: 1px solid rgba(17,24,39,.08) !important;
+}
+[data-testid="stSidebar"] label,
+[data-testid="stSidebar"] label *,
+[data-testid="stSidebar"] h1,
+[data-testid="stSidebar"] h2,
+[data-testid="stSidebar"] h3,
+[data-testid="stSidebar"] p,
+[data-testid="stSidebar"] span,
+[data-testid="stSidebar"] div[data-testid="stMarkdownContainer"] * {
+    color: #111827 !important;
+    -webkit-text-fill-color: #111827 !important;
+}
+[data-testid="stSidebar"] [data-baseweb="select"] > div,
+[data-testid="stSidebar"] [data-baseweb="input"] > div,
+[data-testid="stSidebar"] input,
+[data-testid="stSidebar"] [role="combobox"] {
+    background: #ffffff !important;
+    color: #111827 !important;
+    -webkit-text-fill-color: #111827 !important;
+    border-color: rgba(17,24,39,.14) !important;
+}
+[data-testid="stSidebar"] [data-testid="stSlider"] * {
+    -webkit-text-fill-color: initial !important;
+}
+[data-testid="stSidebar"] [data-testid="stSlider"] [data-testid="stThumbValue"],
+[data-testid="stSidebar"] [data-testid="stSlider"] [data-testid="stTickBarMin"],
+[data-testid="stSidebar"] [data-testid="stSlider"] [data-testid="stTickBarMax"] {
+    color:#111827 !important;
+    -webkit-text-fill-color:#111827 !important;
+}
+
+[data-testid="stSidebar"] [data-testid="stWidgetLabel"],
+[data-testid="stSidebar"] [data-testid="stWidgetLabel"] *,
+[data-testid="stSidebar"] label,
+[data-testid="stSidebar"] label * {
+    opacity: 1 !important;
+    color:#374151 !important;
+    -webkit-text-fill-color:#374151 !important;
+    font-weight:600 !important;
+}
+
+/* Make segmented control choices readable on the light sidebar. */
+[data-testid="stSidebar"] [data-baseweb="button-group"] button,
+[data-testid="stSidebar"] [data-baseweb="button-group"] button * {
+    color:#111827 !important;
+    -webkit-text-fill-color:#111827 !important;
+}
+/* Do not force sidebar width on iPad. A fixed width prevents Streamlit's
+   collapse transform from taking effect in Safari. */
+</style>
 """, unsafe_allow_html=True)
 
+st.markdown("""
+<style>
+/* DFS Lab V5 — dark iPad control deck */
+:root{--v5-bg:#080d17;--v5-panel:#101827;--v5-line:rgba(148,163,184,.16);--v5-text:#f3f6fb;--v5-muted:#94a3b8;}
+[data-testid="stAppViewContainer"]{background:radial-gradient(circle at 8% 0%,rgba(47,129,247,.16),transparent 28%),radial-gradient(circle at 92% 8%,rgba(124,58,237,.10),transparent 25%),var(--v5-bg)!important;color:var(--v5-text)!important;}
+[data-testid="stHeader"]{background:transparent!important}.block-container{max-width:1480px;padding-top:1rem}
+.apple-hero{background:linear-gradient(135deg,rgba(20,30,48,.96),rgba(10,16,28,.94))!important;border:1px solid rgba(96,165,250,.20)!important;box-shadow:0 22px 65px rgba(0,0,0,.30)!important}
+.apple-title,.card-title,h1,h2,h3,h4{color:var(--v5-text)!important}.apple-sub,.card-sub,.muted{color:var(--v5-muted)!important}.pill{background:rgba(47,129,247,.15)!important;color:#8ec5ff!important}
+[data-testid="stMetric"]{background:linear-gradient(180deg,rgba(21,31,49,.94),rgba(14,22,36,.94))!important;border:1px solid var(--v5-line)!important;box-shadow:none!important}[data-testid="stMetricLabel"],[data-testid="stMetricValue"]{color:var(--v5-text)!important}
+.stButton>button[kind="primary"]{background:linear-gradient(90deg,#1769d2,#2f81f7)!important;box-shadow:0 8px 24px rgba(47,129,247,.22)}
+.lineup-card{background:linear-gradient(145deg,rgba(21,31,49,.98),rgba(13,21,34,.98));border:1px solid var(--v5-line);border-radius:18px;padding:16px 18px;margin:10px 0;box-shadow:0 12px 32px rgba(0,0,0,.18)}.lineup-rank{font-size:.78rem;font-weight:800;color:#8ec5ff}.lineup-rank span{background:rgba(47,129,247,.14);padding:3px 7px;border-radius:999px}.lineup-cpt{font-size:1.15rem;font-weight:800;color:#fff;margin-top:7px}.lineup-flex{font-size:.92rem;color:#cbd5e1;margin-top:5px}.lineup-meta{font-size:.80rem;color:#94a3b8;margin-top:9px}
+@media(max-width:800px){.apple-title{font-size:1.85rem!important}.apple-hero{padding:21px!important}.block-container{padding-left:.8rem!important;padding-right:.8rem!important}.lineup-card{padding:14px}}
+</style>
+""",unsafe_allow_html=True)
+
+st.markdown('''<div class="apple-hero"><div class="apple-eyebrow">DFS LAB</div><div class="apple-title">Classic + Showdown.</div><div class="apple-sub">One optimizer, two different strategy engines. Showdown adds Captain exposure, game scripts, construction control, correlation and duplication-aware ratings.</div><span class="pill">V6.0.1 • Projection Engine</span></div>''',unsafe_allow_html=True)
+
 with st.sidebar:
-    st.header("Contest")
-    preset = st.selectbox(
-        "Contest preset",
-        ["Small-field WTA", "Small-field single entry", "Medium-field GPP", "Large-field GPP", "Custom"]
-    )
+    st.markdown("### Contest")
+    mode=st.segmented_control("Mode",["Classic","Showdown"],default="Showdown")
+    preset=st.selectbox("Contest preset",["Large GPP","Small-field GPP","Single Entry","Winner Take All","Cash-ish"])
+    defaults={"Large GPP":(50000,"GPP / top-heavy"),"Small-field GPP":(500,"GPP / top-heavy"),"Single Entry":(300,"Flatter payouts"),"Winner Take All":(500,"Winner take all"),"Cash-ish":(100,"Flatter payouts")}
+    dfield,dpayout=defaults[preset]
+    field_size=st.number_input("Field size",min_value=2,value=int(dfield),step=1)
+    payout_style=st.selectbox("Payout",["GPP / top-heavy","Winner take all","Flatter payouts"],index=["GPP / top-heavy","Winner take all","Flatter payouts"].index(dpayout))
+    lineup_count=st.slider("Lineup pool",25,500,100,25)
+    with st.expander("Advanced"):
+        seed=st.number_input("Random seed",min_value=1,value=42,step=1)
+        st.caption("Change this only when you want a different randomized batch.")
 
-    preset_defaults = {
-        "Small-field WTA": (500, "Winner take all", 48000, 2),
-        "Small-field single entry": (1500, "GPP / top-heavy", 48000, 2),
-        "Medium-field GPP": (10000, "GPP / top-heavy", 47500, 2),
-        "Large-field GPP": (250000, "GPP / top-heavy", 46500, 2),
-        "Custom": (6500, "GPP / top-heavy", 47500, 2),
-    }
-    d_field, d_payout, d_salary, d_stack = preset_defaults[preset]
+st.markdown('<div class="card-title">Slate files</div><div class="card-sub">DraftKings is the only required file. DFS Lab can create its own baseline projection; SaberSim is now optional and used only as a comparison source.</div>',unsafe_allow_html=True)
+u1,u2=st.columns(2)
+with u1: dk_file=st.file_uploader("DraftKings salaries/template · required",type=["csv"],key=f"dk_{mode}")
+with u2: ss_file=st.file_uploader("SaberSim · optional comparison",type=["csv"],key=f"ss_{mode}")
 
-    field_size = st.number_input("Field size", min_value=2, value=int(d_field), step=1)
-    payout_style = st.selectbox(
-        "Payout style",
-        ["GPP / top-heavy", "Winner take all", "Flatter payouts"],
-        index=["GPP / top-heavy", "Winner take all", "Flatter payouts"].index(d_payout)
-    )
-    min_salary = st.slider("Minimum salary", 44000, 50000, int(d_salary), 100)
-    qb_stack = st.selectbox("QB pass catchers", [1, 2], index=1 if d_stack == 2 else 0)
-    bringback_mode = st.selectbox("Opponent bring-back", ["Optional", "Required", "None"])
-    lineup_count = st.slider("Lineups to generate", 25, 500, 100, 25)
-    seed = st.number_input("Random seed", min_value=1, value=42, step=1)
+if not dk_file:
+    st.info("Upload the DraftKings slate to open DFS Lab.")
+    st.stop()
+if mode=="Classic" and not ss_file:
+    st.info("DFS Lab-only projections are enabled for Showdown first. Classic still needs the projection file in this V6 test build.")
+    st.stop()
 
-st.markdown("## 📥 Slate data")
-st.caption("Upload this week’s DraftKings salaries and SaberSim projection/ownership files.")
-c1, c2 = st.columns(2)
-with c1:
-    dk_file = st.file_uploader("DraftKings salary CSV", type=["csv"], key="dk")
-with c2:
-    ss_file = st.file_uploader("SaberSim projections + ownership CSV", type=["csv"], key="ss")
-
-if dk_file and ss_file:
+if mode=="Classic":
+    # Preserve the proven V3 Classic engine with a compact V4 shell.
     try:
-        df = prepare_player_pool(dk_file, ss_file)
-
-        st.markdown("## 🧩 Stack Builder")
-        st.caption("Choose the teams you want to build around and let the optimizer create correlated combinations.")
-        teams = sorted(df["Team"].dropna().unique().tolist())
-        preferred_stack_teams = st.multiselect(
-            "Preferred QB stack teams",
-            teams,
-            help="If you select teams here, generated lineups will use a QB from one of these teams."
-        )
-
-        st.markdown("### Team priorities")
-        st.caption("Push entire offenses up or down without locking every individual player.")
-        team_priority_df = pd.DataFrame({
-            "Team": teams,
-            "Priority": ["Neutral"] * len(teams),
-        })
-        if "team_strategy_master" not in st.session_state:
-            st.session_state["team_strategy_master"] = {}
-        for idx, r in team_priority_df.iterrows():
-            team_priority_df.at[idx, "Priority"] = st.session_state["team_strategy_master"].get(r["Team"], "Neutral")
-
-        team_priority_edit = st.data_editor(
-            team_priority_df,
-            hide_index=True,
-            use_container_width=True,
-            disabled=["Team"],
-            column_config={
-                "Priority": st.column_config.SelectboxColumn(
-                    "Priority",
-                    options=["Core", "Like", "Neutral", "Fade", "Exclude"]
-                )
-            },
-            key="team_priority_editor",
-        )
-        for _, r in team_priority_edit.iterrows():
-            st.session_state["team_strategy_master"][r["Team"]] = r["Priority"]
-        team_strategy_map = st.session_state["team_strategy_master"]
-
-        st.markdown("### Conditional rules")
-        st.caption("Tell the optimizer which lineup combinations should never happen.")
-        no_dst_from_qb_game = st.checkbox(
-            "If I stack a game, do not use either defense from that game",
-            value=True,
-            help="Example: Herbert + LAC pass catchers means no Chargers DST and no Cardinals DST."
-        )
-        no_offense_vs_dst = st.checkbox(
-            "Do not use offensive players against my selected DST",
-            value=False,
-            help="Stronger rule. If Jets DST is used, no Titans offensive player can appear."
-        )
-
-        st.markdown("## 👤 Player Pool")
-        st.caption("Use the dedicated Lock / Exclude checkboxes, plus Core / Like / Fade and exposure targets to shape your pool.")
-        st.caption("Lock = must use. Core/Like increases priority. Fade reduces priority. Exclude removes the player.")
-
-        f1, f2 = st.columns([1, 1])
-        with f1:
-            team_filter = st.multiselect("Filter teams", teams)
-        with f2:
-            pos_filter = st.multiselect("Filter positions", ["QB", "RB", "WR", "TE", "DST"])
-
-        view = df.copy()
-        if team_filter:
-            view = view[view["Team"].isin(team_filter)]
-        if pos_filter:
-            view = view[view["Position"].isin(pos_filter)]
-
-        base_strategy = pd.DataFrame({
-            "ID": view["ID"].astype(str),
-            "Name": view["Name"],
-            "Pos": view["Position"],
-            "Team": view["Team"],
-            "Salary": view["Salary"],
-            "Proj": view["My Proj"].round(2),
-            "Own": view["My Own"].round(1),
-            "Lock": False,
-            "Exclude": False,
-            "Priority": "Neutral",
-            "Min Exposure": 0,
-            "Max Exposure": 100,
-        })
-
-        # Persist edits across reruns by merging existing session strategy.
-        if "strategy_master" not in st.session_state:
-            st.session_state["strategy_master"] = {}
-
-        for idx, r in base_strategy.iterrows():
-            existing = st.session_state["strategy_master"].get(str(r["ID"]))
-            if existing:
-                base_strategy.at[idx, "Lock"] = existing.get("Lock", False)
-                base_strategy.at[idx, "Exclude"] = existing.get("Exclude", False)
-                base_strategy.at[idx, "Priority"] = existing.get("Priority", "Neutral")
-                base_strategy.at[idx, "Min Exposure"] = existing.get("Min Exposure", 0)
-                base_strategy.at[idx, "Max Exposure"] = existing.get("Max Exposure", 100)
-
-        edited = st.data_editor(
-            base_strategy,
-            hide_index=True,
-            use_container_width=True,
-            height=520,
-            disabled=["ID", "Name", "Pos", "Team", "Salary", "Proj", "Own"],
-            column_config={
-                "Priority": st.column_config.SelectboxColumn("Priority", options=PRIORITY_OPTIONS),
-                "Lock": st.column_config.CheckboxColumn("Lock"),
-                "Exclude": st.column_config.CheckboxColumn("Exclude"),
-                "Min Exposure": st.column_config.NumberColumn("Min %", min_value=0, max_value=100, step=5),
-                "Max Exposure": st.column_config.NumberColumn("Max %", min_value=0, max_value=100, step=5),
-            },
-            key="player_strategy_editor",
-        )
-
-        # Save visible edits into master map.
-        for _, r in edited.iterrows():
-            lock_val = bool(r["Lock"])
-            exclude_val = bool(r["Exclude"])
-
-            # Lock and Exclude cannot both be active.
-            # Exclude wins if both are checked in the editor.
-            if lock_val and exclude_val:
-                lock_val = False
-
-            priority_val = str(r["Priority"])
-            # Dedicated Exclude checkbox overrides dropdown priority.
-            if exclude_val:
-                priority_val = "Exclude"
-
-            st.session_state["strategy_master"][str(r["ID"])] = {
-                "Lock": lock_val,
-                "Exclude": exclude_val,
-                "Priority": priority_val,
-                "Min Exposure": float(r["Min Exposure"]),
-                "Max Exposure": float(r["Max Exposure"]),
-            }
-
-        strategy_map = st.session_state["strategy_master"]
-
-        # Quick summary
-        counts = defaultdict(int)
-        locks = 0
-        excludes = 0
-        for v in strategy_map.values():
-            counts[v.get("Priority", "Neutral")] += 1
-            locks += int(bool(v.get("Lock", False)) and not bool(v.get("Exclude", False)))
-            excludes += int(bool(v.get("Exclude", False)) or v.get("Priority") == "Exclude")
-        st.caption(
-            f"Locks: {locks} | Core: {counts['Core']} | Like: {counts['Like']} | "
-            f"Fade: {counts['Fade']} | Exclude: {excludes}"
-        )
-
-        st.markdown("## ⚡ Build lineups")
-        st.caption("Generate a pool based on your contest, stacks, player opinions and rules.")
-        if st.button("Generate Rated Lineups", type="primary", use_container_width=True):
-            with st.spinner("Building around your player and stack preferences..."):
-                result = generate_lineups(
-                    df=df,
-                    field_size=field_size,
-                    payout_style=payout_style,
-                    count=lineup_count,
-                    attempts=lineup_count * 10,
-                    min_salary=min_salary,
-                    qb_stack_min=qb_stack,
-                    bringback_mode=bringback_mode,
-                    preferred_stack_teams=preferred_stack_teams,
-                    strategy_map=strategy_map,
-                    team_strategy_map=team_strategy_map,
-                    no_dst_from_qb_game=no_dst_from_qb_game,
-                    no_offense_vs_dst=no_offense_vs_dst,
-                    seed=seed,
-                )
-
-            if result.empty:
-                st.error("No valid lineups were produced. Loosen locks, exclusions, salary, stack or exposure rules.")
+        df=prepare_player_pool(dk_file,ss_file); teams=sorted(df["Team"].dropna().unique().tolist())
+        st.session_state.setdefault("strategy_master",{}); st.session_state.setdefault("team_strategy_master",{})
+        q1,q2,q3,q4=st.columns(4); q1.metric("Players",len(df)); q2.metric("Teams",len(teams)); q3.metric("Field",f"{int(field_size):,}"); q4.metric("Pool",lineup_count)
+        min_salary=st.sidebar.slider("Min salary",44000,50000,49000,100)
+        qb_stack=st.sidebar.selectbox("QB pass catchers",[1,2],index=1)
+        bringback_mode=st.sidebar.selectbox("Bring-back",["Optional","Required","None"])
+        tabs=st.tabs(["Build","Players","Rules","Lineups","Exposure"])
+        with tabs[0]:
+            preferred_stack_teams=st.multiselect("Preferred QB stack teams",teams)
+            team_df=pd.DataFrame({"Team":teams,"Priority":[st.session_state["team_strategy_master"].get(t,"Neutral") for t in teams]})
+            team_edit=st.data_editor(team_df,hide_index=True,use_container_width=True,disabled=["Team"],column_config={"Priority":st.column_config.SelectboxColumn("Lean",options=["Core","Like","Neutral","Fade","Exclude"])},key="v4_classic_team")
+            for _,r in team_edit.iterrows(): st.session_state["team_strategy_master"][r["Team"]]=r["Priority"]
+            build_btn=st.button("Generate rated lineups",type="primary",use_container_width=True,key="v4_classic_build")
+        with tabs[1]:
+            view=df.copy(); team_filter=st.multiselect("Teams",teams,key="v4_cteam"); pos_filter=st.multiselect("Positions",["QB","RB","WR","TE","DST"],key="v4_cpos")
+            if team_filter:view=view[view["Team"].isin(team_filter)]
+            if pos_filter:view=view[view["Position"].isin(pos_filter)]
+            ed=pd.DataFrame({"ID":view["ID"].astype(str),"Name":view["Name"],"Pos":view["Position"],"Team":view["Team"],"Salary":view["Salary"],"Proj":view["My Proj"].round(2),"Own":view["My Own"].round(1),"Lock":False,"Exclude":False,"Priority":"Neutral","Min Exposure":0,"Max Exposure":100})
+            for x,r in ed.iterrows():
+                e=st.session_state["strategy_master"].get(str(r["ID"]),{})
+                for c,k,d in [("Lock","Lock",False),("Exclude","Exclude",False),("Priority","Priority","Neutral"),("Min Exposure","Min Exposure",0),("Max Exposure","Max Exposure",100)]: ed.at[x,c]=e.get(k,d)
+            edited=st.data_editor(
+                ed,
+                hide_index=True,
+                use_container_width=True,
+                height=620,
+                disabled=["ID","Name","Pos","Team","Salary","Proj","Own"],
+                column_order=["Name","Pos","Team","Salary","Proj","Own","Lock","Exclude","Priority","Min Exposure","Max Exposure"],
+                column_config={
+                    "Name":st.column_config.TextColumn("Player",width=190,pinned=True),
+                    "Pos":st.column_config.TextColumn("Pos",width=60),
+                    "Team":st.column_config.TextColumn("Team",width=70),
+                    "Salary":st.column_config.NumberColumn("Salary",width=85,format="$%d"),
+                    "Proj":st.column_config.NumberColumn("Proj",width=75,format="%.2f"),
+                    "Own":st.column_config.NumberColumn("Own",width=70,format="%.1f"),
+                    "Priority":st.column_config.SelectboxColumn("Lean",options=PRIORITY_OPTIONS,width=95),
+                    "Lock":st.column_config.CheckboxColumn("Lock",width=65),
+                    "Exclude":st.column_config.CheckboxColumn("Out",width=60),
+                    "Min Exposure":st.column_config.NumberColumn("Min %",min_value=0,max_value=100,step=5,width=75),
+                    "Max Exposure":st.column_config.NumberColumn("Max %",min_value=0,max_value=100,step=5,width=75),
+                },
+                key="v4_classic_players",
+            )
+            for _,r in edited.iterrows():
+                ex=bool(r["Exclude"]); st.session_state["strategy_master"][str(r["ID"]) ]={"Lock":bool(r["Lock"]) and not ex,"Exclude":ex,"Priority":"Exclude" if ex else str(r["Priority"]),"Min Exposure":float(r["Min Exposure"]),"Max Exposure":float(r["Max Exposure"])}
+        with tabs[2]:
+            no_dst=st.toggle("No defense from my stacked game",value=True,key="v4_no_dst"); no_off=st.toggle("No offense against my DST",value=False,key="v4_no_off")
+        if build_btn:
+            res=generate_lineups(df,field_size,payout_style,lineup_count,max(300,lineup_count*12),min_salary,qb_stack,bringback_mode,preferred_stack_teams,st.session_state["strategy_master"],st.session_state["team_strategy_master"],no_dst,no_off,seed)
+            st.session_state["classic_result_v4"]=res
+        res=st.session_state.get("classic_result_v4")
+        with tabs[3]:
+            if res is None or res.empty: st.info("Generate lineups from Build.")
             else:
-                st.session_state["v2_result"] = result
-                st.success(f"Generated {len(result)} unique lineups.")
-
+                show_cols=["Rank","Rating","Rating Score","Projection","Base Projection","Scenario Delta","Salary","Salary Left","Avg Own","Stack Summary"]+ROSTER_SLOTS
+                st.dataframe(res[[c for c in show_cols if c in res.columns]],hide_index=True,use_container_width=True,height=590)
+                st.download_button("Download lineup analysis CSV",res.to_csv(index=False),"classic_lineups_v4.csv","text/csv",use_container_width=True)
+        with tabs[4]:
+            if res is None or res.empty: st.info("Generate lineups first.")
+            else: st.dataframe(calculate_exposure_table(df,res,st.session_state["strategy_master"]),hide_index=True,use_container_width=True,height=620)
     except Exception as e:
-        st.error(str(e))
+        st.error(f"Classic build error: {e}")
+else:
+    try:
+        df=prepare_showdown_pool(dk_file,ss_file); teams=[t for t in df["Team"].dropna().unique().tolist() if t]
+        if len(teams)!=2: st.warning(f"Showdown normally has two teams. I found {len(teams)}: {', '.join(teams)}")
+        nonzero_proj=int((pd.to_numeric(df["My Proj"],errors="coerce").fillna(0)>0.05).sum())
+        nonzero_own=int((pd.to_numeric(df["My Own"],errors="coerce").fillna(0)>0).sum())
+        if nonzero_proj==0:
+            st.error("DFS Lab could not create usable projections for this slate.")
+            st.stop()
+        elif nonzero_proj < 6: st.warning(f"Projection check · Only {nonzero_proj} players have usable projections. The slate may be incomplete.")
+        else: st.success(f"DFS Lab projection engine ready · {nonzero_proj} players have usable projections." + (" · SaberSim comparison loaded." if ss_file else " · No SaberSim file used."))
+        if nonzero_own==0: st.warning("Ownership not populated yet · Lineups can be built, but leverage and duplication ratings that depend on ownership are provisional.")
+        st.session_state.setdefault("showdown_strategy",{})
+        st.session_state.setdefault("showdown_context",{})
+        st.session_state.setdefault("showdown_relationships",[])
+        st.session_state.setdefault("projection_overrides",{})
+        st.session_state.setdefault("context_strength","Standard")
+        st.session_state.setdefault("sd_use_score", False)
+        st.session_state.setdefault("sd_script", "Neutral")
+        st.session_state.setdefault("sd_script_team", "None")
+        st.session_state.setdefault("sd_intensity", "Standard")
+        st.session_state.setdefault("sd_auto_shape", True)
+        if len(teams) >= 2:
+            st.session_state.setdefault("sd_score_0", 24)
+            st.session_state.setdefault("sd_score_1", 21)
+        q1,q2,q3,q4=st.columns(4); q1.metric("Players",len(df)); q2.metric("Teams",len(teams)); q3.metric("Field",f"{int(field_size):,}"); q4.metric("Pool",lineup_count)
+        if bool(df["CPT Own Estimated"].any()): st.warning("Your SaberSim file does not appear to include Captain ownership. V4 is using a neutral fallback for CPT leverage. Overall ownership is still used normally.")
 
-if "v2_result" in st.session_state:
-    result = st.session_state["v2_result"]
+        # Showdown-specific sidebar controls.
+        salary_style=st.sidebar.selectbox("Salary strategy",["Optimal","Balanced","GPP","Unique","Custom"],index=2)
+        salary_defaults={"Optimal":49500,"Balanced":48500,"GPP":47500,"Unique":46000,"Custom":47000}
+        if salary_style=="Custom": min_salary=st.sidebar.slider("Minimum salary",40000,50000,47000,100)
+        else: min_salary=salary_defaults[salary_style]; st.sidebar.caption(f"Minimum salary: ${min_salary:,}")
+        max_salary=50000
+        min_unique=st.sidebar.selectbox("Minimum unique players",[1,2,3],index=0)
 
-    st.markdown("## 🏆 Rated lineup pool")
-    st.caption("The best builds rise to the top based on projection, correlation, leverage and your strategy.")
-    st.caption("Ratings are relative to the lineups this build generated. They balance projection, correlation, leverage and your own preferences.")
+        tabs=st.tabs(["Build","Players","Relationships","Context","Scripts","Lineups","Exposure"])
+        with tabs[0]:
+            st.markdown('<div class="card-title">Showdown Build</div><div class="card-sub">Control how the six-man portfolio is shaped before the optimizer starts solving.</div>',unsafe_allow_html=True)
+            st.markdown("#### Allowed team builds")
+            st.caption("Choose what is allowed — no percentages. 4-2 means four players from either team; 5-1 means five from either team.")
+            c1,c2,c3=st.columns(3)
+            with c1:allow_33=st.checkbox("3-3",value=True,key="sd_allow_33")
+            with c2:allow_42=st.checkbox("4-2",value=True,key="sd_allow_42")
+            with c3:allow_51=st.checkbox("5-1",value=False,key="sd_allow_51")
+            if not any([allow_33,allow_42,allow_51]):
+                st.warning("Choose at least one build. 3-3 will be used until you select one.")
+                allow_33=True
+            construction_weights={"3-3":1 if allow_33 else 0,"4-2":1 if allow_42 else 0,"5-1":1 if allow_51 else 0}
+            st.caption("The Scenario Engine decides how often to use each allowed build based on your score and game script.")
+            st.markdown("#### Captain pairing")
+            st.caption("These settings apply only when that position is Captain — they do not control how often the position becomes Captain.")
+            a,b,c=st.columns(3)
+            with a:cpt_qb_pc=st.selectbox("When QB is CPT · pass catchers",[0,1,2,3],index=2,help="Number of same-team WR/TE pass catchers to pair with a QB Captain.")
+            pair_map={"Never":0,"Sometimes":35,"Usually":80,"Always":100}
+            with b: wrte_pair=st.selectbox("When WR/TE is CPT · pair QB",list(pair_map),index=2)
+            with c: rb_pair=st.selectbox("When RB is CPT · pair DST/K",list(pair_map),index=1)
+            wrte_qb=pair_map[wrte_pair]; rb_ctrl=pair_map[rb_pair]
+            d,e=st.columns(2)
+            with d:max_k=st.selectbox("Max kickers",[0,1,2],index=2)
+            with e:max_dst=st.selectbox("Max defenses",[0,1,2],index=1)
+            build_btn=st.button("Generate Showdown lineups",type="primary",use_container_width=True,key="v4_sd_build")
 
-    top = result.iloc[0]
-    s1, s2, s3, s4 = st.columns(4)
-    s1.metric("Top grade", top["Rating"])
-    s2.metric("Top projection", top["Projection"])
-    s3.metric("Top lineup ownership", f"{top['Total Own']}%")
-    s4.metric("Generated", len(result))
+        with tabs[1]:
+            st.markdown('<div class="card-title">Player + Captain Exposure</div><div class="card-sub">Overall exposure and Captain exposure are controlled separately.</div>',unsafe_allow_html=True)
+            team_filter=st.multiselect("Teams",teams,key="v4_sdteam")
+            pos_filter=st.multiselect("Positions",sorted(df["Position"].dropna().unique().tolist()),key="v4_sdpos")
+            current_script=st.session_state.get("sd_script","Neutral")
+            current_team=st.session_state.get("sd_script_team","None")
+            if current_team=="None": current_team=""
+            current_use_score=bool(st.session_state.get("sd_use_score",False))
+            current_scores={}
+            if len(teams)>=2:
+                current_scores={teams[0]:float(st.session_state.get("sd_score_0",24)),teams[1]:float(st.session_state.get("sd_score_1",21))}
+            if current_script=="Auto from score" and current_use_score:
+                current_script,current_team,_=infer_score_script(current_scores)
+            scenario_df=apply_showdown_scenario(df,current_script,current_team,current_use_score,current_scores,st.session_state.get("sd_intensity","Standard"))
+            scenario_df=apply_context_engine(scenario_df,st.session_state.get("showdown_context",{}),st.session_state.get("context_strength","Standard"))
+            scenario_df=apply_projection_overrides(scenario_df,st.session_state.get("projection_overrides",{}))
+            view=scenario_df.copy()
+            if team_filter:view=view[view["Team"].isin(team_filter)]
+            if pos_filter:view=view[view["Position"].isin(pos_filter)]
 
-    display_cols = [
-        "Rank", "Rating", "Projection Grade", "Correlation Grade", "Leverage Grade", "User Fit Grade",
-        "Projection", "Salary", "Salary Left", "Total Own",
-        "Stack Summary", "Strategy Notes",
-        "QB", "RB1", "RB2", "WR1", "WR2", "WR3", "TE", "FLEX", "DST"
-    ]
-    st.dataframe(result[display_cols], use_container_width=True, height=620)
+            st.markdown("##### Quick lock")
+            quick_names=view["Name"].astype(str).tolist()
+            if quick_names:
+                q1,q2,q3,q4,q5=st.columns([2.4,1,1,1,1])
+                with q1: quick_player=st.selectbox("Quick player",quick_names,key="sd_quick_player",label_visibility="collapsed")
+                qrow=view[view["Name"].astype(str)==str(quick_player)].iloc[0]; qid=str(qrow["ID"])
+                if qid not in st.session_state["showdown_strategy"]: st.session_state["showdown_strategy"][qid]={}
+                with q2:
+                    if st.button("Lock",use_container_width=True,key="sd_quick_lock"):
+                        st.session_state["showdown_strategy"][qid].update({"Lock":True,"CPT Lock":False,"Exclude":False}); st.rerun()
+                with q3:
+                    if st.button("CPT",use_container_width=True,key="sd_quick_cpt"):
+                        st.session_state["showdown_strategy"][qid].update({"Lock":False,"CPT Lock":True,"Exclude":False,"CPT Eligible":True}); st.rerun()
+                with q4:
+                    if st.button("Out",use_container_width=True,key="sd_quick_out"):
+                        st.session_state["showdown_strategy"][qid].update({"Lock":False,"CPT Lock":False,"Exclude":True,"CPT Eligible":False,"Priority":"Exclude"}); st.rerun()
+                with q5:
+                    if st.button("Clear",use_container_width=True,key="sd_quick_clear"):
+                        st.session_state["showdown_strategy"].pop(qid,None); st.rerun()
+                st.caption("Lock = every lineup • CPT = Captain every lineup • Out = never use")
 
-    st.markdown("### 🔎 Lineup inspector")
-    rank_choice = st.selectbox("Choose rank", result["Rank"].tolist())
-    r = result[result["Rank"] == rank_choice].iloc[0]
+            ed=pd.DataFrame({"ID":view["ID"].astype(str),"Name":view["Name"],"Pos":view["Position"],"Team":view["Team"],"Flex $":view["FlexSalary"],"DFS Base":view["My Proj"].round(2),"Model":view["Model Proj"].round(2),"Your Proj":view["DFS Lab Proj"].round(2),"Δ%":view["Proj Change %"].round(1),"Own":view["My Own"].round(1),"CPT Own":view["CPT Own"].round(1),"Lock":False,"CPT Lock":False,"Exclude":False,"CPT Eligible":True,"Priority":"Neutral","Min Exposure":0,"Max Exposure":100,"CPT Min":0,"CPT Max":100})
+            for x,r in ed.iterrows():
+                e=st.session_state["showdown_strategy"].get(str(r["ID"]),{})
+                for c,k,d in [("Lock","Lock",False),("CPT Lock","CPT Lock",False),("Exclude","Exclude",False),("CPT Eligible","CPT Eligible",True),("Priority","Priority","Neutral"),("Min Exposure","Min Exposure",0),("Max Exposure","Max Exposure",100),("CPT Min","CPT Min",0),("CPT Max","CPT Max",100)]: ed.at[x,c]=e.get(k,d)
+            edited=st.data_editor(
+                ed,
+                hide_index=True,
+                use_container_width=True,
+                height=650,
+                disabled=["ID","Name","Pos","Team","Flex $","DFS Base","Model","Δ%","Own","CPT Own"],
+                column_order=["Name","Lock","CPT Lock","Exclude","CPT Eligible","Priority","Pos","Team","Flex $","DFS Base","Model","Your Proj","Δ%","Own","CPT Own","Min Exposure","Max Exposure","CPT Min","CPT Max"],
+                column_config={
+                    "ID":None,
+                    "Name":st.column_config.TextColumn("Player",width=190,pinned=True),
+                    "Pos":st.column_config.TextColumn("Pos",width=58),
+                    "Team":st.column_config.TextColumn("Team",width=68),
+                    "Flex $":st.column_config.NumberColumn("Flex $",width=78,format="$%d"),
+                    "Proj":st.column_config.NumberColumn("Base",width=68,format="%.2f"),
+                    "Script Proj":st.column_config.NumberColumn("Scenario",width=78,format="%.2f"),
+                    "DFS Lab":st.column_config.NumberColumn("DFS Lab",width=78,format="%.2f"),
+                    "Δ%":st.column_config.NumberColumn("Δ%",width=58,format="%.1f"),
+                    "Own":st.column_config.NumberColumn("Own",width=64,format="%.1f"),
+                    "CPT Own":st.column_config.NumberColumn("CPT Own",width=78,format="%.1f"),
+                    "Lock":st.column_config.CheckboxColumn("Lock",width=62,pinned=True),
+                    "CPT Lock":st.column_config.CheckboxColumn("CPT",width=62,pinned=True),
+                    "Exclude":st.column_config.CheckboxColumn("Out",width=58,pinned=True),
+                    "CPT Eligible":st.column_config.CheckboxColumn("CPT?",width=60),
+                    "Priority":st.column_config.SelectboxColumn("Lean",options=PRIORITY_OPTIONS,width=92),
+                    "Min Exposure":st.column_config.NumberColumn("Min %",min_value=0,max_value=100,step=5,width=70),
+                    "Max Exposure":st.column_config.NumberColumn("Max %",min_value=0,max_value=100,step=5,width=70),
+                    "CPT Min":st.column_config.NumberColumn("CPT Min",min_value=0,max_value=100,step=5,width=74),
+                    "CPT Max":st.column_config.NumberColumn("CPT Max",min_value=0,max_value=100,step=5,width=74),
+                },
+                key="v4_sdplayers",
+            )
+            for _,r in edited.iterrows():
+                pid=str(r["ID"]); model_val=float(view.loc[view["ID"].astype(str).eq(pid),"Model Proj"].iloc[0]) if not view.loc[view["ID"].astype(str).eq(pid)].empty else float(r["Your Proj"])
+                user_val=float(r["Your Proj"])
+                if abs(user_val-model_val)>0.01: st.session_state["projection_overrides"][pid]=user_val
+                else: st.session_state["projection_overrides"].pop(pid,None)
+                ex=bool(r["Exclude"]); cptlock=bool(r["CPT Lock"]) and not ex
+                st.session_state["showdown_strategy"][str(r["ID"]) ]={"Lock":bool(r["Lock"]) and not ex and not cptlock,"CPT Lock":cptlock,"Exclude":ex,"CPT Eligible":bool(r["CPT Eligible"]) and not ex,"Priority":"Exclude" if ex else str(r["Priority"]),"Min Exposure":float(r["Min Exposure"]),"Max Exposure":float(r["Max Exposure"]),"CPT Min":float(r["CPT Min"]),"CPT Max":float(r["CPT Max"])}
 
-    grade = str(r["Rating"])
-    grade_class = "badge-a" if grade.startswith("A") else ("badge-b" if grade.startswith("B") else "badge-c")
-    st.markdown(f'<span class="badge {grade_class}">Overall grade: {grade}</span>', unsafe_allow_html=True)
+        with tabs[2]:
+            st.markdown('<div class="card-title">Relationships</div><div class="card-sub">Teach DFS Lab which players, positions and team roles belong together — or should never appear together.</div>',unsafe_allow_html=True)
+            st.caption("Hard relationship rules are enforced by the optimizer. Use Player for a specific matchup or Team + Position for broader football logic.")
+            player_options={f"{r['Name']} · {r['Team']} {r['Position']}":str(r['ID']) for _,r in df.sort_values(['Team','Position','Name']).iterrows()}
+            positions=["Any"]+sorted([p for p in df["Position"].dropna().astype(str).unique().tolist() if p])
+            team_opts=["Any"]+teams
+            with st.expander("+ Add relationship",expanded=True):
+                r1,r2=st.columns(2)
+                with r1:
+                    a_kind=st.segmented_control("Side A",["Player","Team + Position"],default="Player",key="rel_a_kind")
+                    if a_kind=="Player":
+                        a_label=st.selectbox("A player",list(player_options),key="rel_a_player")
+                        a={"kind":"Player","id":player_options[a_label],"label":a_label}
+                    else:
+                        at=st.selectbox("A team",team_opts,key="rel_a_team"); ap=st.selectbox("A position",positions,key="rel_a_pos")
+                        a={"kind":"Team + Position","team":at,"position":ap,"label":f"{at} {ap}"}
+                with r2:
+                    b_kind=st.segmented_control("Side B",["Player","Team + Position"],default="Player",key="rel_b_kind")
+                    if b_kind=="Player":
+                        b_label=st.selectbox("B player",list(player_options),key="rel_b_player")
+                        b={"kind":"Player","id":player_options[b_label],"label":b_label}
+                    else:
+                        bt=st.selectbox("B team",team_opts,key="rel_b_team"); bp=st.selectbox("B position",positions,key="rel_b_pos")
+                        b={"kind":"Team + Position","team":bt,"position":bp,"label":f"{bt} {bp}"}
+                rule_type=st.selectbox("Relationship",["Never Together","Require B when A used"],help="Never Together blocks every A/B pairing. Require B means any lineup using A must contain at least one B.")
+                if st.button("Add relationship rule",type="primary",use_container_width=True,key="add_relationship"):
+                    if a==b:
+                        st.warning("Choose two different sides.")
+                    else:
+                        st.session_state["showdown_relationships"].append({"a":a,"b":b,"rule":rule_type,"enabled":True})
+                        st.rerun()
+            rules=st.session_state["showdown_relationships"]
+            if not rules:
+                st.info("No custom relationships yet. Example: Jahmyr Gibbs ↔ Jacob Saylors → Never Together, or BUF DST ↔ DET QB → Never Together.")
+            else:
+                for ri,rule in enumerate(list(rules)):
+                    c1,c2,c3=st.columns([5,1,1])
+                    with c1: st.markdown(f"**{rule['a'].get('label','A')}**  →  **{rule['rule']}**  →  **{rule['b'].get('label','B')}**")
+                    with c2:
+                        enabled=st.toggle("On",value=rule.get("enabled",True),key=f"rel_on_{ri}")
+                        st.session_state["showdown_relationships"][ri]["enabled"]=enabled
+                    with c3:
+                        if st.button("Remove",key=f"rel_rm_{ri}",use_container_width=True):
+                            st.session_state["showdown_relationships"].pop(ri); st.rerun()
+            st.markdown("#### Quick football rules")
+            st.caption("These create broad restrictions without naming individual players.")
+            max_one_rb=st.toggle("Max 1 RB from the same team",value=st.session_state.get("max_one_rb_team",False),key="max_one_rb_team",help="Useful when two same-team RBs are direct alternatives. Leave off when a backfield can realistically support two players together.")
 
-    a, b, c, d = st.columns(4)
-    a.metric("Projection", r["Projection"])
-    b.metric("Total ownership", f"{r['Total Own']}%")
-    c.metric("Salary used", f"${int(r['Salary']):,}")
-    d.metric("Salary left", f"${int(r['Salary Left']):,}")
-
-    st.write(f"**Stack:** {r['Stack Summary']}")
-    st.write(
-        f"**Grades:** Projection — {r['Projection Grade']} | "
-        f"Correlation — {r['Correlation Grade']} | "
-        f"Leverage — {r['Leverage Grade']} | "
-        f"Your strategy — {r['User Fit Grade']}"
-    )
-
-
-    st.markdown("## 📊 Exposure Lab")
-    st.caption(
-        "Actual Exp % is how often each player appears in this generated lineup pool. "
-        "Raise Min Target % to push a player up; lower Max Target % to cap him. "
-        "Then rebuild the pool."
-    )
-
-    exposure_df = calculate_exposure_table(df, result, strategy_map)
-
-    exp_team_filter = st.multiselect(
-        "Exposure team filter",
-        sorted(exposure_df["Team"].dropna().unique().tolist()),
-        key="exposure_team_filter"
-    )
-    exp_pos_filter = st.multiselect(
-        "Exposure position filter",
-        ["QB", "RB", "WR", "TE", "DST"],
-        key="exposure_pos_filter"
-    )
-
-    exposure_view = exposure_df.copy()
-    if exp_team_filter:
-        exposure_view = exposure_view[exposure_view["Team"].isin(exp_team_filter)]
-    if exp_pos_filter:
-        exposure_view = exposure_view[exposure_view["Pos"].isin(exp_pos_filter)]
-
-    exposure_edit = st.data_editor(
-        exposure_view,
-        hide_index=True,
-        use_container_width=True,
-        height=520,
-        disabled=["ID", "Name", "Pos", "Team", "Salary", "Proj", "Proj Own", "Actual Exp %", "Lineups"],
-        column_config={
-            "Min Target %": st.column_config.NumberColumn("Min Target %", min_value=0, max_value=100, step=5),
-            "Max Target %": st.column_config.NumberColumn("Max Target %", min_value=0, max_value=100, step=5),
-        },
-        key="exposure_editor"
-    )
-
-    if st.button("Save Exposure Targets", use_container_width=True):
-        bad = []
-        for _, er in exposure_edit.iterrows():
-            if float(er["Min Target %"]) > float(er["Max Target %"]):
-                bad.append(er["Name"])
-                continue
-            pid = str(er["ID"])
-            current = st.session_state["strategy_master"].get(pid, {
-                "Lock": False, "Exclude": False, "Priority": "Neutral", "Min Exposure": 0, "Max Exposure": 100
+        with tabs[3]:
+            st.markdown('<div class="card-title">Context Engine · V5.2</div><div class="card-sub">Add matchup, role and situational information without letting small samples overpower the SaberSim baseline. This first build is manual and explainable; automated feeds plug into this same layer next.</div>',unsafe_allow_html=True)
+            st.info("Ratings are confidence-shrunk and capped. Defense and current usage carry more weight than travel or primetime splits.")
+            context_strength=st.select_slider("Context influence",options=["Conservative","Standard","Aggressive"],key="context_strength")
+            rating_opts=[-3,-2,-1,0,1,2,3]
+            ced=pd.DataFrame({
+                "ID":df["ID"].astype(str),"Player":df["Name"],"Pos":df["Position"],"Team":df["Team"],
+                "Defense":0,"Usage":0,"Home/Rest":0,"Travel":0,"Time/Split":0,"Confidence":50,"Note":""
             })
-            current["Min Exposure"] = float(er["Min Target %"])
-            current["Max Exposure"] = float(er["Max Target %"])
-            st.session_state["strategy_master"][pid] = current
+            for x,r in ced.iterrows():
+                cfg=st.session_state["showdown_context"].get(str(r["ID"]),{})
+                for col in ["Defense","Usage","Home/Rest","Travel","Time/Split","Confidence","Note"]:
+                    ced.at[x,col]=cfg.get(col,ced.at[x,col])
+            cedited=st.data_editor(ced,hide_index=True,use_container_width=True,height=560,
+                disabled=["ID","Player","Pos","Team"],
+                column_order=["Player","Pos","Team","Defense","Usage","Home/Rest","Travel","Time/Split","Confidence","Note"],
+                column_config={
+                    "ID":None,"Player":st.column_config.TextColumn("Player",pinned=True,width=185),
+                    "Pos":st.column_config.TextColumn("Pos",width=55),"Team":st.column_config.TextColumn("Team",width=62),
+                    "Defense":st.column_config.SelectboxColumn("Defense",options=rating_opts,width=78,help="-3 strong negative to +3 strong positive defensive matchup."),
+                    "Usage":st.column_config.SelectboxColumn("Usage",options=rating_opts,width=72,help="Current role: routes, targets, carries, red-zone work and injury-driven opportunity."),
+                    "Home/Rest":st.column_config.SelectboxColumn("Home/Rest",options=rating_opts,width=90),
+                    "Travel":st.column_config.SelectboxColumn("Travel",options=rating_opts,width=70),
+                    "Time/Split":st.column_config.SelectboxColumn("Time/Split",options=rating_opts,width=90,help="Day/night/Thursday/Monday split. Intentionally low weight."),
+                    "Confidence":st.column_config.NumberColumn("Conf %",min_value=0,max_value=100,step=5,width=78),
+                    "Note":st.column_config.TextColumn("Why / source note",width=220),
+                },key="v51_context_editor")
+            for _,r in cedited.iterrows():
+                st.session_state["showdown_context"][str(r["ID"])]= {k:(int(r[k]) if k not in ["Note"] else str(r[k])) for k in ["Defense","Usage","Home/Rest","Travel","Time/Split","Confidence","Note"]}
 
-        if bad:
-            st.error("Min target cannot exceed Max target for: " + ", ".join(bad[:10]))
-        else:
-            st.success("Exposure targets saved. Scroll up and tap Generate Rated Lineups again.")
+            # Preview context on top of the current scenario state.
+            ctx_script=st.session_state.get("sd_script","Neutral"); ctx_team=st.session_state.get("sd_script_team","None")
+            if ctx_team=="None": ctx_team=""
+            ctx_use_score=bool(st.session_state.get("sd_use_score",False)); ctx_scores={}
+            if len(teams)>=2: ctx_scores={teams[0]:float(st.session_state.get("sd_score_0",24)),teams[1]:float(st.session_state.get("sd_score_1",21))}
+            if ctx_script=="Auto from score" and ctx_use_score: ctx_script,ctx_team,_=infer_score_script(ctx_scores)
+            ctx_base=apply_showdown_scenario(df,ctx_script,ctx_team,ctx_use_score,ctx_scores,st.session_state.get("sd_intensity","Standard"))
+            ctx_df=apply_context_engine(ctx_base,st.session_state["showdown_context"],context_strength)
+            st.markdown("#### Market vs. model foundation")
+            st.caption("Base is now DFS Lab's independent nflverse/DK-prior projection. Scenario + context create the model projection; Your Proj can override the final optimizer input.")
+            cp=ctx_df[["Name","My Proj","Script Proj","Context Adj %","DFS Lab Proj"]].copy()
+            cp.columns=["Player","Base","Scenario","Context %","DFS Lab"]
+            cp=cp.sort_values("Context %",key=lambda x:x.abs(),ascending=False)
+            st.dataframe(cp,hide_index=True,use_container_width=True,height=390,column_config={"Player":st.column_config.TextColumn("Player",pinned=True,width=185),"Base":st.column_config.NumberColumn("Base",format="%.2f"),"Scenario":st.column_config.NumberColumn("Scenario",format="%.2f"),"Context %":st.column_config.NumberColumn("Context %",format="%.1f"),"DFS Lab":st.column_config.NumberColumn("DFS Lab",format="%.2f")})
+            why_name=st.selectbox("WHY? player",ctx_df["Name"].astype(str).tolist(),key="context_why_player")
+            wr=ctx_df[ctx_df["Name"].astype(str)==str(why_name)].iloc[0]
+            with st.expander(f"WHY? · {why_name}",expanded=True):
+                st.write(f"**DFS Base {wr['My Proj']:.2f} → Scenario {wr['Script Proj']:.2f} → DFS Lab {wr['DFS Lab Proj']:.2f}**")
+                st.write(str(wr["Context Why"]))
+                st.caption("V5.2 does not invent historical splits. A context factor only moves the projection when you enter evidence for it.")
 
-    st.download_button(
-        "Download rated lineups CSV",
-        data=result.to_csv(index=False).encode("utf-8"),
-        file_name="rated_lineups_v2.csv",
-        mime="text/csv",
-        use_container_width=True,
-    )
+        with tabs[4]:
+            st.markdown('<div class="card-title">Scenario Engine</div><div class="card-sub">Use a football story, a predicted score, or both. V5 converts the scenario into projection tilts, correlation rules and lineup-construction preferences.</div>',unsafe_allow_html=True)
+            script_options=["Neutral","Auto from score","Shootout","Pass-heavy shootout","Low-scoring game","Defensive / field-goal battle","Ground-and-pound","Team wins close","Team dominates","Team plays from ahead","Team passing comeback"]
+            script=st.selectbox("Game script",script_options,key="sd_script")
+            use_score=st.toggle("Use predicted score to adjust projections",key="sd_use_score")
+            team_scores={}
+            score_profile={"total":0,"margin":0,"winner":"","loser":""}
+            if len(teams)>=2:
+                sc1,sc2=st.columns(2)
+                with sc1: score0=st.number_input(f"{teams[0]} score",0,70,key="sd_score_0",disabled=not use_score)
+                with sc2: score1=st.number_input(f"{teams[1]} score",0,70,key="sd_score_1",disabled=not use_score)
+                team_scores={teams[0]:float(score0),teams[1]:float(score1)}
+            intensity=st.select_slider("Scenario influence",options=["Conservative","Standard","Aggressive"],key="sd_intensity")
+            directional=script in ["Team wins close","Team dominates","Team plays from ahead","Team passing comeback"]
+            script_team=st.selectbox("Script team",["None"]+teams,disabled=(not directional) or script=="Auto from score",key="sd_script_team")
+            if script_team=="None": script_team=""
 
-st.divider()
-st.caption(
-    "V2.6 fixes iPad sidebar control visibility while keeping Exclude, stack rules, priorities, and exposure controls. "
-    "It still does not claim to know true ceiling or duplication until those data sources are added."
-)
+            effective_script=script
+            effective_team=script_team
+            if use_score and team_scores:
+                auto_script,auto_team,score_profile=infer_score_script(team_scores)
+                if script=="Auto from score":
+                    effective_script=auto_script; effective_team=auto_team
+                st.markdown(f"**Score read:** {int(score_profile['total'])} total • {int(score_profile['margin'])}-point margin • **{auto_team}** projected winner • auto shape: **{auto_script}**")
+            elif script=="Auto from score":
+                effective_script="Neutral"; effective_team=""
+                st.warning("Turn on predicted score to use Auto from score.")
+
+            script_text={
+                "Neutral":"No directional football-story tilt. Baseline projection, leverage and your player takes drive the build.",
+                "Shootout":"Boost both passing games and reduce defense preference.",
+                "Pass-heavy shootout":"Stronger QB/WR/TE emphasis, more 3-3 builds and tighter QB/pass-catcher correlation.",
+                "Low-scoring game":"Raise RB/K/DST slightly and reduce passing-game projections.",
+                "Defensive / field-goal battle":"Strongest K/DST environment; keeps skill-player adjustments conservative.",
+                "Ground-and-pound":"Raises RBs and control pieces while reducing pass-game emphasis.",
+                "Team wins close":"Mostly balanced 3-3 builds with a mild lean toward the selected team.",
+                "Team dominates":"More 4-2/5-1 winner-heavy constructions; winner RB/DST/K rise and trailing pass volume rises.",
+                "Team plays from ahead":"Winner rushing/control pieces rise while the opponent QB/WR/TE get catch-up volume.",
+                "Team passing comeback":"Selected-team QB/WR/TE rise; opponent RB gets a closing-game boost.",
+                "Auto from score":"The entered score chooses the broad game shape automatically."
+            }
+            st.info(script_text.get(script,script_text["Neutral"]))
+
+            auto_shape=st.toggle("Let the scenario shape lineup construction + correlation",key="sd_auto_shape")
+            scenario_df=apply_showdown_scenario(df,effective_script,effective_team,use_score,team_scores,intensity)
+            effective_weights,corr_overrides=script_build_adjustments(construction_weights,effective_script,effective_team,use_score,team_scores,auto_shape)
+            if auto_shape:
+                mix_txt=" • ".join(f"{k} {int(v)}%" for k,v in effective_weights.items())
+                st.caption(f"Scenario build mix: {mix_txt}")
+                if corr_overrides:
+                    st.caption(f"Scenario correlation: QB CPT + {corr_overrides['qb_pc']} pass catcher(s) • WR/TE CPT + QB {corr_overrides['wrte_qb']}% • RB CPT + DST/K {corr_overrides['rb_ctrl']}%")
+
+            st.markdown("#### Projection movement")
+            preview=scenario_df[["Name","Position","Team","My Proj","Script Proj","Proj Change %"]].copy()
+            preview.columns=["Player","Pos","Team","Base","Scenario","Change %"]
+            preview=preview.sort_values("Change %",key=lambda x:x.abs(),ascending=False).head(14)
+            st.dataframe(preview,hide_index=True,use_container_width=True,height=410,column_config={"Player":st.column_config.TextColumn("Player",pinned=True,width=190),"Base":st.column_config.NumberColumn("Base",format="%.2f"),"Scenario":st.column_config.NumberColumn("Scenario",format="%.2f"),"Change %":st.column_config.NumberColumn("Change %",format="%.1f")})
+            st.caption("These are bounded scenario tilts applied to the DFS Lab baseline projections. They are not a claim that a final score can precisely predict individual fantasy points.")
+            st.markdown("#### How V5.2 grades Showdown")
+            st.caption("Projection 29–34% • Captain quality 18% • correlation 20% • leverage 11–15% • duplication proxy 10–15% • your takes 7%. The exact weights move with contest size/payout.")
+            st.caption("The scenario engine changes the projection and construction inputs before the lineup is graded; it does not simply add points to the final grade.")
+
+        # Defaults exist even before the user opens tabs because Streamlit executes all tab bodies.
+        strategy_map=st.session_state["showdown_strategy"]
+        # Apply the scenario to the actual build, not just the preview.
+        build_df=apply_showdown_scenario(df,effective_script,effective_team,use_score,team_scores,intensity)
+        build_df=apply_context_engine(build_df,st.session_state.get("showdown_context",{}),st.session_state.get("context_strength","Standard"))
+        build_df=apply_projection_overrides(build_df,st.session_state.get("projection_overrides",{}))
+        build_weights,corr_overrides=script_build_adjustments(construction_weights,effective_script,effective_team,use_score,team_scores,auto_shape)
+        eff_qb_pc=cpt_qb_pc; eff_wrte_qb=wrte_qb; eff_rb_ctrl=rb_ctrl
+        if corr_overrides:
+            eff_qb_pc=corr_overrides["qb_pc"]; eff_wrte_qb=corr_overrides["wrte_qb"]; eff_rb_ctrl=corr_overrides["rb_ctrl"]
+        active_relationships=list(st.session_state.get("showdown_relationships",[]))
+        if st.session_state.get("max_one_rb_team",False):
+            for t in teams:
+                # Two identical team/RB sides would be ignored by pairwise self matches,
+                # so create pair-specific rules for every RB combination on that team.
+                rb_rows=build_df[build_df["Team"].eq(t) & build_df["Position"].eq("RB")]
+                rb_ids=rb_rows["ID"].astype(str).tolist()
+                for x in range(len(rb_ids)):
+                    for y in range(x+1,len(rb_ids)):
+                        active_relationships.append({"enabled":True,"rule":"Never Together","a":{"kind":"Player","id":rb_ids[x]},"b":{"kind":"Player","id":rb_ids[y]}})
+        if build_btn:
+            result=generate_showdown_lineups(build_df,field_size,payout_style,lineup_count,max(350,lineup_count*15),min_salary,max_salary,build_weights,effective_script,effective_team,strategy_map,eff_qb_pc,eff_wrte_qb,eff_rb_ctrl,max_k,max_dst,min_unique,seed,relationship_rules=active_relationships)
+            st.session_state["showdown_result_v4"]=result
+            if result is None or result.empty:
+                st.error("No legal lineup found. Check minimum salary, locks/outs, Captain eligibility, allowed team builds, and Captain-pairing rules. Try one change at a time; DFS Lab will preserve your player settings.")
+            elif len(result) < lineup_count:
+                st.warning(f"Built {len(result)} of {lineup_count} requested lineups. The current salary, uniqueness, locks or exposure limits are restricting the pool.")
+        result=st.session_state.get("showdown_result_v4")
+
+        with tabs[5]:
+            st.markdown('<div class="card-title">Rated Lineups</div><div class="card-sub">The grade is portfolio-relative. A+ means one of the strongest lineups in this build — not a guarantee of outcome.</div>',unsafe_allow_html=True)
+            if result is None or result.empty: st.info("Set your build, player takes and script, then generate lineups.")
+            else:
+                m1,m2,m3,m4=st.columns(4); m1.metric("A / A+",int(result["Rating"].isin(["A","A+"]).sum())); m2.metric("Top projection",f"{result['Projection'].max():.1f}"); m3.metric("Avg salary left",f"${int(result['Salary Left'].mean()):,}"); m4.metric("Built",len(result))
+                st.markdown("#### Top lineup cards")
+                for _,lr in result.head(5).iterrows():
+                    flex_names=" · ".join(str(lr.get("FLEX"+str(i),"")) for i in range(1,6))
+                    card_html=("<div class='lineup-card'><div class='lineup-rank'>#%s &nbsp; <span>%s</span></div>" % (int(lr["Rank"]),lr["Rating"]) +
+                               "<div class='lineup-cpt'>CPT · %s</div>" % lr["Captain"] +
+                               "<div class='lineup-flex'>%s</div>" % flex_names +
+                               "<div class='lineup-meta'>Proj %.1f &nbsp; • &nbsp; $%s &nbsp; • &nbsp; %s &nbsp; • &nbsp; %s duplication risk</div></div>" % (lr["Projection"],f"{int(lr['Salary']):,}",lr["Construction"],lr["Dup Risk"]))
+                    st.markdown(card_html,unsafe_allow_html=True)
+                st.markdown("#### Full lineup table")
+                cols=["Rank","Rating","Rating Score","Projection","Salary","Salary Left","Captain","Captain Pos","CPT Own","Construction","Dup Risk","Projection Grade","Captain Grade","Correlation Grade","Leverage Grade","Duplication Grade","Story","CPT","FLEX1","FLEX2","FLEX3","FLEX4","FLEX5"]
+                st.dataframe(result[[c for c in cols if c in result.columns]],hide_index=True,use_container_width=True,height=610)
+                d1,d2=st.columns(2)
+                with d1: st.download_button("Download analysis CSV",result.to_csv(index=False),"showdown_lineups_v5_2.csv","text/csv",use_container_width=True)
+                with d2: st.download_button("Download DK-format lineup CSV",showdown_upload_csv(result),"showdown_dk_upload_v5_2.csv","text/csv",use_container_width=True)
+                pick=st.number_input("Inspect lineup rank",min_value=1,max_value=len(result),value=1,step=1)
+                r=result.iloc[int(pick)-1]
+                st.write(f"**{r['Rating']} ({r['Rating Score']})** — {r['Story']}")
+                st.caption(f"Projection {r['Projection']} • Salary ${int(r['Salary']):,} • ${int(r['Salary Left']):,} left • Duplication risk {r['Dup Risk']} • {r['Strategy Notes']}")
+
+        with tabs[6]:
+            st.markdown('<div class="card-title">Exposure Lab</div><div class="card-sub">See overall and Captain exposure side by side.</div>',unsafe_allow_html=True)
+            if result is None or result.empty: st.info("Generate lineups first.")
+            else:
+                exp=showdown_exposure_table(df,result,strategy_map)
+                st.markdown("#### Set player exposure")
+                st.caption("iPad-friendly controls. Type a percentage or use +/−. Minimums are enforced across the requested portfolio when feasible.")
+                exp_names=exp["Name"].astype(str).tolist()
+                ep=st.selectbox("Player",exp_names,key="exposure_player_select")
+                erow=df[df["Name"].astype(str).eq(ep)].iloc[0]; epid=str(erow["ID"])
+                estrat=st.session_state["showdown_strategy"].setdefault(epid,{})
+                actual=float(exp.loc[exp["Name"].eq(ep),"Actual %"].iloc[0]); cactual=float(exp.loc[exp["Name"].eq(ep),"CPT Actual %"].iloc[0])
+                st.caption(f"Current portfolio: {actual:.0f}% overall • {cactual:.0f}% Captain")
+                e1,e2,e3,e4=st.columns(4)
+                with e1: emin=st.number_input("Min %",0,100,int(estrat.get("Min Exposure",0)),5,key=f"emin_{epid}")
+                with e2: emax=st.number_input("Max %",0,100,int(estrat.get("Max Exposure",100)),5,key=f"emax_{epid}")
+                with e3: cmin=st.number_input("CPT Min %",0,100,int(estrat.get("CPT Min",0)),5,key=f"ecmin_{epid}")
+                with e4: cmax=st.number_input("CPT Max %",0,100,int(estrat.get("CPT Max",100)),5,key=f"ecmax_{epid}")
+                if emin>emax or cmin>cmax:
+                    st.warning("Minimum exposure cannot be higher than maximum exposure.")
+                else:
+                    estrat.update({"Min Exposure":float(emin),"Max Exposure":float(emax),"CPT Min":float(cmin),"CPT Max":float(cmax)})
+                st.markdown("#### Portfolio exposure")
+                st.dataframe(exp,hide_index=True,use_container_width=True,height=560,column_config={"Name":st.column_config.TextColumn("Player",pinned=True,width=190)})
+                st.download_button("Download exposure CSV",exp.to_csv(index=False),"showdown_exposure_v5_2.csv","text/csv",use_container_width=True)
+    except Exception as e:
+        st.error(f"Showdown build error: {e}")
+
+st.caption("V5.2.1 • Classic + Showdown • Relationships • Context Engine • Scenario Engine • Control Deck")
