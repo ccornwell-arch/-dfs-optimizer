@@ -1638,6 +1638,15 @@ def solve_showdown_one(
             coeff[vidx(cpt,0)] = coeff.get(vidx(cpt,0),0)-float(cpt_qb_passcatchers)
             _add_constraint(rows,lows,highs,coeff,0,np.inf)
 
+            # Enforce the selected number exactly when this QB is Captain.
+            # If the QB is not Captain, allow the normal FLEX player mix.
+            max_flex=float(s-1)
+            upper={}
+            for i in pcs:
+                for j in range(1,s): upper[vidx(i,j)] = upper.get(vidx(i,j),0)+1
+            upper[vidx(cpt,0)] = upper.get(vidx(cpt,0),0) + (max_flex-float(cpt_qb_passcatchers))
+            _add_constraint(rows,lows,highs,upper,-np.inf,max_flex)
+
         # WR/TE captain -> pair same-team QB in chosen percentage of solves.
         if r["is_passcatcher"] and rng.random() < wrte_cpt_qb_pair_pct/100.0:
             qbs=df.index[df["ActiveForBuild"] & df["Team"].eq(r["Team"]) & df["is_QB"]].tolist()
@@ -2922,7 +2931,16 @@ Be conversational, concise, and useful. Sound like a strong DFS partner sitting 
                         with st.expander(f"Earlier conversation · {len(older)}",expanded=False):
                             for uq,ar in reversed(older[-8:]): st.markdown(f"**You:** {uq}"); st.markdown(ar); st.divider()
                 if st.session_state.get('dfs_agent_error'):
-                    with st.expander('Agent status',expanded=False): st.caption(f"DFS LAB Agent API fallback is active. Error: {st.session_state.get('dfs_agent_error','unknown')}")
+                    st.warning(f"Agent status: API fallback is active. {st.session_state.get('dfs_agent_error','unknown')}")
+
+                if st.session_state['dfs_lab_chat']:
+                    with st.form('dfs_lab_followup_form', clear_on_submit=True):
+                        follow_q=st.text_input('Reply to DFS LAB', placeholder='Reply to DFS LAB…', label_visibility='collapsed')
+                        follow_submit=st.form_submit_button('SEND REPLY  ↗', type='primary', use_container_width=True)
+                    if follow_submit and follow_q.strip():
+                        st.session_state['dfs_agent_pending']=follow_q.strip()
+                        st.rerun()
+
                 st.write(f"DFS Lab selected **{lr['Captain']} at Captain** while preserving the {lr['Construction']} game construction because this combination ranked strongly under the current projection, correlation, salary and contest-risk settings. {lr.get('Strategy Notes','')}")
                 if float(lr.get('Scenario Delta',0))!=0: st.write(f"Your game thesis moved this lineup by **{float(lr['Scenario Delta']):+.2f} projected DK points** versus the unadjusted baseline.")
                 st.markdown("##### Manual swap check (optional)")
