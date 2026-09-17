@@ -1677,10 +1677,12 @@ def solve_showdown_one(
     A=lil_matrix((len(rows),total_vars),dtype=float)
     for rr,coeff in enumerate(rows):
         for col,val in coeff.items(): A[rr,col]=val
+    # Let HiGHS finish the solve instead of abandoning valid/complex Showdown builds
+    # after an arbitrary per-lineup time limit. The user explicitly asked DFS LAB to
+    # finish the requested portfolio rather than stop because a solve took >8 seconds.
     result=milp(c=c, integrality=integrality, bounds=Bounds(lb,ub),
-                constraints=LinearConstraint(A.tocsr(),np.array(lows),np.array(highs)),
-                options={"time_limit":8.0})
-    if not result.success or result.x is None: return None
+                constraints=LinearConstraint(A.tocsr(),np.array(lows),np.array(highs)))
+    if result.x is None: return None
     chosen=[]
     for j,slot in enumerate(SHOWDOWN_SLOTS):
         vals=[(result.x[vidx(i,j)],i) for i in range(n)]
