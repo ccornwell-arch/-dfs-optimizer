@@ -1,0 +1,48 @@
+name: Patch DFS Lab Intent V3
+
+on:
+  push:
+    paths:
+      - '.github/workflows/patch-agent-intent-v3.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Patch intent safely
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          p=Path('streamlit_app.py')
+          s=p.read_text()
+          pat=re.compile(r'(?m)^(\s*)challenge=any\(x in q for x in \["don\'t like".*?"won’t get"\]\)$')
+          m=pat.search(s)
+          if not m:
+              raise SystemExit('challenge line not found')
+          ind=m.group(1)
+          lines=[
+              'qwords=re.findall(r"[a-z]+",q)',
+              'typo_neg=any(difflib.SequenceMatcher(None,w,"wont").ratio()>=0.72 for w in qwords)',
+              'challenge=(any(x in q for x in ["don\'t like","dont like","do not like","hate ","not sold","don\'t want","dont want","get rid","remove ","fade ","off of ","too high","overprojected","over projected","won\'t score","wont score","won’t score","won\'t get","wont get","won’t get","score that much","get that much","projected high","projection high","seems high","too much","not score","not get"]) or (typo_neg and any(x in q for x in ["score","get","project","points","much"])))'
+          ]
+          repl='\n'.join(ind+x for x in lines)
+          s=s[:m.start()]+repl+s[m.end():]
+          p.write_text(s)
+          PY
+      - name: Syntax check
+        run: python -m py_compile streamlit_app.py
+      - name: Commit patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet; then exit 0; fi
+          git add streamlit_app.py
+          git commit -m "Make fallback intent typo tolerant"
+          git push
