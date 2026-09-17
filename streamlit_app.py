@@ -2021,7 +2021,7 @@ button[data-baseweb="tab"]{padding-top:.7rem!important;padding-bottom:.7rem!impo
 </style>
 """,unsafe_allow_html=True)
 
-st.markdown('''<div class="apple-hero"><div class="apple-eyebrow">DFS LAB</div><div class="apple-title">DFS LAB</div><div class="apple-sub">Build lineups around how you think the game will happen.</div><span class="pill">V6.3.3 • Design System</span></div>''',unsafe_allow_html=True)
+st.markdown('''<div class="apple-hero"><div class="apple-eyebrow">DFS LAB</div><div class="apple-title">DFS LAB</div><div class="apple-sub">Build lineups around how you think the game will happen.</div><span class="pill">V6.3.4 • UX Rebuild</span></div>''',unsafe_allow_html=True)
 
 with st.sidebar:
     st.markdown("### DFS LAB Controls")
@@ -2497,7 +2497,7 @@ else:
                 st.markdown("#### Lineup Explorer")
                 st.caption("Highlight a lineup and DFS LAB will analyze all six players together — not just the Captain.")
                 lineup_choices=[f"#{int(r['Rank'])} · {r['Captain']} CPT · {r['Construction']} · {r['Projection']:.1f} pts" for _,r in filtered_result.iterrows()]
-                pick=st.selectbox("Analyze lineup",lineup_choices,key="lineup_lab_pick")
+                pick=st.selectbox("Choose lineup ▾",lineup_choices,key="lineup_lab_pick",help="Tap to switch the lineup DFS LAB is analyzing.")
                 li=lineup_choices.index(pick); lr=filtered_result.iloc[li]
                 risk = "lower" if entry_format=="Single Entry" else ("moderate" if entry_format in ["3-Max","20-Max"] else "higher")
                 contest_reason=(f"{entry_format} with {int(field_size):,} entries. DFS Lab uses {risk} tolerance for fragile salary-relief plays and weights tournament ceiling/correlation accordingly.")
@@ -2567,6 +2567,12 @@ else:
                         if 'why' in q or 'here' in q:
                             return f"**{nm} is here because of the six-player construction, not in isolation.** DFS LAB has him at **{proj:.2f} DK points** with a **${sal:,}** slot salary and labels his role **{purpose.lower()}**. In the **{world}** world, that salary/projection combination helped preserve the rest of this lineup. Base-to-final movement is **{base:.2f} → {proj:.2f}**."
                         return f"For **{nm}**, DFS LAB currently sees **{proj:.2f} projected DK points**, **${sal:,}** in this slot, and a lineup role of **{purpose.lower()}**. This answer is based on the active lineup and **{world}** world; simulation evidence is not available yet."
+                    if ('200' in q and ('player' in q or '$' in q)) or 'minimum salary' in q or 'punt' in q:
+                        cheap=[r for r in detail_rows if int(r.get('Salary',0))<=200]
+                        if cheap:
+                            names=', '.join(r['Player'] for r in cheap)
+                            return f"**You do not have to accept the $200 construction.** This lineup uses **{names}** at the minimum salary because the optimizer preferred what that salary unlocked elsewhere. Your current lineup has only **${int(lr['Salary Left']):,}** left, so replacing that spot may require changing a second player rather than making a direct swap. Use **Best alternative** to challenge the cheap slot, or set a player minimum/exclusion in Players before rebuilding. V6.4 will let us compare the ceiling tradeoff across simulations rather than projection alone."
+                        return "This lineup does not currently contain a $200 player. I can still challenge its cheapest roster spot and compare what a higher-salary construction gives up elsewhere."
                     if 'weak' in q:
                         return f"The weakest projection link is **{low['Player']} at {low['DFS Lab']:.2f} DK points**. DFS LAB is using that roster spot as **{low['Purpose'].lower()}**. The next useful test is whether removing that player forces a second downgrade elsewhere or produces a cleaner six-player lineup."
                     if 'alternative' in q or 'instead' in q or 'change' in q or 'better' in q:
@@ -2584,9 +2590,24 @@ else:
                 if question:
                     response=answer_dfs_lab(question)
                     st.session_state["dfs_lab_chat"].append((question,response))
-                for uq,ar in st.session_state["dfs_lab_chat"][-6:]:
-                    st.markdown(f"<div class='dfs-chat-user'><b>You</b><br>{uq}</div>",unsafe_allow_html=True)
-                    st.markdown(f"<div class='dfs-chat-ai'><b>DFS LAB</b><br>{ar}</div>",unsafe_allow_html=True)
+
+                # Keep the newest exchange directly beside the composer. Older exchanges are
+                # deliberately collapsed so a follow-up never appears to go unanswered.
+                if st.session_state["dfs_lab_chat"]:
+                    latest_q, latest_a = st.session_state["dfs_lab_chat"][-1]
+                    st.markdown("<div class='answer-kicker'>CURRENT ANSWER</div>", unsafe_allow_html=True)
+                    with st.container(border=True):
+                        st.markdown(f"**You**  \n{latest_q}")
+                        st.markdown("---")
+                        st.markdown("**DFS LAB**")
+                        st.markdown(latest_a)
+                    older=st.session_state["dfs_lab_chat"][:-1]
+                    if older:
+                        with st.expander(f"Conversation history · {len(older)} earlier question{'s' if len(older)!=1 else ''}", expanded=False):
+                            for uq,ar in reversed(older[-5:]):
+                                st.markdown(f"**You:** {uq}")
+                                st.markdown(ar)
+                                st.divider()
                 st.write(f"DFS Lab selected **{lr['Captain']} at Captain** while preserving the {lr['Construction']} game construction because this combination ranked strongly under the current projection, correlation, salary and contest-risk settings. {lr.get('Strategy Notes','')}")
                 if float(lr.get('Scenario Delta',0))!=0:
                     st.write(f"Your game thesis moved this lineup by **{float(lr['Scenario Delta']):+.2f} projected DK points** versus the unadjusted baseline.")
@@ -2612,8 +2633,8 @@ else:
                 cols=["Rank","Rating","Rating Score","Projection","Salary","Salary Left","Captain","Captain Pos","CPT Own","Construction","Dup Risk","Projection Grade","Captain Grade","Correlation Grade","Leverage Grade","Duplication Grade","Story","CPT","FLEX1","FLEX2","FLEX3","FLEX4","FLEX5"]
                 st.dataframe(result[[c for c in cols if c in result.columns]],hide_index=True,use_container_width=True,height=610)
                 d1,d2=st.columns(2)
-                with d1: st.download_button("Download analysis CSV",result.to_csv(index=False),"showdown_lineups_v6_3_3.csv","text/csv",use_container_width=True)
-                with d2: st.download_button("Download DK-format lineup CSV",showdown_upload_csv(result),"showdown_dk_upload_v6_3_3.csv","text/csv",use_container_width=True)
+                with d1: st.download_button("Download analysis CSV",result.to_csv(index=False),"showdown_lineups_v6_3_4.csv","text/csv",use_container_width=True)
+                with d2: st.download_button("Download DK-format lineup CSV",showdown_upload_csv(result),"showdown_dk_upload_v6_3_4.csv","text/csv",use_container_width=True)
                 pick=st.number_input("Inspect lineup rank",min_value=1,max_value=len(result),value=1,step=1)
                 r=result.iloc[int(pick)-1]
                 st.write(f"**{r['Rating']} ({r['Rating Score']})** — {r['Story']}")
@@ -2647,4 +2668,43 @@ else:
     except Exception as e:
         st.error(f"Showdown build error: {e}")
 
-st.caption("DFS LAB • V6.3.3 • Design System • Game Worlds • Lineup Explorer")
+
+
+st.markdown(r"""
+<style>
+/* DFS LAB V6.3.4 — iPad-first product shell */
+:root{--shell:#171c24;--shell2:#202733;--surface:#272f3c;--surface2:#303947;--surface3:#394454;--ink:#f6f8fb;--muted:#b5bfcd;--line:rgba(255,255,255,.10);--blue:#2f80ff;--blue2:#5a9cff;}
+[data-testid="stAppViewContainer"]{background:linear-gradient(145deg,#171c24 0%,#202733 55%,#252d39 100%)!important;color:var(--ink)!important;}
+[data-testid="stHeader"]{background:rgba(23,28,36,.88)!important;border-bottom:1px solid var(--line)!important;backdrop-filter:blur(18px)!important;}
+.block-container{max-width:1380px!important;padding-top:1rem!important;}
+section[data-testid="stSidebar"]{background:#1c222c!important;border-right:1px solid var(--line)!important;box-shadow:12px 0 35px rgba(0,0,0,.18)!important;}
+section[data-testid="stSidebar"] *, [data-testid="stAppViewContainer"] label{color:var(--ink)!important;-webkit-text-fill-color:initial!important;}
+.apple-hero{background:linear-gradient(120deg,#202b3a,#18345b 70%,#164579)!important;border:1px solid rgba(255,255,255,.10)!important;box-shadow:0 20px 55px rgba(0,0,0,.22)!important;}
+.apple-hero .apple-title{color:#fff!important}.apple-hero .apple-sub{color:#c9d5e5!important}.apple-hero .apple-eyebrow{color:#86bcff!important}
+h1,h2,h3,h4,h5,.card-title,[data-testid="stMarkdownContainer"] p,[data-testid="stMarkdownContainer"] li{color:var(--ink)!important;}
+.card-sub,.muted,[data-testid="stCaptionContainer"],small{color:var(--muted)!important;}
+[data-testid="stTabs"] [data-baseweb="tab-list"]{gap:6px;background:#1b222c;border:1px solid var(--line);padding:6px;border-radius:14px;}
+[data-testid="stTabs"] button[data-baseweb="tab"]{border-radius:10px!important;padding:.65rem 1rem!important;}
+[data-testid="stTabs"] button[data-baseweb="tab"] p{color:#aeb9c8!important;font-weight:700!important;}
+[data-testid="stTabs"] button[aria-selected="true"]{background:#303b4a!important;}
+[data-testid="stTabs"] button[aria-selected="true"] p{color:#fff!important;}
+[data-baseweb="select"]>div,[data-baseweb="input"]>div,input,textarea{background:#303947!important;border-color:rgba(255,255,255,.15)!important;color:#fff!important;border-radius:12px!important;}
+[data-baseweb="select"] span,[data-baseweb="select"] svg,input::placeholder{color:#d5dce6!important;}
+[data-testid="stMetric"],[data-testid="stDataFrame"],.lineup-card,[data-testid="stVerticalBlockBorderWrapper"]>div{background:#272f3c!important;border-color:var(--line)!important;box-shadow:0 10px 28px rgba(0,0,0,.14)!important;}
+[data-testid="stMetricLabel"],[data-testid="stMetricValue"]{color:var(--ink)!important;}
+.stButton>button{background:#303947!important;color:#f7f9fc!important;border:1px solid rgba(255,255,255,.13)!important;min-height:46px!important;box-shadow:none!important;}
+.stButton>button:hover{background:#394657!important;border-color:rgba(90,156,255,.55)!important;}
+.stButton>button[kind="primary"],[data-testid="stFormSubmitButton"] button,[data-testid="stDownloadButton"] button{background:linear-gradient(90deg,#2474ed,#3e8cff)!important;color:#fff!important;-webkit-text-fill-color:#fff!important;border:0!important;box-shadow:0 8px 24px rgba(47,128,255,.24)!important;}
+.stButton>button *,[data-testid="stFormSubmitButton"] button *,[data-testid="stDownloadButton"] button *{color:inherit!important;-webkit-text-fill-color:inherit!important;}
+/* Selectboxes must read as controls, especially the Lineup chooser. */
+[data-testid="stSelectbox"]>div>div{min-height:50px!important;background:#303947!important;border:1px solid rgba(90,156,255,.42)!important;box-shadow:inset 0 0 0 1px rgba(255,255,255,.02)!important;}
+[data-testid="stSelectbox"] svg{color:#80b5ff!important;}
+.answer-kicker{font-size:.72rem;letter-spacing:.13em;font-weight:850;color:#78b1ff;margin:16px 0 7px;}
+[data-testid="stExpander"]{background:#242c37!important;border:1px solid var(--line)!important;border-radius:12px!important;}
+[data-testid="stExpander"] summary,[data-testid="stExpander"] summary *{color:#dce4ef!important;font-weight:700!important;}
+hr{border-color:rgba(255,255,255,.10)!important;}
+@media(max-width:900px){.block-container{padding-left:.9rem!important;padding-right:.9rem!important}.apple-hero{padding:20px!important}.apple-hero .apple-title{font-size:2rem!important}[data-testid="stTabs"] [data-baseweb="tab-list"]{overflow-x:auto;flex-wrap:nowrap}.stButton>button{min-height:48px!important}}
+</style>
+""",unsafe_allow_html=True)
+
+st.caption("DFS LAB • V6.3.4 • UX Rebuild • Game Worlds • Lineup Explorer")
