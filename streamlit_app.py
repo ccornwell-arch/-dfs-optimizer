@@ -2045,7 +2045,7 @@ section[data-testid="stSidebar"]{background:linear-gradient(180deg,#c8d1dd,#d8e0
 [data-testid="stTabs"] button[aria-selected="true"]{background:#fff!important;box-shadow:0 5px 14px rgba(38,55,78,.12)!important;}
 [data-baseweb="select"]>div,[data-baseweb="input"]>div,textarea{background:#f8fafc!important;border-color:#b9c5d3!important;border-radius:13px!important;box-shadow:inset 0 1px 2px rgba(20,32,50,.03)!important;}
 .stButton>button{transition:transform .14s ease,box-shadow .14s ease,filter .14s ease!important;}.stButton>button:active{transform:scale(.975)!important}.stButton>button:hover{transform:translateY(-1px);}
-.agent-status{display:flex;align-items:center;gap:9px;flex-wrap:wrap;background:rgba(246,249,252,.78);border:1px solid #bdc9d7;border-radius:14px;padding:10px 13px;margin:9px 0 12px;color:#526176;font-size:.82rem}.agent-status b{color:#1e2a3b}.agent-dot{width:9px;height:9px;border-radius:50%;display:inline-block}.agent-dot.live{background:#22c55e;box-shadow:0 0 0 5px rgba(34,197,94,.12);animation:pulse 1.8s infinite}.agent-dot.local{background:#f59e0b}.answer-kicker{font-size:.72rem;font-weight:850;letter-spacing:.11em;color:#5d6c80;margin:18px 0 7px}.chat-user{background:#dce9fb;border:1px solid #b8cdeb;border-radius:16px 16px 5px 16px;padding:13px 15px;color:#1d2c40;margin-bottom:12px;animation:slideUp .25s ease}.chat-label,.chat-agent-label{font-size:.68rem;font-weight:850;letter-spacing:.1em;color:#4670a7;margin-bottom:5px}.chat-agent-label{color:#6c55c7;margin-top:6px}
+.agent-status{display:flex;align-items:center;gap:9px;flex-wrap:wrap;background:rgba(246,249,252,.78);border:1px solid #bdc9d7;border-radius:14px;padding:10px 13px;margin:9px 0 12px;color:#526176;font-size:.82rem}.agent-status b{color:#1e2a3b}.agent-dot{width:9px;height:9px;border-radius:50%;display:inline-block}.agent-dot.live{background:#22c55e;box-shadow:0 0 0 5px rgba(34,197,94,.12);animation:pulse 1.8s infinite}.agent-dot.local{background:#f59e0b}.answer-kicker{font-size:.72rem;font-weight:850;letter-spacing:.11em;color:#5d6c80;margin:18px 0 7px}.chat-user{background:#dce9fb;border:1px solid #b8cdeb;border-radius:16px 16px 5px 16px;padding:13px 15px;color:#1d2c40!important;margin-bottom:12px;animation:slideUp .25s ease}.chat-user *{color:#1d2c40!important}.agent-answer{background:linear-gradient(135deg,#f9fbff,#eef3fb);border:1px solid #c2cde0;border-left:5px solid #7457ff;border-radius:18px;padding:16px 18px;color:#172033!important;box-shadow:0 10px 26px rgba(39,55,78,.09);animation:slideUp .25s ease}.agent-answer *{color:#172033!important}.agent-history{background:#f6f8fc;border:1px solid #c5cfdd;border-radius:14px;padding:12px 14px;color:#172033!important}.agent-history *{color:#172033!important}.chat-label,.chat-agent-label{font-size:.68rem;font-weight:850;letter-spacing:.1em;color:#4670a7;margin-bottom:5px}.chat-agent-label{color:#6c55c7;margin-top:6px}
 [data-testid="stProgress"]>div>div{background:linear-gradient(90deg,var(--fun-blue),var(--fun-purple))!important;}
 @keyframes cardIn{from{opacity:0;transform:translateY(9px)}to{opacity:1;transform:none}}@keyframes slideUp{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}@keyframes pulse{0%,100%{opacity:1}50%{opacity:.45}}
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important;transition:none!important}}
@@ -2615,11 +2615,11 @@ else:
                         new_total=float(packet['active_lineup']['projection']) + delta*(1.5 if mentioned['Slot']=='CPT' else 1.0)
                         return f"**I tested that outcome.** If **{mentioned['Player']} scores {actual:g} DK points**, this lineup moves from **{packet['active_lineup']['projection']:.2f}** expected points to roughly **{new_total:.2f}** using the current lineup projection as the baseline. That's a **{delta:+.2f}-point** result versus his DFS LAB expectation{' before the Captain multiplier' if mentioned['Slot']=='CPT' else ''}. The bigger question is whether the other five players can still deliver the ceiling this lineup needs."
                     if mentioned:
-                        return f"**{mentioned['Player']}** is projected for **{float(mentioned['DFS Lab']):.2f} DK points** and serves as **{str(mentioned['Purpose']).lower()}** in this lineup. I can inspect his role in the six-player construction, compare alternatives, or test a specific outcome. Connect the AI Agent key to ask fully open-ended football questions."
+                        return f"**{mentioned['Player']}** is projected for **{float(mentioned['DFS Lab']):.2f} DK points** and serves as **{str(mentioned['Purpose']).lower()}** in this lineup. I can inspect his role in the six-player construction, compare alternatives, or test a specific outcome. I can go deeper: ask me to challenge his role, compare alternatives, test an outcome, or explain what this lineup is really betting on."
                     low=min(roster,key=lambda x:float(x['DFS Lab'])) if roster else None
                     if 'weak' in q and low:
                         return f"The first piece I'd challenge is **{low['Player']} ({float(low['DFS Lab']):.2f})**. It is the lowest projected piece, but removing it may force salary changes elsewhere."
-                    return "I can inspect the active lineup and run deterministic lineup calculations, but the full conversational Agent is not connected yet. Add the OpenAI API key in Streamlit Secrets and this same box becomes the open-ended DFS LAB Agent."
+                    return "I can inspect this lineup, test player outcomes, identify its weakest dependency, compare alternatives, and explain the game story. Ask me the question the way you would ask another DFS player."
 
                 def run_ai_agent(qtext, packet, history):
                     try:
@@ -2630,7 +2630,17 @@ else:
                         if not api_key: return None
                         client=OpenAI(api_key=api_key)
                         hist='\n'.join([f"USER: {x[0]}\nDFS LAB: {x[1]}" for x in history[-6:]])
-                        instructions="""You are DFS LAB Agent, an expert NFL DraftKings Showdown lineup analyst embedded inside a lineup optimizer. Answer the user's actual question directly. You are not a generic fantasy chatbot. Use ONLY the supplied DFS LAB evidence for numeric claims. You may reason from football concepts, but clearly distinguish inference from model evidence. Understand follow-ups in conversation. Be concise but substantive. When useful: identify what the lineup is betting on, dependencies, salary tradeoffs, correlation, Game World fit, portfolio concentration, and alternatives. If asked a hypothetical, calculate its lineup consequence from the evidence. Never invent simulation rates, ownership, injuries, news, or external facts not present in evidence. If evidence is missing, say exactly what is missing. Suggest one concrete next action when it helps. Do not tell the user to use canned prompt wording."""
+                        instructions="""You are DFS LAB Agent — the sharp, conversational NFL DFS analyst inside DFS LAB. You are not a help bot and you do not sound like documentation. Talk like an elite DFS player sitting beside the user building the slate: confident, concise, curious, occasionally playful, never corny.
+
+Answer the ACTUAL intent behind the user's words. A statement like 'Palmer feels like a bust' is an invitation to evaluate the concern, not a request for a player bio. 'This lineup feels weird' means diagnose it. 'Get him out' means identify a better construction while preserving conversation constraints. Remember follow-ups and pronouns from RECENT CONVERSATION.
+
+Use CURRENT DFS LAB EVIDENCE as the source of truth for all numbers. Never invent projections, ownership, injuries, news, simulation rates, or probabilities. You may use football/DFS reasoning, but label inference as reasoning rather than model evidence. If a fact is unavailable, say what you can conclude without it instead of giving a technical error.
+
+Think across four layers when relevant: PLAYER (projection, salary, role in this build); LINEUP (all six players, correlation, dependency, salary allocation, captain logic, what must happen); GAME WORLD (whether the six-player story coheres with the selected thesis); PORTFOLIO (concentration, repeated bets, captain/world exposure). Do not mechanically recite all four. Pick what answers the question.
+
+For hypotheticals, do the math. For criticism, pressure-test the premise instead of agreeing automatically. For alternatives, explain what the user gains AND gives up. For why questions, explain why this exact lineup chose the player rather than giving generic player analysis. For broad questions, surface the most decision-useful insight first.
+
+Start with the conclusion in 1-2 sentences. Then give 2-4 short evidence-backed points only if useful. End with one specific next move when meaningful. Avoid generic phrases like 'salary relief' unless you explain what the savings buy in THIS lineup. Never mention API keys, model setup, versions, prompts, JSON, or internal architecture. Never claim you changed a lineup unless the app actually did it."""
                         prompt=f"{instructions}\n\nRECENT CONVERSATION:\n{hist}\n\nCURRENT DFS LAB EVIDENCE (JSON):\n{json.dumps(packet,default=str)}\n\nUSER QUESTION:\n{qtext}"
                         resp=client.responses.create(model='gpt-5.6-luna',input=prompt,max_output_tokens=900)
                         return resp.output_text
@@ -2647,7 +2657,7 @@ else:
                 agent_key=False
                 try: agent_key=bool(st.secrets.get('OPENAI_API_KEY',None))
                 except Exception: agent_key=bool(os.getenv('OPENAI_API_KEY'))
-                st.markdown(f"<div class='agent-status'><span class='agent-dot {'live' if agent_key else 'local'}'></span><b>{'AI AGENT LIVE' if agent_key else 'EVIDENCE MODE'}</b><span>{'Open-ended reasoning + DFS LAB evidence' if agent_key else 'Deterministic tools active · connect API key for open-ended reasoning'}</span></div>",unsafe_allow_html=True)
+                st.markdown(f"<div class='agent-status'><span class='agent-dot {'live' if agent_key else 'local'}></span><b>DFS LAB AGENT</b><span>{'Live · lineup-aware reasoning' if agent_key else 'Lineup analysis ready'}</span></div>",unsafe_allow_html=True)
                 qcols=st.columns(4)
                 quick_prompts=['Explain this build','Find the hidden risk','Challenge cheapest player','What is this lineup betting on?']
                 for qi,(qc,qp) in enumerate(zip(qcols,quick_prompts)):
@@ -2670,19 +2680,19 @@ else:
                     st.markdown("<div class='answer-kicker'>LATEST INVESTIGATION</div>",unsafe_allow_html=True)
                     st.markdown(f"<div class='chat-user'><div class='chat-label'>YOU</div>{latest_q}</div>",unsafe_allow_html=True)
                     st.markdown("<div class='chat-agent-label'>DFS LAB AGENT</div>",unsafe_allow_html=True)
-                    st.markdown(latest_a)
+                    st.markdown("<div class='agent-answer'>",unsafe_allow_html=True); st.markdown(latest_a); st.markdown("</div>",unsafe_allow_html=True)
                     older=st.session_state['dfs_lab_chat'][:-1]
                     if older:
                         with st.expander(f"Earlier conversation · {len(older)}",expanded=False):
                             for uq,ar in reversed(older[-6:]):
-                                st.markdown(f"**You:** {uq}"); st.markdown(ar); st.divider()
+                                st.markdown("<div class='agent-history'>",unsafe_allow_html=True); st.markdown(f"**You:** {uq}"); st.markdown(ar); st.markdown("</div>",unsafe_allow_html=True); st.divider()
                 if st.session_state.get('dfs_agent_error'):
                     with st.expander('Agent connection detail',expanded=False): st.caption(st.session_state['dfs_agent_error'])
                 st.write(f"DFS Lab selected **{lr['Captain']} at Captain** while preserving the {lr['Construction']} game construction because this combination ranked strongly under the current projection, correlation, salary and contest-risk settings. {lr.get('Strategy Notes','')}")
                 if float(lr.get('Scenario Delta',0))!=0:
                     st.write(f"Your game thesis moved this lineup by **{float(lr['Scenario Delta']):+.2f} projected DK points** versus the unadjusted baseline.")
                 st.markdown("##### Challenge this lineup")
-                st.caption("Choose a player you would rather use. DFS Lab will show the salary/projection contrast. Full conversational AI control comes after the optimizer evidence layer is validated.")
+                st.caption("Choose a player you would rather use. DFS Lab will show the salary/projection contrast. DFS LAB will show what the swap changes across the entire build.")
                 out_player=st.selectbox("Replace",roster_names,key="lab_out")
                 pool_names=[x for x in build_df['Name'].astype(str).tolist() if x not in roster_names]
                 in_player=st.selectbox("With",pool_names,key="lab_in")
