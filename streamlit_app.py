@@ -9,7 +9,7 @@ import streamlit as st
 from scipy.optimize import Bounds, LinearConstraint, milp
 from scipy.sparse import lil_matrix
 
-st.set_page_config(page_title="DFS Lab V6.0.1", page_icon="🏈", layout="wide")
+st.set_page_config(page_title="DFS Lab V6.1", page_icon="🏈", layout="wide")
 
 st.markdown("""
 <style>
@@ -933,63 +933,127 @@ def _dk_fantasy_points_from_stats(stats):
     pts += (col("receiving_yards") >= 100).astype(float) * 3
     return pts
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=21600, show_spinner=False)
 def _load_nflverse_projection_inputs(season):
+    """Load a multi-year evidence window. Current season is included, but never allowed to dominate early."""
     import nflreadpy as nfl
-    cur = nfl.load_player_stats([int(season)], summary_level="week").to_pandas()
-    prev = nfl.load_player_stats([int(season)-1], summary_level="week").to_pandas()
-    return cur, prev
+    seasons=[int(season)-3,int(season)-2,int(season)-1,int(season)]
+    stats=nfl.load_player_stats(seasons, summary_level="week").to_pandas()
+    return stats
+
+def _name_col(df):
+    return _first_existing(df.columns,["player_display_name","player_name","Name"])
+
+def _opp_col(df):
+    return _first_existing(df.columns,["opponent_team","opponent","opp_team","Opp"])
+
+def _season_col(df):
+    return _first_existing(df.columns,["season","Season"])
+
+def _role_points_from_stats(x):
+    """Opportunity signal: volume moves faster than TD-driven fantasy scoring."""
+    def c(n):
+        return pd.to_numeric(x[n],errors="coerce").fillna(0.0) if n in x.columns else pd.Series(0.0,index=x.index)
+    return c("carries")*0.52 + c("targets")*0.78 + c("receptions")*0.18 + c("passing_attempts")*0.08
 
 def dfs_lab_projection_engine(dk):
-    """V1 independent baseline. Uses nflverse weekly production plus DK slate context.
+    """V6.1 independent projection baseline.
 
-    The model deliberately shrinks small 2026 samples toward prior-season per-game
-    production and the DK slate's AvgPointsPerGame. DK Avg is a stabilizing prior,
-    not the final projection. No SaberSim values are used here.
+    Uses four seasons of nflverse weekly evidence, sample-size shrinkage, opportunity/role,
+    and opponent-vs-position history when the source exposes opponent_team. DK AvgPointsPerGame
+    is only a weak fallback/prior. No SaberSim projection is used.
     """
-    out=dk.copy()
-    # Determine season from game info, with a safe current-year fallback.
-    season=2026
+    out=dk.copy(); season=2026
     try:
         import re
-        m=re.search(r"(20\\d{2})", " ".join(out["Game Info"].astype(str).tolist()))
+        m=re.search(r"(20\d{2})", " ".join(out["Game Info"].astype(str).tolist()))
         if m: season=int(m.group(1))
     except Exception: pass
-    out["DFS Lab Data"]="DK prior only"
+    out["DFS Lab Data"]="DK prior fallback"
     out["DFS Lab Base Proj"]=pd.to_numeric(out.get("AvgPointsPerGame",0),errors="coerce").fillna(0.0)
+    out["History Games"]=0; out["Current Games"]=0; out["Role Signal"]=0.0; out["Matchup Adj %"]=0.0
+    out["Projection Why"]="DK slate prior fallback"
     try:
-        cur,prev=_load_nflverse_projection_inputs(season)
-        def summarize(x):
-            if x is None or x.empty: return pd.DataFrame(columns=["Name","FPPG","Games"])
-            x=x.copy(); x["_fp"]=_dk_fantasy_points_from_stats(x)
-            name_col=_first_existing(x.columns,["player_display_name","player_name","Name"])
-            if not name_col: return pd.DataFrame(columns=["Name","FPPG","Games"])
-            x["Name"]=x[name_col].astype(str).str.strip()
-            # Rows with actual football participation; avoids future schedule placeholders.
-            if "week" in x.columns: x=x[pd.to_numeric(x["week"],errors="coerce").notna()]
-            return x.groupby("Name",as_index=False).agg(FPPG=("_fp","mean"),Games=("_fp","size"))
-        cs=summarize(cur).rename(columns={"FPPG":"CurFPPG","Games":"CurGames"})
-        ps=summarize(prev).rename(columns={"FPPG":"PrevFPPG","Games":"PrevGames"})
-        out=out.merge(cs,on="Name",how="left").merge(ps,on="Name",how="left")
-        for c in ["CurFPPG","CurGames","PrevFPPG","PrevGames"]: out[c]=pd.to_numeric(out[c],errors="coerce").fillna(0.0)
+        stx=_load_nflverse_projection_inputs(season).copy()
+        nc=_name_col(stx); sc=_season_col(stx); oc=_opp_col(stx)
+        if not nc or not sc: raise ValueError("nflverse player name/season columns unavailable")
+        stx["Name"]=stx[nc].astype(str).str.strip(); stx["Season"]=pd.to_numeric(stx[sc],errors="coerce")
+        stx["_fp"]=_dk_fantasy_points_from_stats(stx); stx["_role"]=_role_points_from_stats(stx)
+        # Ignore placeholder rows with no statistical activity.
+        activity=[]
+        for c in ["passing_attempts","carries","targets","receptions","field_goals_made","extra_points_made"]:
+            if c in stx.columns: activity.append(pd.to_numeric(stx[c],errors="coerce").fillna(0.0))
+        if activity:
+            active=sum(activity)>0
+            stx=stx[active | (stx["_fp"].abs()>0)].copy()
+
+        # Per-player per-season summaries. Four-year weights favor recency without letting one game take over.
+        ss=stx.groupby(["Name","Season"],as_index=False).agg(FPPG=("_fp","mean"),Role=("_role","mean"),Games=("_fp","size"))
+        season_weights={season:0.34,season-1:0.38,season-2:0.19,season-3:0.09}
+        rows=[]
+        for name,g in ss.groupby("Name"):
+            hist_num=hist_den=role_num=role_den=0.0; hist_games=cur_games=0
+            for _,r in g.iterrows():
+                yr=int(r["Season"]); games=int(r["Games"]); w=season_weights.get(yr,0.0)
+                if w<=0: continue
+                # Current-year reliability ramps from 20% after one game toward full weight after eight.
+                reliability=min(1.0,max(0.20,games/8.0)) if yr==season else min(1.0,games/8.0)
+                ew=w*reliability
+                hist_num += ew*float(r["FPPG"]); hist_den += ew
+                role_num += ew*float(r["Role"]); role_den += ew
+                hist_games += games
+                if yr==season: cur_games=games
+            rows.append({"Name":name,"HistProj":hist_num/hist_den if hist_den else 0.0,"RoleSignal":role_num/role_den if role_den else 0.0,"HistoryGames":hist_games,"CurrentGames":cur_games})
+        ps=pd.DataFrame(rows)
+        out=out.merge(ps,on="Name",how="left")
+        for c in ["HistProj","RoleSignal","HistoryGames","CurrentGames"]: out[c]=pd.to_numeric(out[c],errors="coerce").fillna(0.0)
+
+        # Opponent-vs-position fantasy allowance: three prior seasons + current season, shrunk toward neutral.
+        matchup={}
+        if oc:
+            stx["Opp"]=stx[oc].astype(str).str.strip()
+            posc=_first_existing(stx.columns,["position","position_group","Pos"])
+            if posc:
+                stx["Pos"]=stx[posc].astype(str).str.upper().replace({"HB":"RB","FB":"RB"})
+                allowed=stx[stx["Pos"].isin(["QB","RB","WR","TE"])].groupby(["Opp","Pos"],as_index=False).agg(Allowed=("_fp","mean"),N=("_fp","size"))
+                league=stx[stx["Pos"].isin(["QB","RB","WR","TE"])].groupby("Pos")["_fp"].mean().to_dict()
+                for _,r in allowed.iterrows():
+                    base=max(float(league.get(r["Pos"],0)),1.0); n=float(r["N"])
+                    raw=float(r["Allowed"])/base-1.0; shrink=n/(n+24.0)
+                    matchup[(str(r["Opp"]),str(r["Pos"]))]=float(np.clip(raw*shrink,-0.10,0.10))
+
         dkavg=pd.to_numeric(out["AvgPointsPerGame"],errors="coerce").fillna(0.0)
-        # Early season: 2026 production matters, but one hot/cold game cannot own the model.
-        cur_w=np.minimum(out["CurGames"],4.0)*0.12
-        prev_w=np.where(out["PrevGames"]>0,0.32,0.0)
-        prior_w=np.maximum(0.20,1.0-cur_w-prev_w)
-        denom=cur_w+prev_w+prior_w
-        raw=(cur_w*out["CurFPPG"]+prev_w*out["PrevFPPG"]+prior_w*dkavg)/denom
-        # Salary is a weak slate-relative sanity prior, never the main projection.
-        sal=pd.to_numeric(out["FlexSalary"],errors="coerce").fillna(0.0)
-        sal_prior=np.maximum(0.5, sal/1000.0*2.05)
-        pos=out["Position"].astype(str).str.upper()
-        skill=~pos.isin(["K","PK","DST","D/ST"])
-        raw=np.where(skill,0.90*raw+0.10*sal_prior,raw)
-        out["DFS Lab Base Proj"]=np.maximum(0.0,raw).round(3)
-        out["DFS Lab Data"]=np.where(out["CurGames"]>0,"2026 + 2025 + DK prior",np.where(out["PrevGames"]>0,"2025 + DK prior","DK prior fallback"))
+        sal=pd.to_numeric(out["FlexSalary"],errors="coerce").fillna(0.0); pos=out["Position"].astype(str).str.upper()
+        vals=[]; reasons=[]; madjs=[]
+        for _,r in out.iterrows():
+            hist=float(r.get("HistProj",0)); games=int(r.get("HistoryGames",0)); curg=int(r.get("CurrentGames",0)); prior=float(r.get("AvgPointsPerGame",0) or 0)
+            # Historical evidence dominates established players; DK average is a weak stabilizer/fallback.
+            evidence=min(0.88, games/(games+8.0))
+            base=(evidence*hist + (1-evidence)*prior) if hist>0 else prior
+            # Role signal is used only as a modest stabilizer, not converted directly to fantasy points.
+            role=float(r.get("RoleSignal",0)); role_adj=0.0
+            if role>0 and base>0:
+                # Keeps TD spikes from dominating while rewarding sustained opportunity.
+                role_adj=float(np.clip((role/12.0)-0.5,-0.04,0.05))
+            opp=""
+            try:
+                teams=[t for t in out["Team"].dropna().unique().tolist() if t]
+                if len(teams)==2: opp=teams[1] if r["Team"]==teams[0] else teams[0]
+            except Exception: pass
+            m=float(matchup.get((str(opp),str(r["Position"]).upper()),0.0)); madjs.append(m*100)
+            # Matchup and role are bounded; they refine the baseline rather than rewrite it.
+            model=max(0.0,base*(1.0+role_adj+m))
+            # Salary prior only for thin-history skill players.
+            if games<5 and str(r["Position"]).upper() in ["QB","RB","WR","TE"]:
+                sp=max(0.3,float(r["FlexSalary"])/1000.0*1.55)
+                model=0.90*model+0.10*sp
+            vals.append(round(model,3))
+            reasons.append(f"4-year history {hist:.2f} over {games} games; current season {curg} game(s) is sample-shrunk; DK prior {prior:.2f}; role {role_adj*100:+.1f}%; {opp or 'opponent'} matchup {m*100:+.1f}%")
+        out["DFS Lab Base Proj"]=vals; out["History Games"]=out["HistoryGames"].astype(int); out["Current Games"]=out["CurrentGames"].astype(int)
+        out["Role Signal"]=out["RoleSignal"].round(2); out["Matchup Adj %"]=np.round(madjs,1); out["Projection Why"]=reasons
+        out["DFS Lab Data"]="2023-2026 history + role + matchup"
     except Exception as e:
-        out["DFS Lab Data"]="DK prior fallback"
-        out.attrs["projection_warning"]=f"Live nflverse data could not load ({e}). DFS Lab used the DK slate prior for this run."
+        out.attrs["projection_warning"]=f"Live nflverse evidence could not load ({e}). DFS Lab used the DK slate prior for this run."
     return out
 
 def apply_projection_overrides(df, override_map=None):
@@ -1510,7 +1574,7 @@ def showdown_lineup_details(df, chosen, strategy_map, script, script_team):
     cpt=df.loc[cpt_i]
     flex_idxs=[i for slot,i in chosen if slot!="CPT"]
     p=df.loc[idxs]
-    proj_col = "Script Proj" if "Script Proj" in df.columns else "My Proj"
+    proj_col = "DFS Lab Proj" if "DFS Lab Proj" in df.columns else ("Script Proj" if "Script Proj" in df.columns else "My Proj")
     projection=1.5*float(cpt[proj_col])+float(df.loc[flex_idxs,proj_col].sum())
     base_projection=1.5*float(cpt["My Proj"])+float(df.loc[flex_idxs,"My Proj"].sum())
     salary=int(cpt["CaptainSalary"])+int(df.loc[flex_idxs,"FlexSalary"].sum())
@@ -1570,10 +1634,11 @@ def add_showdown_ratings(out, aggr):
     proj=out["Projection"].rank(pct=True)
     captain=(out["Projection"] - 0.5*out["Salary Left"]/1000).rank(pct=True)
     corr=out["Correlation Raw"].rank(pct=True)
-    lev=(-out["Total Own"]).rank(pct=True)
-    dup=(-out["Dup Raw"]).rank(pct=True)  # lower popularity proxy = better
+    ownership_available=bool(pd.to_numeric(out["Total Own"],errors="coerce").fillna(0).max()>0.01)
+    lev=(-out["Total Own"]).rank(pct=True) if ownership_available else pd.Series(0.5,index=out.index)
+    dup=(-out["Dup Raw"]).rank(pct=True) if ownership_available else pd.Series(0.5,index=out.index)
     fit=out["User Fit Raw"].rank(pct=True)
-    w_proj=0.34-0.05*aggr; w_cpt=.18; w_corr=.20; w_lev=.11+.04*aggr; w_dup=.10+.05*aggr; w_fit=.07
+    w_proj=0.34-0.05*aggr; w_cpt=.18; w_corr=.20; w_lev=(.11+.04*aggr) if ownership_available else 0.0; w_dup=(.10+.05*aggr) if ownership_available else 0.0; w_fit=.07
     comp=(w_proj*proj+w_cpt*captain+w_corr*corr+w_lev*lev+w_dup*dup+w_fit*fit)/(w_proj+w_cpt+w_corr+w_lev+w_dup+w_fit)
     rel=comp.rank(pct=True,method="average")
     def grade(p):
@@ -1589,8 +1654,8 @@ def add_showdown_ratings(out, aggr):
     out["Projection Grade"]=[percentile_label(x,out["Projection"]) for x in out["Projection"]]
     out["Captain Grade"]=[percentile_label(x,out["Projection"]-0.5*out["Salary Left"]/1000) for x in out["Projection"]-0.5*out["Salary Left"]/1000]
     out["Correlation Grade"]=[percentile_label(x,out["Correlation Raw"]) for x in out["Correlation Raw"]]
-    out["Leverage Grade"]=[percentile_label(-x,-out["Total Own"]) for x in out["Total Own"]]
-    out["Duplication Grade"]=[percentile_label(-x,-out["Dup Raw"]) for x in out["Dup Raw"]]
+    out["Leverage Grade"]=[percentile_label(-x,-out["Total Own"]) for x in out["Total Own"]] if ownership_available else ["Unavailable"]*len(out)
+    out["Duplication Grade"]=[percentile_label(-x,-out["Dup Raw"]) for x in out["Dup Raw"]] if ownership_available else ["Unavailable"]*len(out)
     q1=out["Dup Raw"].quantile(.33); q2=out["Dup Raw"].quantile(.67)
     out["Dup Risk"]=["Low" if x<=q1 else "Medium" if x<=q2 else "High" for x in out["Dup Raw"]]
     return out
@@ -1719,7 +1784,7 @@ html,body,[class*="css"]{font-family:-apple-system,BlinkMacSystemFont,"SF Pro Di
 button[data-baseweb="tab"]{font-weight:750;}
 hr{border-color:rgba(17,24,39,.07)!important;}
 
-/* V6.0.1 iPad sidebar fix.
+/* V6.1 iPad sidebar fix.
    IMPORTANT: let Streamlit own the sidebar transform/width so its native << button
    can actually collapse it. The main canvas then expands into the released space. */
 [data-testid="stMain"], [data-testid="stMainBlockContainer"], .block-container{max-width:100%!important;width:100%!important;}
@@ -1801,7 +1866,7 @@ st.markdown("""
 </style>
 """,unsafe_allow_html=True)
 
-st.markdown('''<div class="apple-hero"><div class="apple-eyebrow">DFS LAB</div><div class="apple-title">Classic + Showdown.</div><div class="apple-sub">One optimizer, two different strategy engines. Showdown adds Captain exposure, game scripts, construction control, correlation and duplication-aware ratings.</div><span class="pill">V6.0.1 • Projection Engine</span></div>''',unsafe_allow_html=True)
+st.markdown('''<div class="apple-hero"><div class="apple-eyebrow">DFS LAB</div><div class="apple-title">Classic + Showdown.</div><div class="apple-sub">One optimizer, two different strategy engines. Showdown adds Captain exposure, game scripts, construction control, correlation and duplication-aware ratings.</div><span class="pill">V6.1 • Projection Engine</span></div>''',unsafe_allow_html=True)
 
 with st.sidebar:
     st.markdown("### Contest")
@@ -1997,7 +2062,7 @@ else:
                         st.session_state["showdown_strategy"].pop(qid,None); st.rerun()
                 st.caption("Lock = every lineup • CPT = Captain every lineup • Out = never use")
 
-            ed=pd.DataFrame({"ID":view["ID"].astype(str),"Name":view["Name"],"Pos":view["Position"],"Team":view["Team"],"Flex $":view["FlexSalary"],"DFS Base":view["My Proj"].round(2),"Model":view["Model Proj"].round(2),"Your Proj":view["DFS Lab Proj"].round(2),"Δ%":view["Proj Change %"].round(1),"Own":view["My Own"].round(1),"CPT Own":view["CPT Own"].round(1),"Lock":False,"CPT Lock":False,"Exclude":False,"CPT Eligible":True,"Priority":"Neutral","Min Exposure":0,"Max Exposure":100,"CPT Min":0,"CPT Max":100})
+            ed=pd.DataFrame({"ID":view["ID"].astype(str),"Name":view["Name"],"Pos":view["Position"],"Team":view["Team"],"Flex $":view["FlexSalary"],"DFS Base":view["My Proj"].round(2),"Hist G":view.get("History Games",pd.Series(0,index=view.index)),"Matchup %":view.get("Matchup Adj %",pd.Series(0.0,index=view.index)),"Model":view["Model Proj"].round(2),"Your Proj":view["DFS Lab Proj"].round(2),"Δ%":view["Proj Change %"].round(1),"Own":view["My Own"].round(1),"CPT Own":view["CPT Own"].round(1),"Lock":False,"CPT Lock":False,"Exclude":False,"CPT Eligible":True,"Priority":"Neutral","Min Exposure":0,"Max Exposure":100,"CPT Min":0,"CPT Max":100})
             for x,r in ed.iterrows():
                 e=st.session_state["showdown_strategy"].get(str(r["ID"]),{})
                 for c,k,d in [("Lock","Lock",False),("CPT Lock","CPT Lock",False),("Exclude","Exclude",False),("CPT Eligible","CPT Eligible",True),("Priority","Priority","Neutral"),("Min Exposure","Min Exposure",0),("Max Exposure","Max Exposure",100),("CPT Min","CPT Min",0),("CPT Max","CPT Max",100)]: ed.at[x,c]=e.get(k,d)
@@ -2006,8 +2071,8 @@ else:
                 hide_index=True,
                 use_container_width=True,
                 height=650,
-                disabled=["ID","Name","Pos","Team","Flex $","DFS Base","Model","Δ%","Own","CPT Own"],
-                column_order=["Name","Lock","CPT Lock","Exclude","CPT Eligible","Priority","Pos","Team","Flex $","DFS Base","Model","Your Proj","Δ%","Own","CPT Own","Min Exposure","Max Exposure","CPT Min","CPT Max"],
+                disabled=["ID","Name","Pos","Team","Flex $","DFS Base","Hist G","Matchup %","Model","Δ%","Own","CPT Own"],
+                column_order=["Name","Lock","CPT Lock","Exclude","CPT Eligible","Priority","Pos","Team","Flex $","DFS Base","Hist G","Matchup %","Model","Your Proj","Δ%","Own","CPT Own","Min Exposure","Max Exposure","CPT Min","CPT Max"],
                 column_config={
                     "ID":None,
                     "Name":st.column_config.TextColumn("Player",width=190,pinned=True),
@@ -2128,16 +2193,18 @@ else:
             ctx_df=apply_context_engine(ctx_base,st.session_state["showdown_context"],context_strength)
             st.markdown("#### Market vs. model foundation")
             st.caption("Base is now DFS Lab's independent nflverse/DK-prior projection. Scenario + context create the model projection; Your Proj can override the final optimizer input.")
-            cp=ctx_df[["Name","My Proj","Script Proj","Context Adj %","DFS Lab Proj"]].copy()
-            cp.columns=["Player","Base","Scenario","Context %","DFS Lab"]
+            cp_cols=["Name","My Proj","Script Proj","Context Adj %","DFS Lab Proj"] + (["SaberSim Proj"] if "SaberSim Proj" in ctx_df.columns else [])
+            cp=ctx_df[cp_cols].copy()
+            cp.columns=["Player","Base","Scenario","Context %","DFS Lab"] + (["SaberSim"] if "SaberSim Proj" in ctx_df.columns else [])
             cp=cp.sort_values("Context %",key=lambda x:x.abs(),ascending=False)
             st.dataframe(cp,hide_index=True,use_container_width=True,height=390,column_config={"Player":st.column_config.TextColumn("Player",pinned=True,width=185),"Base":st.column_config.NumberColumn("Base",format="%.2f"),"Scenario":st.column_config.NumberColumn("Scenario",format="%.2f"),"Context %":st.column_config.NumberColumn("Context %",format="%.1f"),"DFS Lab":st.column_config.NumberColumn("DFS Lab",format="%.2f")})
             why_name=st.selectbox("WHY? player",ctx_df["Name"].astype(str).tolist(),key="context_why_player")
             wr=ctx_df[ctx_df["Name"].astype(str)==str(why_name)].iloc[0]
             with st.expander(f"WHY? · {why_name}",expanded=True):
                 st.write(f"**DFS Base {wr['My Proj']:.2f} → Scenario {wr['Script Proj']:.2f} → DFS Lab {wr['DFS Lab Proj']:.2f}**")
+                st.write(str(wr.get("Projection Why","Historical evidence unavailable")))
                 st.write(str(wr["Context Why"]))
-                st.caption("V5.2 does not invent historical splits. A context factor only moves the projection when you enter evidence for it.")
+                st.caption("DFS Lab V6.1 separates long-term baseline, opponent matchup, scenario, context, and your override so you can see what moved the number.")
 
         with tabs[4]:
             st.markdown('<div class="card-title">Scenario Engine</div><div class="card-sub">Use a football story, a predicted score, or both. V5 converts the scenario into projection tilts, correlation rules and lineup-construction preferences.</div>',unsafe_allow_html=True)
@@ -2247,8 +2314,8 @@ else:
                 cols=["Rank","Rating","Rating Score","Projection","Salary","Salary Left","Captain","Captain Pos","CPT Own","Construction","Dup Risk","Projection Grade","Captain Grade","Correlation Grade","Leverage Grade","Duplication Grade","Story","CPT","FLEX1","FLEX2","FLEX3","FLEX4","FLEX5"]
                 st.dataframe(result[[c for c in cols if c in result.columns]],hide_index=True,use_container_width=True,height=610)
                 d1,d2=st.columns(2)
-                with d1: st.download_button("Download analysis CSV",result.to_csv(index=False),"showdown_lineups_v5_2.csv","text/csv",use_container_width=True)
-                with d2: st.download_button("Download DK-format lineup CSV",showdown_upload_csv(result),"showdown_dk_upload_v5_2.csv","text/csv",use_container_width=True)
+                with d1: st.download_button("Download analysis CSV",result.to_csv(index=False),"showdown_lineups_v6_1.csv","text/csv",use_container_width=True)
+                with d2: st.download_button("Download DK-format lineup CSV",showdown_upload_csv(result),"showdown_dk_upload_v6_1.csv","text/csv",use_container_width=True)
                 pick=st.number_input("Inspect lineup rank",min_value=1,max_value=len(result),value=1,step=1)
                 r=result.iloc[int(pick)-1]
                 st.write(f"**{r['Rating']} ({r['Rating Score']})** — {r['Story']}")
@@ -2278,7 +2345,7 @@ else:
                     estrat.update({"Min Exposure":float(emin),"Max Exposure":float(emax),"CPT Min":float(cmin),"CPT Max":float(cmax)})
                 st.markdown("#### Portfolio exposure")
                 st.dataframe(exp,hide_index=True,use_container_width=True,height=560,column_config={"Name":st.column_config.TextColumn("Player",pinned=True,width=190)})
-                st.download_button("Download exposure CSV",exp.to_csv(index=False),"showdown_exposure_v5_2.csv","text/csv",use_container_width=True)
+                st.download_button("Download exposure CSV",exp.to_csv(index=False),"showdown_exposure_v6_1.csv","text/csv",use_container_width=True)
     except Exception as e:
         st.error(f"Showdown build error: {e}")
 
