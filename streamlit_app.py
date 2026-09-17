@@ -13,7 +13,7 @@ import streamlit as st
 from scipy.optimize import Bounds, LinearConstraint, milp
 from scipy.sparse import lil_matrix
 
-st.set_page_config(page_title="DFS LAB", page_icon="🏈", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="DFS LAB", page_icon="🏈", layout="wide", initial_sidebar_state="collapsed")
 
 st.markdown("""
 <style>
@@ -2053,28 +2053,44 @@ section[data-testid="stSidebar"]{background:linear-gradient(180deg,#c8d1dd,#d8e0
 </style>
 """,unsafe_allow_html=True)
 
+
+st.markdown("""<style>
+/* DFS LAB native command center — no dependency on Streamlit sidebar */
+[data-testid="stSidebar"],[data-testid="stSidebarCollapsedControl"]{display:none!important;}
+.command-strip{display:flex;justify-content:space-between;align-items:center;gap:16px;margin:18px 0 8px;padding:14px 18px;border:1px solid #b8c7d9;border-radius:16px;background:linear-gradient(110deg,#f8fbff,#e7f0fb);box-shadow:0 8px 22px rgba(37,56,82,.08);color:#1a2a40;animation:slideUp .28s ease both}.command-live{font-size:.72rem;letter-spacing:.08em;color:#0b72e7;margin-right:8px}.command-copy{color:#63748a;margin-left:12px;font-size:.86rem}.command-arrow{font-size:.72rem;font-weight:850;letter-spacing:.06em;color:#0b67cf;white-space:nowrap}
+[data-testid="stExpander"]{border:1px solid #b9c7d8!important;border-radius:17px!important;background:rgba(248,250,253,.88)!important;box-shadow:0 8px 22px rgba(39,55,78,.07)!important;margin-bottom:12px!important;overflow:hidden!important}
+[data-testid="stExpander"] summary{min-height:58px!important;padding:0 16px!important;font-weight:850!important;color:#17283e!important;-webkit-text-fill-color:#17283e!important;background:linear-gradient(100deg,#f9fbfe,#edf3f9)!important}
+[data-testid="stExpander"] summary:hover{background:linear-gradient(100deg,#f4f8fd,#e4eef9)!important}
+[data-testid="stExpander"] summary svg{color:#1267d6!important;fill:#1267d6!important;width:22px!important;height:22px!important}
+@media(max-width:900px){.command-copy{display:none}.command-strip{padding:12px 14px}.command-arrow{font-size:.66rem}}
+</style>""",unsafe_allow_html=True)
 st.markdown('''<div class="apple-hero"><div class="apple-eyebrow">NFL SHOWDOWN COMMAND CENTER</div><div class="apple-title">DFS LAB</div><div class="apple-sub">Build lineups around how you think the game will happen.</div><div class="hero-actions"><span class="pill">LIVE SLATE</span><span class="hero-hint">Build · Explore · Challenge</span></div></div>''',unsafe_allow_html=True)
 
-with st.sidebar:
-    st.markdown("### DFS LAB Controls")
-    st.caption("Use the blue Hide control at the top edge to collapse this panel. It stays available as Controls when collapsed.")
-    st.markdown("### Contest")
-    mode=st.segmented_control("Mode",["Classic","Showdown"],default="Showdown")
-    preset=st.selectbox("Contest preset",["Large GPP","Small-field GPP","Single Entry","Winner Take All","Cash-ish"])
+st.markdown("""<div class="command-strip"><div><span class="command-live">● LIVE</span><b> BUILD CONTROL CENTER</b><span class="command-copy"> Contest · Game type · Entries · Strategy</span></div><div class="command-arrow">OPEN BELOW ↓</div></div>""", unsafe_allow_html=True)
+with st.expander("⚙  BUILD CONTROLS  ·  GAME TYPE & CONTEST", expanded=True):
+    st.caption("These controls live inside DFS LAB and stay available after the slate loads.")
+    cc1,cc2=st.columns(2)
+    with cc1:
+        mode=st.segmented_control("Game type",["Classic","Showdown"],default="Showdown")
+        preset=st.selectbox("Contest preset",["Large GPP","Small-field GPP","Single Entry","Winner Take All","Cash-ish"])
     defaults={"Large GPP":(50000,"GPP / top-heavy","150-Max"),"Small-field GPP":(500,"GPP / top-heavy","3-Max"),"Single Entry":(300,"Flatter payouts","Single Entry"),"Winner Take All":(500,"Winner take all","Single Entry"),"Cash-ish":(100,"Flatter payouts","Single Entry")}
     dfield,dpayout,dentry=defaults[preset]
-    field_size=st.number_input("Field size",min_value=2,value=int(dfield),step=1)
-    entry_format=st.selectbox("Entry format",["Single Entry","3-Max","20-Max","150-Max"],index=["Single Entry","3-Max","20-Max","150-Max"].index(dentry))
-    payout_style=st.selectbox("Payout",["GPP / top-heavy","Winner take all","Flatter payouts"],index=["GPP / top-heavy","Winner take all","Flatter payouts"].index(dpayout))
-    lineup_count=st.slider("Lineup pool",25,500,100,25)
-    with st.expander("Advanced"):
+    with cc2:
+        field_size=st.number_input("Field size",min_value=2,value=int(dfield),step=1)
+        entry_format=st.selectbox("Entry format",["Single Entry","3-Max","20-Max","150-Max"],index=["Single Entry","3-Max","20-Max","150-Max"].index(dentry))
+    cc3,cc4=st.columns(2)
+    with cc3: payout_style=st.selectbox("Payout",["GPP / top-heavy","Winner take all","Flatter payouts"],index=["GPP / top-heavy","Winner take all","Flatter payouts"].index(dpayout))
+    with cc4: lineup_count=st.slider("Lineup pool",25,500,100,25)
+    with st.expander("Advanced build settings"):
         seed=st.number_input("Random seed",min_value=1,value=42,step=1)
         st.caption("Change this only when you want a different randomized batch.")
 
-st.markdown('<div class="card-title">Slate files</div><div class="card-sub">DraftKings is the only required file. DFS Lab can create its own baseline projection; SaberSim is now optional and used only as a comparison source.</div>',unsafe_allow_html=True)
-u1,u2=st.columns(2)
-with u1: dk_file=st.file_uploader("DraftKings salaries/template · required",type=["csv"],key="dfs_lab_dk_upload")
-with u2: ss_file=st.file_uploader("SaberSim · optional comparison",type=["csv"],key="dfs_lab_ss_upload")
+_has_cached_slate=bool(st.session_state.get("dfs_lab_dk_bytes"))
+with st.expander("✓ SLATE LOADED · Change files" if _has_cached_slate else "＋ LOAD SLATE FILES", expanded=not _has_cached_slate):
+    st.markdown('<div class="card-sub">DraftKings is required. SaberSim is optional and used as a comparison source.</div>',unsafe_allow_html=True)
+    u1,u2=st.columns(2)
+    with u1: dk_file=st.file_uploader("DraftKings salaries/template · required",type=["csv"],key="dfs_lab_dk_upload")
+    with u2: ss_file=st.file_uploader("SaberSim · optional comparison",type=["csv"],key="dfs_lab_ss_upload")
 
 # Keep a working copy of uploaded bytes during ordinary Streamlit reruns. This prevents
 # widget refreshes from forcing the user to remove/re-add the same slate.
@@ -2100,9 +2116,9 @@ if mode=="Classic":
         df=prepare_player_pool(dk_file,ss_file); teams=sorted(df["Team"].dropna().unique().tolist())
         st.session_state.setdefault("strategy_master",{}); st.session_state.setdefault("team_strategy_master",{})
         q1,q2,q3,q4=st.columns(4); q1.metric("Players",len(df)); q2.metric("Teams",len(teams)); q3.metric("Field",f"{int(field_size):,}"); q4.metric("Pool",lineup_count)
-        min_salary=st.sidebar.slider("Min salary",44000,50000,49000,100)
-        qb_stack=st.sidebar.selectbox("QB pass catchers",[1,2],index=1)
-        bringback_mode=st.sidebar.selectbox("Bring-back",["Optional","Required","None"])
+        min_salary=st.slider("Min salary",44000,50000,49000,100,key="classic_min_salary")
+        qb_stack=st.selectbox("QB pass catchers",[1,2],index=1,key="classic_qb_stack")
+        bringback_mode=st.selectbox("Bring-back",["Optional","Required","None"],key="classic_bringback")
         tabs=st.tabs(["Build","Players","Rules","Lineups","Exposure"])
         with tabs[0]:
             preferred_stack_teams=st.multiselect("Preferred QB stack teams",teams)
@@ -2197,13 +2213,17 @@ else:
         q1,q2,q3,q4=st.columns(4); q1.metric("Players",len(df)); q2.metric("Teams",len(teams)); q3.metric("Field",f"{int(field_size):,}"); q4.metric("Pool",lineup_count)
         if bool(df["CPT Own Estimated"].any()): st.warning("Your SaberSim file does not appear to include Captain ownership. DFS Lab is using a neutral fallback for CPT leverage. Overall ownership is still used normally.")
 
-        # Showdown-specific sidebar controls.
-        salary_style=st.sidebar.selectbox("Salary strategy",["Optimal","Balanced","GPP","Unique","Custom"],index=2)
-        salary_defaults={"Optimal":49500,"Balanced":48500,"GPP":47500,"Unique":46000,"Custom":47000}
-        if salary_style=="Custom": min_salary=st.sidebar.slider("Minimum salary",40000,50000,47000,100)
-        else: min_salary=salary_defaults[salary_style]; st.sidebar.caption(f"Minimum salary: ${min_salary:,}")
+        # Slate-specific build controls live in the main DFS LAB workspace — never in Streamlit's sidebar.
+        with st.expander("🏈  SLATE STRATEGY  ·  SALARY & UNIQUENESS", expanded=False):
+            sc1,sc2=st.columns(2)
+            with sc1: salary_style=st.selectbox("Salary strategy",["Optimal","Balanced","GPP","Unique","Custom"],index=2)
+            salary_defaults={"Optimal":49500,"Balanced":48500,"GPP":47500,"Unique":46000,"Custom":47000}
+            with sc2: min_unique=st.selectbox("Minimum unique players",[1,2,3],index=0)
+            if salary_style=="Custom": min_salary=st.slider("Minimum salary",40000,50000,47000,100)
+            else:
+                min_salary=salary_defaults[salary_style]
+                st.caption(f"{salary_style} strategy · minimum salary ${min_salary:,}")
         max_salary=50000
-        min_unique=st.sidebar.selectbox("Minimum unique players",[1,2,3],index=0)
 
         tabs=st.tabs(["Build","Players","Relationships","Game View","Scripts","Lineup Lab","Exposure"])
         with tabs[0]:
