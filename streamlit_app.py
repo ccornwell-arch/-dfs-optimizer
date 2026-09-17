@@ -2084,6 +2084,31 @@ st.markdown("""<style>
 }
 </style>""",unsafe_allow_html=True)
 st.markdown("""<style>
+/* DFS LAB iPad surface/background pass */
+[data-testid="stAppViewContainer"] {
+  background: linear-gradient(180deg, #dbe4ef 0%, #e7edf5 42%, #dfe8f2 100%) !important;
+}
+[data-testid="stAppViewContainer"] > .main,
+[data-testid="stAppViewContainer"] .main {
+  background: transparent !important;
+}
+[data-testid="stAppViewContainer"] .block-container {
+  background: transparent !important;
+}
+[data-testid="stExpander"],
+[data-testid="stVerticalBlockBorderWrapper"] > div,
+[data-testid="stForm"] {
+  background: rgba(248,250,252,0.94) !important;
+}
+[data-testid="stSelectbox"] [data-baseweb="select"] > div,
+[data-testid="stNumberInput"] > div > div,
+[data-testid="stTextInput"] input,
+[data-testid="stTextArea"] textarea {
+  background: #eef3f9 !important;
+}
+</style>""", unsafe_allow_html=True)
+
+st.markdown("""<style>
 /* Final iPad contrast pass */
 html, body, [data-testid="stAppViewContainer"] {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif !important;
