@@ -2188,6 +2188,25 @@ with st.expander("⚙  BUILD CONTROLS  ·  GAME TYPE & CONTEST", expanded=True):
         seed=st.number_input("Random seed",min_value=1,value=42,step=1)
         st.caption("Change this only when you want a different randomized batch.")
 
+@st.cache_resource
+def _dfs_lab_slate_cache():
+    return {}
+
+# Keep each browser's last successfully uploaded slate alive across ordinary page refreshes.
+# The cache key is stored in the URL so a new Streamlit session can recover the same files.
+if "slate_session" not in st.query_params:
+    import secrets
+    st.query_params["slate_session"] = secrets.token_urlsafe(10)
+_slate_session = str(st.query_params.get("slate_session", "default"))
+_slate_cache = _dfs_lab_slate_cache()
+_cached = _slate_cache.get(_slate_session, {})
+if not st.session_state.get("dfs_lab_dk_bytes") and _cached.get("dk_bytes"):
+    st.session_state["dfs_lab_dk_bytes"] = _cached["dk_bytes"]
+    st.session_state["dfs_lab_dk_name"] = _cached.get("dk_name", "DKSalaries.csv")
+if not st.session_state.get("dfs_lab_ss_bytes") and _cached.get("ss_bytes"):
+    st.session_state["dfs_lab_ss_bytes"] = _cached["ss_bytes"]
+    st.session_state["dfs_lab_ss_name"] = _cached.get("ss_name", "SaberSim.csv")
+
 _has_cached_slate=bool(st.session_state.get("dfs_lab_dk_bytes"))
 with st.expander("✓ SLATE LOADED · Change files" if _has_cached_slate else "＋ LOAD SLATE FILES", expanded=not _has_cached_slate):
     st.markdown('<div class="card-sub">DraftKings is required. SaberSim is optional and used as a comparison source.</div>',unsafe_allow_html=True)
@@ -2199,10 +2218,12 @@ with st.expander("✓ SLATE LOADED · Change files" if _has_cached_slate else "�
 # widget refreshes from forcing the user to remove/re-add the same slate.
 if dk_file is not None:
     st.session_state["dfs_lab_dk_bytes"]=dk_file.getvalue(); st.session_state["dfs_lab_dk_name"]=getattr(dk_file,"name","DKSalaries.csv")
+    _slate_cache[_slate_session] = {**_slate_cache.get(_slate_session, {}), "dk_bytes": st.session_state["dfs_lab_dk_bytes"], "dk_name": st.session_state["dfs_lab_dk_name"]}
 elif st.session_state.get("dfs_lab_dk_bytes"):
     dk_file=io.BytesIO(st.session_state["dfs_lab_dk_bytes"]); dk_file.name=st.session_state.get("dfs_lab_dk_name","DKSalaries.csv")
 if ss_file is not None:
     st.session_state["dfs_lab_ss_bytes"]=ss_file.getvalue(); st.session_state["dfs_lab_ss_name"]=getattr(ss_file,"name","SaberSim.csv")
+    _slate_cache[_slate_session] = {**_slate_cache.get(_slate_session, {}), "ss_bytes": st.session_state["dfs_lab_ss_bytes"], "ss_name": st.session_state["dfs_lab_ss_name"]}
 elif st.session_state.get("dfs_lab_ss_bytes"):
     ss_file=io.BytesIO(st.session_state["dfs_lab_ss_bytes"]); ss_file.name=st.session_state.get("dfs_lab_ss_name","SaberSim.csv")
 
