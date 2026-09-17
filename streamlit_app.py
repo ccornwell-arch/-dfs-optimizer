@@ -161,6 +161,9 @@ button[data-baseweb="tab"] {
 
 /* ---------- Small helper ---------- */
 .muted { color:#64748b; font-size:0.9rem; }
+
+.dfs-chat-user{margin:10px 0 6px auto;padding:12px 14px;max-width:82%;background:#e8f1ff;border:1px solid #bfd5f7;border-radius:16px 16px 4px 16px;color:#172033;}
+.dfs-chat-ai{margin:6px auto 14px 0;padding:14px 16px;max-width:92%;background:#f8fafc;border:1px solid #d7dee8;border-radius:16px 16px 16px 4px;color:#172033;line-height:1.5;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -1991,7 +1994,7 @@ st.markdown("""<style>
 </style>""",unsafe_allow_html=True)
 st.markdown(r"""
 <style>
-/* DFS LAB V6.3.2 — product design system */
+/* DFS LAB V6.3.3 — product design system */
 :root{--lab-bg:#e9edf3;--lab-canvas:#f2f4f7;--lab-panel:#ffffff;--lab-sidebar:#e3e8ef;--lab-ink:#101828;--lab-muted:#667085;--lab-line:#d6dce5;--lab-blue:#1267d6;--lab-blue2:#2f7eea;}
 [data-testid="stAppViewContainer"]{background:linear-gradient(135deg,#e6ebf2 0%,#f4f6f9 46%,#e9eef5 100%)!important;color:var(--lab-ink)!important;}
 [data-testid="stHeader"]{background:rgba(242,244,247,.82)!important;backdrop-filter:blur(18px)!important;border-bottom:1px solid rgba(16,24,40,.06)!important;}
@@ -2018,7 +2021,7 @@ button[data-baseweb="tab"]{padding-top:.7rem!important;padding-bottom:.7rem!impo
 </style>
 """,unsafe_allow_html=True)
 
-st.markdown('''<div class="apple-hero"><div class="apple-eyebrow">DFS LAB</div><div class="apple-title">DFS LAB</div><div class="apple-sub">Build lineups around how you think the game will happen.</div><span class="pill">V6.3.2 • Design System</span></div>''',unsafe_allow_html=True)
+st.markdown('''<div class="apple-hero"><div class="apple-eyebrow">DFS LAB</div><div class="apple-title">DFS LAB</div><div class="apple-sub">Build lineups around how you think the game will happen.</div><span class="pill">V6.3.3 • Design System</span></div>''',unsafe_allow_html=True)
 
 with st.sidebar:
     st.markdown("### DFS LAB Controls")
@@ -2514,17 +2517,76 @@ else:
                     low=min(detail_rows,key=lambda x:x["DFS Lab"])
                     st.write(f"**Weakest projection link:** {low['Player']} ({low['DFS Lab']:.2f}). DFS LAB is using this spot as {low['Purpose'].lower()} within the six-player construction.")
                 st.markdown("##### Ask DFS LAB")
-                ai_q=st.text_input("Ask about this lineup or world",placeholder="Why is this player here? What kills this lineup? What if BUF wins by 14?",key="dfs_lab_question")
-                if ai_q:
-                    q=ai_q.lower()
-                    if "kill" in q or "fail" in q or "break" in q:
-                        st.info(f"This lineup is most vulnerable if the {lr.get('Game World',effective_script)} thesis fails, if {lr['Captain']} does not reach a Captain-level ceiling, or if its lowest-projection salary-relief piece contributes almost nothing.")
-                    elif "why" in q and ("lineup" in q or "built" in q):
-                        st.info(f"DFS LAB built this six-player unit for {lr.get('Game World',effective_script)}: {lr.get('World Thesis','')} It preserves a {lr['Construction']} construction with {lr['Captain']} at CPT while balancing projection, salary, correlation and the {entry_format} contest profile.")
-                    elif "world" in q:
-                        st.info(f"This lineup belongs to {lr.get('Game World',effective_script)}. {lr.get('World Thesis','')} The current portfolio contains {len(filtered_result) if world_filter!='All worlds' else int((result['Game World']==lr.get('Game World')).sum())} lineup(s) in that world.")
-                    else:
-                        st.info("DFS LAB has the active lineup, world, contest and player pool in context. In this first mini-AI layer, use questions about why the lineup exists, what could make it fail, or its game world. V6.4 will add simulation evidence and natural-language re-simulation.")
+                st.caption("Ask about this six-player lineup, any player in it, its Game World, or what DFS LAB would change.")
+                quick_cols=st.columns(4)
+                quick_prompts=["Why this lineup?","Find weak link","What kills it?","Best alternative"]
+                for qi,(qc,qp) in enumerate(zip(quick_cols,quick_prompts)):
+                    if qc.button(qp,key=f"dfs_quick_{qi}",use_container_width=True):
+                        st.session_state["dfs_lab_pending_question"]=qp
+                with st.form("dfs_lab_ask_form",clear_on_submit=True):
+                    ai_q=st.text_input("Question",placeholder="Is Greg Dortch really going to be a scorer this game?",label_visibility="collapsed")
+                    ask_submit=st.form_submit_button("Ask DFS LAB →",type="primary",use_container_width=True)
+                pending=st.session_state.pop("dfs_lab_pending_question",None)
+                question=(ai_q.strip() if ask_submit and ai_q.strip() else pending)
+                if "dfs_lab_chat" not in st.session_state:
+                    st.session_state["dfs_lab_chat"]=[]
+                lineup_sig="|".join(roster_names)+"|"+str(lr.get("Game World",effective_script))
+                if st.session_state.get("dfs_lab_chat_lineup")!=lineup_sig:
+                    st.session_state["dfs_lab_chat"]=[]
+                    st.session_state["dfs_lab_chat_lineup"]=lineup_sig
+
+                def answer_dfs_lab(qtext):
+                    q=qtext.lower().strip()
+                    mentioned=None
+                    for rr in detail_rows:
+                        nm=str(rr["Player"])
+                        parts=[nm.lower(), nm.split()[-1].lower()]
+                        if any(len(x)>2 and x in q for x in parts):
+                            mentioned=rr; break
+                    low=min(detail_rows,key=lambda x:x["DFS Lab"]) if detail_rows else None
+                    world=str(lr.get("Game World",effective_script)); thesis=str(lr.get("World Thesis",''))
+                    if mentioned:
+                        nm=mentioned["Player"]; proj=float(mentioned["DFS Lab"]); sal=int(mentioned["Salary"]); purpose=mentioned["Purpose"]
+                        pr=build_df[build_df['Name'].astype(str).eq(nm)].iloc[0]
+                        base=float(pr.get('DFS Base',pr.get('My Proj',proj))); model=float(pr.get('Model Proj',pr.get('DFS Lab Proj',proj)))
+                        others=build_df[~build_df['Name'].astype(str).isin(roster_names)].copy()
+                        if not others.empty:
+                            others['proj_delta']=pd.to_numeric(others['DFS Lab Proj'],errors='coerce').fillna(0)-proj
+                            others['sal_delta']=pd.to_numeric(others['FlexSalary'],errors='coerce').fillna(0)-int(pr.get('FlexSalary',sal))
+                            legal_others=others[others['sal_delta']<=int(lr['Salary Left'])].sort_values(['DFS Lab Proj','FlexSalary'],ascending=[False,True])
+                            alt=legal_others.iloc[0] if not legal_others.empty else None
+                        else: alt=None
+                        scorer_words=any(x in q for x in ['score','scorer','touchdown','td','points','produce'])
+                        if scorer_words:
+                            level='one of the lineup’s primary scoring pieces' if proj>=15 else ('a secondary contributor' if proj>=8 else 'primarily a salary-relief / low-volume piece')
+                            ans=f"**DFS LAB is not treating {nm} as a primary scorer.** He projects for **{proj:.2f} DK points** in this build and is {level}. His job in this lineup is **{purpose.lower()}**, not to carry the lineup."
+                            if alt is not None:
+                                ans+=f" The best direct salary-cap-legal alternative currently visible is **{alt['Name']}** at **{float(alt['DFS Lab Proj']):.2f}** projected points; that swap changes salary by **${int(alt['sal_delta']):+,}** and projection by **{float(alt['proj_delta']):+.2f}**."
+                            ans+=" V6.4 simulation will let DFS LAB answer the stronger version of this question: how often this player actually reaches a useful ceiling in this exact game world."
+                            return ans
+                        if 'why' in q or 'here' in q:
+                            return f"**{nm} is here because of the six-player construction, not in isolation.** DFS LAB has him at **{proj:.2f} DK points** with a **${sal:,}** slot salary and labels his role **{purpose.lower()}**. In the **{world}** world, that salary/projection combination helped preserve the rest of this lineup. Base-to-final movement is **{base:.2f} → {proj:.2f}**."
+                        return f"For **{nm}**, DFS LAB currently sees **{proj:.2f} projected DK points**, **${sal:,}** in this slot, and a lineup role of **{purpose.lower()}**. This answer is based on the active lineup and **{world}** world; simulation evidence is not available yet."
+                    if 'weak' in q:
+                        return f"The weakest projection link is **{low['Player']} at {low['DFS Lab']:.2f} DK points**. DFS LAB is using that roster spot as **{low['Purpose'].lower()}**. The next useful test is whether removing that player forces a second downgrade elsewhere or produces a cleaner six-player lineup."
+                    if 'alternative' in q or 'instead' in q or 'change' in q or 'better' in q:
+                        return f"The first player I would challenge is **{low['Player']} ({low['DFS Lab']:.2f})** because it is the lowest-projected piece. Use **Challenge this lineup** below to test a replacement; DFS LAB will show whether the direct swap fits the cap. Full re-optimization around the change is the next action layer."
+                    if 'kill' in q or 'fail' in q or 'break' in q:
+                        return f"This lineup is most vulnerable if the **{world}** thesis fails, if **{lr['Captain']}** misses a Captain-level ceiling, or if **{low['Player']}** contributes almost nothing while the salary it saved fails to create enough upside elsewhere. {thesis}"
+                    if 'captain' in q or 'cpt' in q:
+                        return f"**{lr['Captain']} is Captain** because this build rated that player's ceiling path strongly enough to justify the 1.5× salary while keeping a legal **{lr['Construction']}** lineup. The lineup projects for **{lr['Projection']:.2f}** with **${int(lr['Salary Left']):,}** left."
+                    if 'world' in q or 'game' in q or 'thesis' in q:
+                        return f"This lineup represents **{world}**. **{thesis}** DFS LAB is using that world to shape which player combinations make sense together; V6.4 will add simulated game outcomes so we can measure how often the lineup succeeds inside it."
+                    if 'lineup' in q or 'why' in q or 'built' in q:
+                        return f"DFS LAB built this as a **{lr['Construction']} {world}** lineup with **{lr['Captain']} at CPT**. It projects for **{lr['Projection']:.2f}**, leaves **${int(lr['Salary Left']):,}**, and uses **{low['Player']}** as its weakest/salary-relief link. The core bet is: **{thesis}**"
+                    return f"I can evaluate this using the active six-player lineup, **{world}** Game World, projections, salary, contest settings and alternatives. I don't yet have simulation evidence for that exact question. Try naming a player, asking **why this lineup**, **what kills it**, **find weak link**, or **best alternative**."
+
+                if question:
+                    response=answer_dfs_lab(question)
+                    st.session_state["dfs_lab_chat"].append((question,response))
+                for uq,ar in st.session_state["dfs_lab_chat"][-6:]:
+                    st.markdown(f"<div class='dfs-chat-user'><b>You</b><br>{uq}</div>",unsafe_allow_html=True)
+                    st.markdown(f"<div class='dfs-chat-ai'><b>DFS LAB</b><br>{ar}</div>",unsafe_allow_html=True)
                 st.write(f"DFS Lab selected **{lr['Captain']} at Captain** while preserving the {lr['Construction']} game construction because this combination ranked strongly under the current projection, correlation, salary and contest-risk settings. {lr.get('Strategy Notes','')}")
                 if float(lr.get('Scenario Delta',0))!=0:
                     st.write(f"Your game thesis moved this lineup by **{float(lr['Scenario Delta']):+.2f} projected DK points** versus the unadjusted baseline.")
@@ -2550,8 +2612,8 @@ else:
                 cols=["Rank","Rating","Rating Score","Projection","Salary","Salary Left","Captain","Captain Pos","CPT Own","Construction","Dup Risk","Projection Grade","Captain Grade","Correlation Grade","Leverage Grade","Duplication Grade","Story","CPT","FLEX1","FLEX2","FLEX3","FLEX4","FLEX5"]
                 st.dataframe(result[[c for c in cols if c in result.columns]],hide_index=True,use_container_width=True,height=610)
                 d1,d2=st.columns(2)
-                with d1: st.download_button("Download analysis CSV",result.to_csv(index=False),"showdown_lineups_v6_3_1.csv","text/csv",use_container_width=True)
-                with d2: st.download_button("Download DK-format lineup CSV",showdown_upload_csv(result),"showdown_dk_upload_v6_3_1.csv","text/csv",use_container_width=True)
+                with d1: st.download_button("Download analysis CSV",result.to_csv(index=False),"showdown_lineups_v6_3_3.csv","text/csv",use_container_width=True)
+                with d2: st.download_button("Download DK-format lineup CSV",showdown_upload_csv(result),"showdown_dk_upload_v6_3_3.csv","text/csv",use_container_width=True)
                 pick=st.number_input("Inspect lineup rank",min_value=1,max_value=len(result),value=1,step=1)
                 r=result.iloc[int(pick)-1]
                 st.write(f"**{r['Rating']} ({r['Rating Score']})** — {r['Story']}")
@@ -2585,4 +2647,4 @@ else:
     except Exception as e:
         st.error(f"Showdown build error: {e}")
 
-st.caption("DFS LAB • V6.3.2 • Design System • Game Worlds • Lineup Explorer")
+st.caption("DFS LAB • V6.3.3 • Design System • Game Worlds • Lineup Explorer")
