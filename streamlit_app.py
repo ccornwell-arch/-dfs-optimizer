@@ -843,12 +843,16 @@ def generate_lineups(
 def _classic_time_bucket(game_info):
     import re
     s=str(game_info or "")
-    m=re.search(r"(\\d{1,2}):(\\d{2})\\s*(AM|PM)",s,re.I)
-    if not m:
-        return "Time unknown"
-    h=int(m.group(1))%12
-    if m.group(3).upper()=="PM": h+=12
-    return "Night" if h>=18 else "Day"
+    m=re.search(r"(\d{1,2}):(\d{2})\s*(AM|PM)",s,re.I)
+    if m:
+        h=int(m.group(1))%12
+        if m.group(3).upper()=="PM": h+=12
+        return "Night" if h>=18 else "Day"
+    # Some DK exports use a 24-hour clock without AM/PM.
+    m24=re.search(r"\b([01]?\d|2[0-3]):([0-5]\d)\b",s)
+    if m24:
+        return "Night" if int(m24.group(1))>=18 else "Day"
+    return "Time unknown"
 
 
 @st.cache_data(ttl=21600, show_spinner=False)
@@ -2412,7 +2416,7 @@ st.markdown("""<style>
 }
 </style>""", unsafe_allow_html=True)
 
-st.markdown('''<div class="apple-hero"><div class="apple-eyebrow">NFL SHOWDOWN COMMAND CENTER</div><div class="apple-title">DFS LAB</div><div class="apple-sub">Build lineups around how you think the game will happen.</div><div class="hero-actions"><span class="pill">LIVE SLATE</span><span class="hero-hint">Build · Explore · Challenge</span></div></div>''',unsafe_allow_html=True)
+st.markdown('''<div class="apple-hero"><div class="apple-eyebrow">NFL DFS COMMAND CENTER</div><div class="apple-title">DFS LAB</div><div class="apple-sub">Build lineups around how you think the game will happen.</div><div class="hero-actions"><span class="pill">LIVE SLATE</span><span class="hero-hint">Build · Explore · Challenge</span></div></div>''',unsafe_allow_html=True)
 
 st.markdown("""<div class="command-strip"><div><span class="command-live">● LIVE</span><b> BUILD CONTROL CENTER</b><span class="command-copy"> Contest · Game type · Entries · Strategy</span></div><div class="command-arrow">OPEN BELOW ↓</div></div>""", unsafe_allow_html=True)
 with st.expander("⚙  BUILD CONTROLS  ·  GAME TYPE & CONTEST", expanded=True):
@@ -2525,6 +2529,34 @@ if mode=="Classic":
         .intel-kicker{font-size:.72rem;font-weight:850;letter-spacing:.09em;color:#1559c7;text-transform:uppercase}
         .intel-big{font-size:1.18rem;font-weight:850;color:#172033;margin-top:4px}
         .intel-copy{font-size:.9rem;color:#59677a;line-height:1.45;margin-top:4px}
+        [data-testid="stTabs"] [role="tablist"]{
+            position:sticky!important;top:.35rem!important;z-index:999!important;
+            background:#e5ebf3!important;border:1px solid #aebccc!important;
+            border-radius:14px!important;padding:6px 8px!important;
+            box-shadow:0 8px 22px rgba(37,52,76,.16)!important;
+        }
+        [data-testid="stTabs"] [role="tab"]{
+            opacity:1!important;visibility:visible!important;min-height:46px!important;
+            border-radius:10px!important;
+        }
+        [data-testid="stTabs"] [role="tab"] p,
+        [data-testid="stTabs"] [role="tab"] span{
+            color:#26364c!important;-webkit-text-fill-color:#26364c!important;
+            opacity:1!important;font-weight:800!important;
+        }
+        [data-testid="stTabs"] [role="tab"][aria-selected="true"]{
+            background:#1559c7!important;
+        }
+        [data-testid="stTabs"] [role="tab"][aria-selected="true"] p,
+        [data-testid="stTabs"] [role="tab"][aria-selected="true"] span{
+            color:#fff!important;-webkit-text-fill-color:#fff!important;
+        }
+        .stButton > button[kind="primary"],
+        .stButton > button[kind="primary"] *,
+        [data-testid="stFormSubmitButton"] button,
+        [data-testid="stFormSubmitButton"] button *{
+            color:#fff!important;-webkit-text-fill-color:#fff!important;font-weight:850!important;
+        }
         </style>
         """,unsafe_allow_html=True)
 
@@ -2549,7 +2581,8 @@ if mode=="Classic":
             if sim_table is not None and not sim_table.empty:
                 top=sim_table.iloc[0]
                 st.markdown(f"<div class='intel-card'><div class='intel-kicker'>5,000-simulation slate read</div><div class='intel-big'>{top['Game']} has the strongest simulated ceiling footprint</div><div class='intel-copy'>It produced the highest DFS environment in {float(top['Slate ceiling %']):.1f}% of projection-driven simulations. P90 environment: {float(top['P90']):.1f}. These are comparative DFS simulations, not sportsbook game probabilities.</div></div>",unsafe_allow_html=True)
-                st.dataframe(sim_table,hide_index=True,use_container_width=True,height=min(430,70+35*len(sim_table)))
+                sim_cols=["Game","Mean DFS env","P75","P90","Volatility","Slate ceiling %"]
+                st.dataframe(sim_table[[x for x in sim_cols if x in sim_table.columns]],hide_index=True,use_container_width=True,height=min(430,70+35*len(sim_table)))
 
             st.markdown("#### Context evidence")
             st.caption("DFS LAB blends the uploaded slate with multi-year player results and opponent-vs-position evidence. Current day/night is shown when DraftKings Game Info exposes kickoff time. Travel, weather and injury/news are not invented when the current data feed does not supply them.")
@@ -2567,7 +2600,7 @@ if mode=="Classic":
             rr2.metric("Bring-back",rec["bringback"])
             rr3.metric("Salary floor","$"+f"{int(rec['min_salary']):,}")
             rr4.metric("Max from one game",rec["max_game"])
-            st.caption(f"Contest aggression {rec['aggression']:.2f} · top simulated game ceiling share {rec['top_game_share']:.1f}%. Recommendations are staged only when you choose Apply.")
+            st.caption(f"Built for {entry_format} in a {int(field_size):,}-entry {payout_style.lower()} contest. Top simulated game ceiling share: {rec['top_game_share']:.1f}%. Recommendations are staged only when you choose Apply.")
             if st.button("APPLY DFS LAB RECOMMENDED RULES",type="primary",use_container_width=True,key="classic_apply_intel"):
                 st.session_state["classic_qb_stack"]=int(rec["qb_stack"])
                 st.session_state["classic_bringback"]=str(rec["bringback"])
