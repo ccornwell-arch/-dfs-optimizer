@@ -467,7 +467,7 @@ def solve_one(
     exposure_state=None, built_count=0,
     no_dst_from_qb_game=True, no_offense_vs_dst=False,
     noise_scale=0.16, max_players_team=9, max_players_game=9,
-    max_te=3, allow_qb_with_rb=True
+    max_te=3, allow_qb_with_rb=True, allowed_qb_ids=None
 ):
     n = len(df)
     s = len(ROSTER_SLOTS)
@@ -491,6 +491,8 @@ def solve_one(
         strat = strategy_map.get(player_id, {})
         excluded = bool(strat.get("Exclude", False)) or strat.get("Priority") == "Exclude"
         locked = bool(strat.get("Lock", False)) and not excluded
+        if allowed_qb_ids and bool(df.loc[i,"is_QB"]) and player_id not in set(str(x) for x in allowed_qb_ids):
+            excluded = True
 
         for j, slot in enumerate(ROSTER_SLOTS):
             c[vidx(i, j)] = -randomized[i]
@@ -765,7 +767,8 @@ def generate_lineups(
     df, field_size, payout_style, count, attempts, min_salary,
     qb_stack_min, bringback_mode, preferred_stack_teams,
     strategy_map, team_strategy_map, no_dst_from_qb_game, no_offense_vs_dst, seed,
-    max_players_team=9, max_players_game=9, max_te=3, allow_qb_with_rb=True
+    max_players_team=9, max_players_game=9, max_te=3, allow_qb_with_rb=True,
+    allowed_qb_ids=None
 ):
     aggr = contest_aggression(field_size, payout_style)
     rng = np.random.default_rng(seed)
@@ -790,7 +793,8 @@ def generate_lineups(
             max_players_team=max_players_team,
             max_players_game=max_players_game,
             max_te=max_te,
-            allow_qb_with_rb=allow_qb_with_rb
+            allow_qb_with_rb=allow_qb_with_rb,
+            allowed_qb_ids=allowed_qb_ids
         )
         if not chosen:
             continue
@@ -1026,6 +1030,88 @@ def classic_strategy_theses(df, intel, sim_table, field_size, payout_style, entr
     reason=(f"{entry_format} rewards {'concentration' if entry_format in ['Single Entry','3-Max'] else 'coverage'}, "
             f"but the slate evidence decides how many paths deserve attention. Top thesis attention {top:.1f}%; top three {top3:.1f}%.")
     return t,{"label":label,"reason":reason,"top_attention":round(top,1),"top3_attention":round(top3,1)}
+
+def classic_qb_concentration_plan(df, thesis_table, entry_format):
+    """Choose how concentrated the Classic QB pool should be from slate evidence.
+
+    WHY THIS EXISTS:
+    In Single Entry and 3-Max, the user is not trying to cover every plausible outcome.
+    The portfolio should express a smaller number of strongest slate theses. A 50-lineup
+    candidate set using 15-20 QBs is useful for exploration, but it is the wrong behavior
+    for choosing one or three actual entries because weak, nearly interchangeable QB paths
+    survive simply through optimizer randomness.
+
+    IMPORTANT: this is NOT "Single Entry = N quarterbacks." The number is earned by the
+    slate. QB support is aggregated from direct QB theses, receiver/TE theses that imply a
+    paired QB, and game-environment theses. We then keep quarterbacks while their support
+    remains meaningfully close to the best paths. An open slate can therefore keep many;
+    a slate with real separation can narrow to one or two.
+    """
+    qbs=df[df["is_QB"] & df["ActiveForBuild"]][["ID","Name","Team","Matchup","My Proj","My Own"]].copy()
+    if qbs.empty:
+        return [],pd.DataFrame(),{"label":"No QB pool","reason":"No active quarterbacks were available."}
+
+    support={str(r["Name"]):0.0 for _,r in qbs.iterrows()}
+    reasons={str(r["Name"]):[] for _,r in qbs.iterrows()}
+
+    if thesis_table is not None and not thesis_table.empty:
+        for _,t in thesis_table.iterrows():
+            att=float(t.get("Attention %",0.0))
+            typ=str(t.get("Type",""))
+            paired=str(t.get("Paired QB","")).strip()
+            game=str(t.get("Game","")).strip()
+            if paired in support:
+                weight=1.0 if typ=="QB" else 0.85
+                support[paired]+=att*weight
+                reasons[paired].append(f"{typ.lower()} thesis {att:.1f}")
+            if typ=="Game" and game:
+                game_qbs=qbs[qbs["Matchup"].astype(str).eq(game)]
+                if not game_qbs.empty:
+                    split=att/len(game_qbs)
+                    for nm in game_qbs["Name"].astype(str):
+                        support[nm]+=split*0.60
+                        reasons[nm].append(f"game thesis {att:.1f}")
+
+    # Projection and leverage provide a floor so a strong QB is not discarded merely
+    # because another player on his team generated the named thesis.
+    proj=qbs["My Proj"].rank(pct=True,method="average")
+    lev=(qbs["My Proj"]/(pd.to_numeric(qbs["My Own"],errors="coerce").fillna(0)+4.0)).rank(pct=True,method="average")
+    for idx,r in qbs.iterrows():
+        nm=str(r["Name"])
+        support[nm]+=12.0*float(proj.loc[idx])+5.0*float(lev.loc[idx])
+
+    rows=[]
+    for _,r in qbs.iterrows():
+        nm=str(r["Name"])
+        rows.append({"ID":str(r["ID"]),"QB":nm,"Team":str(r["Team"]),"Game":str(r["Matchup"]),
+                     "Support":float(support[nm]),"Why":" · ".join(reasons[nm][:3]) or "projection/leverage support"})
+    tab=pd.DataFrame(rows).sort_values("Support",ascending=False).reset_index(drop=True)
+    if tab.empty:
+        return [],tab,{"label":"No QB pool","reason":"No quarterback support scores were available."}
+
+    top=float(tab.iloc[0]["Support"])
+    tab["Relative %"]=(100.0*tab["Support"]/max(top,1e-9)).round(1)
+
+    # Entry format changes how far down the evidence curve we are willing to go.
+    # These are evidence cutoffs, not quarterback-count targets.
+    rel_floor={"Single Entry":58.0,"3-Max":48.0,"20-Max":30.0,"150-Max":14.0}.get(entry_format,30.0)
+    kept=tab[tab["Relative %"]>=rel_floor].copy()
+
+    # If the slate is extremely flat, avoid a false sense of precision: keep every QB
+    # that is effectively tied with the last qualifying path.
+    if not kept.empty:
+        boundary=float(kept.iloc[-1]["Support"])
+        tied=tab[tab["Support"]>=boundary*0.97]
+        kept=tied.copy()
+
+    ids=kept["ID"].astype(str).tolist()
+    names=kept["QB"].astype(str).tolist()
+    label=f"{len(ids)} QB path" if len(ids)==1 else f"{len(ids)} QB paths"
+    reason=(f"{entry_format}: DFS LAB is keeping {label} because each retained QB has at least "
+            f"{rel_floor:.0f}% of the top evidence score. The cutoff is based on thesis support, "
+            "projection, game environment and leverage—not a preset QB count.")
+    return ids,tab,{"label":label,"reason":reason,"names":names,"relative_floor":rel_floor}
+
 
 def classic_contest_recommendations(field_size, payout_style, entry_format, sim_table):
     aggr=contest_aggression(field_size,payout_style)
@@ -2667,6 +2753,7 @@ if mode=="Classic":
         sim_input["Sim Proj"]=pd.to_numeric(sim_input["My Proj"],errors="coerce").fillna(0.0)*(1+0.50*pd.to_numeric(sim_input["DVP Adj %"],errors="coerce").fillna(0.0)/100.0)
         sim_table=classic_simulate_slate(sim_input[["Name","Position","Team","Matchup","Sim Proj"]],5000,seed)
         thesis_table,thesis_state=classic_strategy_theses(df,intel,sim_table,field_size,payout_style,entry_format)
+        classic_qb_ids,qb_plan_table,qb_plan=classic_qb_concentration_plan(df,thesis_table,entry_format)
         rec=classic_contest_recommendations(field_size,payout_style,entry_format,sim_table)
 
         tabs=st.tabs(["🧠 Slate Intel","⚡ Build","👤 Players","⚙ Rules","📋 Lineups","📊 Exposure"])
@@ -2730,6 +2817,15 @@ if mode=="Classic":
                 if st.session_state.get("classic_thesis_applied"):
                     st.caption("Active thesis lean: "+str(st.session_state["classic_thesis_applied"]))
 
+            st.markdown("#### QB concentration")
+            st.markdown(f"<div class='intel-card'><div class='intel-kicker'>Contest concentration</div><div class='intel-big'>{qb_plan['label']}</div><div class='intel-copy'>{qb_plan['reason']}</div></div>",unsafe_allow_html=True)
+            if qb_plan_table is not None and not qb_plan_table.empty:
+                qshow=qb_plan_table.copy()
+                qshow["In build pool"]=qshow["ID"].astype(str).isin(set(str(x) for x in classic_qb_ids))
+                st.dataframe(qshow[["QB","Team","Game","Relative %","In build pool","Why"]].head(12),
+                    hide_index=True,use_container_width=True,height=min(430,70+35*min(12,len(qshow))))
+            st.caption("Single Entry and 3-Max intentionally narrow weak QB paths so candidate lineups express a stance. 150-Max keeps a much wider evidence band for portfolio coverage.")
+
             st.markdown("#### DFS LAB recommended setup")
             rr1,rr2,rr3,rr4=st.columns(4)
             rr1.metric("QB pass catchers",rec["qb_stack"])
@@ -2753,6 +2849,8 @@ if mode=="Classic":
                 "contest":{"entry_format":entry_format,"field_size":int(field_size),"payout":payout_style},
                 "recommendations":rec,
                 "thesis_state":thesis_state,
+                "qb_concentration":qb_plan,
+                "qb_candidates":qb_plan_table.head(12).to_dict(orient="records") if qb_plan_table is not None and not qb_plan_table.empty else [],
                 "theses":thesis_table.head(10).to_dict(orient="records") if thesis_table is not None and not thesis_table.empty else [],
                 "simulations":sim_table.head(10).to_dict(orient="records") if sim_table is not None and not sim_table.empty else [],
                 "context_players":intel_view.sort_values("Proj",ascending=False).head(30).to_dict(orient="records") if not intel.empty else [],
@@ -2782,6 +2880,8 @@ if mode=="Classic":
             for _,r in team_edit.iterrows(): st.session_state["team_strategy_master"][r["Team"]]=r["Priority"]
             if st.session_state.get("classic_thesis_applied"):
                 st.markdown("**Build thesis:** "+str(st.session_state["classic_thesis_applied"]))
+            st.markdown("**Automatic QB stance:** "+", ".join(qb_plan.get("names",[])) if qb_plan.get("names") else "**Automatic QB stance:** open")
+            st.caption(qb_plan.get("reason",""))
             st.info("Current rule set · QB + "+str(st.session_state["classic_qb_stack"])+" pass catcher(s) · Bring-back "+str(st.session_state["classic_bringback"])+" · Min salary $"+f"{int(st.session_state['classic_min_salary']):,}"+" · Max "+str(st.session_state["classic_max_game"])+" from one game")
             build_btn=st.button(f"⚡ GENERATE {lineup_count} RATED LINEUPS",type="primary",use_container_width=True,key="v4_classic_build")
 
@@ -2838,7 +2938,8 @@ if mode=="Classic":
                 max_players_team=int(st.session_state["classic_max_team"]),
                 max_players_game=int(st.session_state["classic_max_game"]),
                 max_te=int(st.session_state["classic_max_te"]),
-                allow_qb_with_rb=bool(st.session_state["classic_allow_qb_rb"])
+                allow_qb_with_rb=bool(st.session_state["classic_allow_qb_rb"]),
+                allowed_qb_ids=classic_qb_ids
             )
             st.session_state["classic_result_v4"]=res
 
