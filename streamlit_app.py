@@ -2486,70 +2486,201 @@ if mode=="Classic" and not ss_file:
     st.stop()
 
 if mode=="Classic":
-    # Preserve the proven V3 Classic engine with a compact V4 shell.
     try:
         df=prepare_player_pool(dk_file,ss_file); teams=sorted(df["Team"].dropna().unique().tolist())
         st.session_state.setdefault("strategy_master",{}); st.session_state.setdefault("team_strategy_master",{})
-        q1,q2,q3,q4=st.columns(4); q1.metric("Players",len(df)); q2.metric("Teams",len(teams)); q3.metric("Field",f"{int(field_size):,}"); q4.metric("Pool",lineup_count)
-        min_salary=st.slider("Min salary",44000,50000,49000,100,key="classic_min_salary")
-        qb_stack=st.selectbox("QB pass catchers",[1,2],index=1,key="classic_qb_stack")
-        bringback_mode=st.selectbox("Bring-back",["Optional","Required","None"],key="classic_bringback")
-        tabs=st.tabs(["Build","Players","Rules","Lineups","Exposure"])
+        st.session_state.setdefault("classic_ai_chat",[])
+        st.session_state.setdefault("classic_qb_stack",2)
+        st.session_state.setdefault("classic_bringback","Optional")
+        st.session_state.setdefault("classic_min_salary",48500)
+        st.session_state.setdefault("classic_max_team",5)
+        st.session_state.setdefault("classic_max_game",5)
+        st.session_state.setdefault("classic_max_te",2)
+        st.session_state.setdefault("classic_no_dst",True)
+        st.session_state.setdefault("classic_no_off",False)
+        st.session_state.setdefault("classic_allow_qb_rb",True)
+
+        st.markdown("""
+        <style>
+        [data-testid="stTabs"] [data-baseweb="tab-list"]{
+            position:sticky!important;top:3.55rem!important;z-index:950!important;
+            background:rgba(229,234,240,.96)!important;backdrop-filter:blur(16px)!important;
+            border:1px solid #b9c5d3!important;border-radius:14px!important;padding:6px!important;
+            box-shadow:0 8px 22px rgba(37,52,76,.12)!important;margin-bottom:12px!important;
+        }
+        [data-testid="stTabs"] button[data-baseweb="tab"]{
+            min-height:44px!important;border-radius:10px!important;padding:.65rem 1rem!important;
+        }
+        [data-testid="stTabs"] button[data-baseweb="tab"] p{
+            font-weight:850!important;font-size:.96rem!important;color:#334155!important;
+        }
+        [data-testid="stTabs"] button[data-baseweb="tab"][aria-selected="true"]{
+            background:#1559c7!important;box-shadow:0 5px 14px rgba(21,89,199,.25)!important;
+        }
+        [data-testid="stTabs"] button[data-baseweb="tab"][aria-selected="true"] p{
+            color:#fff!important;-webkit-text-fill-color:#fff!important;
+        }
+        .intel-card{background:linear-gradient(135deg,#eef5ff,#f8fbff);border:1px solid #b8cae3;
+            border-radius:18px;padding:16px 18px;margin:10px 0;box-shadow:0 8px 22px rgba(37,52,76,.07)}
+        .intel-kicker{font-size:.72rem;font-weight:850;letter-spacing:.09em;color:#1559c7;text-transform:uppercase}
+        .intel-big{font-size:1.18rem;font-weight:850;color:#172033;margin-top:4px}
+        .intel-copy{font-size:.9rem;color:#59677a;line-height:1.45;margin-top:4px}
+        </style>
+        """,unsafe_allow_html=True)
+
+        q1,q2,q3,q4=st.columns(4)
+        q1.metric("Players",len(df)); q2.metric("Teams",len(teams)); q3.metric("Field",f"{int(field_size):,}"); q4.metric("Pool",lineup_count)
+
+        intel=classic_context_evidence(df[["Name","Position","Team","Opponent","Game Info","My Proj"]].copy())
+        intel_map=intel.set_index("Name") if not intel.empty else pd.DataFrame()
+        sim_input=df[["Name","Position","Team","Opponent","Matchup","My Proj"]].copy()
+        sim_input["DVP Adj %"]=sim_input["Name"].map(intel_map["DVP Adj %"] if not intel.empty else {}).fillna(0.0)
+        sim_input["Sim Proj"]=pd.to_numeric(sim_input["My Proj"],errors="coerce").fillna(0.0)*(1+0.50*pd.to_numeric(sim_input["DVP Adj %"],errors="coerce").fillna(0.0)/100.0)
+        sim_table=classic_simulate_slate(sim_input[["Name","Position","Team","Matchup","Sim Proj"]],5000,seed)
+        rec=classic_contest_recommendations(field_size,payout_style,entry_format,sim_table)
+
+        tabs=st.tabs(["🧠 Slate Intel","⚡ Build","👤 Players","⚙ Rules","📋 Lineups","📊 Exposure"])
+
         with tabs[0]:
-            preferred_stack_teams=st.multiselect("Preferred QB stack teams",teams)
+            st.markdown('<div class="card-title">DFS LAB Slate Intel</div><div class="card-sub">Study the slate first. Then decide which optimizer rules deserve to be used for this contest.</div>',unsafe_allow_html=True)
+            contest_desc=f"{entry_format} · {int(field_size):,} entries · {payout_style}"
+            st.markdown(f"<div class='intel-card'><div class='intel-kicker'>Contest lens</div><div class='intel-big'>{contest_desc}</div><div class='intel-copy'>DFS LAB changes its recommendations with field size, entry format and payout shape. The same slate should not be built the same way in Single Entry and 150-Max.</div></div>",unsafe_allow_html=True)
+
+            if sim_table is not None and not sim_table.empty:
+                top=sim_table.iloc[0]
+                st.markdown(f"<div class='intel-card'><div class='intel-kicker'>5,000-simulation slate read</div><div class='intel-big'>{top['Game']} has the strongest simulated ceiling footprint</div><div class='intel-copy'>It produced the highest DFS environment in {float(top['Slate ceiling %']):.1f}% of projection-driven simulations. P90 environment: {float(top['P90']):.1f}. These are comparative DFS simulations, not sportsbook game probabilities.</div></div>",unsafe_allow_html=True)
+                st.dataframe(sim_table,hide_index=True,use_container_width=True,height=min(430,70+35*len(sim_table)))
+
+            st.markdown("#### Context evidence")
+            st.caption("DFS LAB blends the uploaded slate with multi-year player results and opponent-vs-position evidence. Current day/night is shown when DraftKings Game Info exposes kickoff time. Travel, weather and injury/news are not invented when the current data feed does not supply them.")
+            intel_view=intel.copy()
+            if not intel_view.empty:
+                intel_view["Proj"]=intel_view["My Proj"].round(2)
+                intel_view["Hist FPPG"]=intel_view["Hist FPPG"].round(2)
+                intel_view["Recent 6"]=intel_view["Recent 6"].round(2)
+                cols=["Name","Position","Team","Opponent","Proj","Hist FPPG","Recent 6","Hist Games","DVP Adj %","Time"]
+                st.dataframe(intel_view[[x for x in cols if x in intel_view.columns]].sort_values("Proj",ascending=False).head(80),hide_index=True,use_container_width=True,height=430)
+
+            st.markdown("#### DFS LAB recommended setup")
+            rr1,rr2,rr3,rr4=st.columns(4)
+            rr1.metric("QB pass catchers",rec["qb_stack"])
+            rr2.metric("Bring-back",rec["bringback"])
+            rr3.metric("Salary floor","$"+f"{int(rec['min_salary']):,}")
+            rr4.metric("Max from one game",rec["max_game"])
+            st.caption(f"Contest aggression {rec['aggression']:.2f} · top simulated game ceiling share {rec['top_game_share']:.1f}%. Recommendations are staged only when you choose Apply.")
+            if st.button("APPLY DFS LAB RECOMMENDED RULES",type="primary",use_container_width=True,key="classic_apply_intel"):
+                st.session_state["classic_qb_stack"]=int(rec["qb_stack"])
+                st.session_state["classic_bringback"]=str(rec["bringback"])
+                st.session_state["classic_min_salary"]=int(rec["min_salary"])
+                st.session_state["classic_max_team"]=int(rec["max_team"])
+                st.session_state["classic_max_game"]=int(rec["max_game"])
+                st.session_state["classic_max_te"]=int(rec["max_te"])
+                st.session_state["classic_no_dst"]=bool(rec["no_dst"])
+                st.session_state["classic_no_off"]=bool(rec["no_off"])
+                st.session_state["classic_allow_qb_rb"]=bool(rec["allow_qb_rb"])
+                st.success("DFS LAB recommendations staged in Rules. Review them before building.")
+
+            packet={
+                "contest":{"entry_format":entry_format,"field_size":int(field_size),"payout":payout_style},
+                "recommendations":rec,
+                "simulations":sim_table.head(10).to_dict(orient="records") if sim_table is not None and not sim_table.empty else [],
+                "context_players":intel_view.sort_values("Proj",ascending=False).head(30).to_dict(orient="records") if not intel.empty else [],
+                "limitations":["No injury/news feed in this Classic build","No weather/travel feed in this Classic build","Day/night history is not inferred when unavailable"]
+            }
+            st.markdown("#### Ask DFS LAB why")
+            with st.form("classic_intel_ai_form",clear_on_submit=True):
+                cq=st.text_input("Ask about the slate or a recommendation",placeholder="Why do you want two pass catchers? What if I think the top game disappoints?")
+                cask=st.form_submit_button("ASK DFS LAB  ↗",type="primary",use_container_width=True)
+            if cask and cq.strip():
+                with st.spinner("Reading contest → simulations → matchup evidence → rules…"):
+                    ca=classic_ai_slate_answer(cq.strip(),packet)
+                st.session_state["classic_ai_chat"].append((cq.strip(),ca))
+            if st.session_state["classic_ai_chat"]:
+                uq,ar=st.session_state["classic_ai_chat"][-1]
+                st.markdown(f"**You:** {uq}")
+                st.markdown(ar)
+                if st.session_state.get("classic_ai_error"):
+                    st.caption("AI API fallback is active; the answer above used DFS LAB's local slate evidence.")
+
+        with tabs[1]:
+            st.markdown('<div class="card-title">Build</div><div class="card-sub">Choose team preferences after reviewing Slate Intel, then generate the portfolio with your Rules settings.</div>',unsafe_allow_html=True)
+            preferred_stack_teams=st.multiselect("Preferred QB stack teams",teams,key="classic_pref_stack")
             team_df=pd.DataFrame({"Team":teams,"Priority":[st.session_state["team_strategy_master"].get(t,"Neutral") for t in teams]})
             team_edit=st.data_editor(team_df,hide_index=True,use_container_width=True,disabled=["Team"],column_config={"Priority":st.column_config.SelectboxColumn("Lean",options=["Core","Like","Neutral","Fade","Exclude"])},key="v4_classic_team")
             for _,r in team_edit.iterrows(): st.session_state["team_strategy_master"][r["Team"]]=r["Priority"]
-            build_btn=st.button("Generate rated lineups",type="primary",use_container_width=True,key="v4_classic_build")
-        with tabs[1]:
+            st.info("Current rule set · QB + "+str(st.session_state["classic_qb_stack"])+" pass catcher(s) · Bring-back "+str(st.session_state["classic_bringback"])+" · Min salary $"+f"{int(st.session_state['classic_min_salary']):,}"+" · Max "+str(st.session_state["classic_max_game"])+" from one game")
+            build_btn=st.button(f"⚡ GENERATE {lineup_count} RATED LINEUPS",type="primary",use_container_width=True,key="v4_classic_build")
+
+        with tabs[2]:
             view=df.copy(); team_filter=st.multiselect("Teams",teams,key="v4_cteam"); pos_filter=st.multiselect("Positions",["QB","RB","WR","TE","DST"],key="v4_cpos")
             if team_filter:view=view[view["Team"].isin(team_filter)]
             if pos_filter:view=view[view["Position"].isin(pos_filter)]
             ed=pd.DataFrame({"ID":view["ID"].astype(str),"Name":view["Name"],"Pos":view["Position"],"Team":view["Team"],"Salary":view["Salary"],"Proj":view["My Proj"].round(2),"Own":view["My Own"].round(1),"Lock":False,"Exclude":False,"Priority":"Neutral","Min Exposure":0,"Max Exposure":100})
             for x,r in ed.iterrows():
                 e=st.session_state["strategy_master"].get(str(r["ID"]),{})
-                for c,k,d in [("Lock","Lock",False),("Exclude","Exclude",False),("Priority","Priority","Neutral"),("Min Exposure","Min Exposure",0),("Max Exposure","Max Exposure",100)]: ed.at[x,c]=e.get(k,d)
-            st.caption("Make all of your player/Captain changes, then tap Apply changes once. This prevents the screen from dimming after every checkbox.")
-            with st.form("showdown_player_editor_form", clear_on_submit=False):
-                edited=st.data_editor(
-                    ed,
-                hide_index=True,
-                use_container_width=True,
-                height=620,
-                disabled=["ID","Name","Pos","Team","Salary","Proj","Own"],
-                column_order=["Name","Pos","Team","Salary","Proj","Own","Lock","Exclude","Priority","Min Exposure","Max Exposure"],
-                column_config={
-                    "Name":st.column_config.TextColumn("Player",width=190,pinned=True),
-                    "Pos":st.column_config.TextColumn("Pos",width=60),
-                    "Team":st.column_config.TextColumn("Team",width=70),
-                    "Salary":st.column_config.NumberColumn("Salary",width=85,format="$%d"),
-                    "Proj":st.column_config.NumberColumn("Proj",width=75,format="%.2f"),
-                    "Own":st.column_config.NumberColumn("Own",width=70,format="%.1f"),
-                    "Priority":st.column_config.SelectboxColumn("Lean",options=PRIORITY_OPTIONS,width=95),
-                    "Lock":st.column_config.CheckboxColumn("Lock",width=65),
-                    "Exclude":st.column_config.CheckboxColumn("Out",width=60),
-                    "Min Exposure":st.column_config.NumberColumn("Min %",min_value=0,max_value=100,step=5,width=75),
-                    "Max Exposure":st.column_config.NumberColumn("Max %",min_value=0,max_value=100,step=5,width=75),
-                },
-                key="v4_classic_players",
-            )
-            for _,r in edited.iterrows():
-                ex=bool(r["Exclude"]); st.session_state["strategy_master"][str(r["ID"]) ]={"Lock":bool(r["Lock"]) and not ex,"Exclude":ex,"Priority":"Exclude" if ex else str(r["Priority"]),"Min Exposure":float(r["Min Exposure"]),"Max Exposure":float(r["Max Exposure"])}
-        with tabs[2]:
-            no_dst=st.toggle("No defense from my stacked game",value=True,key="v4_no_dst"); no_off=st.toggle("No offense against my DST",value=False,key="v4_no_off")
-        if build_btn:
-            res=generate_lineups(df,field_size,payout_style,lineup_count,max(300,lineup_count*12),min_salary,qb_stack,bringback_mode,preferred_stack_teams,st.session_state["strategy_master"],st.session_state["team_strategy_master"],no_dst,no_off,seed)
-            st.session_state["classic_result_v4"]=res
-        res=st.session_state.get("classic_result_v4")
+                for cc,k,dv in [("Lock","Lock",False),("Exclude","Exclude",False),("Priority","Priority","Neutral"),("Min Exposure","Min Exposure",0),("Max Exposure","Max Exposure",100)]: ed.at[x,cc]=e.get(k,dv)
+            with st.form("classic_player_editor_form",clear_on_submit=False):
+                edited=st.data_editor(ed,hide_index=True,use_container_width=True,height=620,
+                    disabled=["ID","Name","Pos","Team","Salary","Proj","Own"],
+                    column_order=["Name","Pos","Team","Salary","Proj","Own","Lock","Exclude","Priority","Min Exposure","Max Exposure"],
+                    column_config={
+                        "Name":st.column_config.TextColumn("Player",width=190,pinned=True),"Pos":st.column_config.TextColumn("Pos",width=60),
+                        "Team":st.column_config.TextColumn("Team",width=70),"Salary":st.column_config.NumberColumn("Salary",width=85,format="$%d"),
+                        "Proj":st.column_config.NumberColumn("Proj",width=75,format="%.2f"),"Own":st.column_config.NumberColumn("Own",width=70,format="%.1f"),
+                        "Priority":st.column_config.SelectboxColumn("Lean",options=PRIORITY_OPTIONS,width=95),"Lock":st.column_config.CheckboxColumn("Lock",width=65),
+                        "Exclude":st.column_config.CheckboxColumn("Out",width=60),"Min Exposure":st.column_config.NumberColumn("Min %",min_value=0,max_value=100,step=5,width=75),
+                        "Max Exposure":st.column_config.NumberColumn("Max %",min_value=0,max_value=100,step=5,width=75),
+                    },key="v4_classic_players")
+                apply_classic_players=st.form_submit_button("Apply player changes",type="primary",use_container_width=True)
+            if apply_classic_players:
+                for _,r in edited.iterrows():
+                    ex=bool(r["Exclude"])
+                    st.session_state["strategy_master"][str(r["ID"])]={"Lock":bool(r["Lock"]) and not ex,"Exclude":ex,"Priority":"Exclude" if ex else str(r["Priority"]),"Min Exposure":float(r["Min Exposure"]),"Max Exposure":float(r["Max Exposure"])}
+                st.success("Player settings applied.")
+
         with tabs[3]:
-            if res is None or res.empty: st.info("Generate lineups from Build.")
+            st.markdown('<div class="card-title">Classic Rules</div><div class="card-sub">Contest-aware structure controls. Slate Intel can recommend these, but you decide what gets enforced.</div>',unsafe_allow_html=True)
+            r1,r2=st.columns(2)
+            with r1:
+                min_salary=st.slider("Minimum salary",44000,50000,int(st.session_state["classic_min_salary"]),100,key="classic_min_salary")
+                qb_stack=st.selectbox("QB pass catchers",[1,2,3],key="classic_qb_stack",help="Minimum same-team WR/TE players paired with the QB.")
+                bringback_mode=st.selectbox("Bring-back",["Optional","Required","None"],key="classic_bringback",help="Required forces at least one opposing RB/WR/TE with the QB stack.")
+            with r2:
+                max_players_team=st.selectbox("Max players from one team",[4,5,6,7,8,9],key="classic_max_team")
+                max_players_game=st.selectbox("Max players from one game",[4,5,6,7,8,9],key="classic_max_game")
+                max_te=st.selectbox("Max tight ends",[1,2,3],key="classic_max_te")
+            st.markdown("#### Correlation + defense")
+            no_dst=st.toggle("No defense from my QB's game",key="classic_no_dst",help="Blocks either defense from the game containing your rostered QB.")
+            no_off=st.toggle("No offense against my DST",key="classic_no_off",help="If on, any DST blocks all opposing offensive players.")
+            allow_qb_rb=st.toggle("Allow QB + same-team RB",key="classic_allow_qb_rb",help="Turn off if you want QB stacks to avoid same-team running backs.")
+            st.caption("QB vs opposing DST is always blocked. More relationship controls can be added here without changing the core optimizer.")
+
+        if build_btn:
+            res=generate_lineups(
+                df,field_size,payout_style,lineup_count,max(300,lineup_count*12),
+                int(st.session_state["classic_min_salary"]),int(st.session_state["classic_qb_stack"]),st.session_state["classic_bringback"],
+                preferred_stack_teams,st.session_state["strategy_master"],st.session_state["team_strategy_master"],
+                bool(st.session_state["classic_no_dst"]),bool(st.session_state["classic_no_off"]),seed,
+                max_players_team=int(st.session_state["classic_max_team"]),
+                max_players_game=int(st.session_state["classic_max_game"]),
+                max_te=int(st.session_state["classic_max_te"]),
+                allow_qb_with_rb=bool(st.session_state["classic_allow_qb_rb"])
+            )
+            st.session_state["classic_result_v4"]=res
+
+        res=st.session_state.get("classic_result_v4")
+        with tabs[4]:
+            if res is None or res.empty:
+                st.info("Generate lineups from Build.")
             else:
                 show_cols=["Rank","Rating","Rating Score","Projection","Base Projection","Scenario Delta","Salary","Salary Left","Avg Own","Stack Summary"]+ROSTER_SLOTS
-                st.dataframe(res[[c for c in show_cols if c in res.columns]],hide_index=True,use_container_width=True,height=590)
-                st.download_button("Download lineup analysis CSV",res.to_csv(index=False),"classic_lineups_v4.csv","text/csv",use_container_width=True)
-        with tabs[4]:
-            if res is None or res.empty: st.info("Generate lineups first.")
-            else: st.dataframe(calculate_exposure_table(df,res,st.session_state["strategy_master"]),hide_index=True,use_container_width=True,height=620)
+                st.dataframe(res[[x for x in show_cols if x in res.columns]],hide_index=True,use_container_width=True,height=590)
+                st.download_button("Download lineup analysis CSV",res.to_csv(index=False),"classic_lineups_v5.csv","text/csv",use_container_width=True)
+        with tabs[5]:
+            if res is None or res.empty:
+                st.info("Generate lineups first.")
+            else:
+                st.dataframe(calculate_exposure_table(df,res,st.session_state["strategy_master"]),hide_index=True,use_container_width=True,height=620)
     except Exception as e:
         st.error(f"Classic build error: {e}")
 else:
