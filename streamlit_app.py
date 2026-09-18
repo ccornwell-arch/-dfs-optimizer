@@ -2694,19 +2694,23 @@ if mode=="Classic":
 
             st.markdown("#### Strategy theses")
             st.markdown(f"<div class='intel-card'><div class='intel-kicker'>DFS LAB stance</div><div class='intel-big'>{thesis_state['label']}</div><div class='intel-copy'>{thesis_state['reason']}</div></div>",unsafe_allow_html=True)
-            st.caption("A thesis can start with a game, QB, receiver, or RB. The quarterback does not have to be the first decision.")
+            st.caption("A thesis can start with a game, QB, receiver, or RB. Using one adds weight to that route — it does not lock the portfolio to that game.")
             if thesis_table is not None and not thesis_table.empty:
                 thesis_cols=["Type","Thesis","Attention %","Team","Game","Paired QB","Why"]
                 st.dataframe(thesis_table[[x for x in thesis_cols if x in thesis_table.columns]].head(10),
                     hide_index=True,use_container_width=True,height=min(430,70+35*min(10,len(thesis_table))))
                 top_thesis=thesis_table.iloc[0]
-                if st.button("USE TOP THESIS AS BUILD LEAN",type="primary",use_container_width=True,key="classic_apply_thesis"):
+                if st.button("USE TOP THESIS AS SOFT LEAN",type="primary",use_container_width=True,key="classic_apply_thesis"):
                     focus=[]
                     if str(top_thesis.get("Team","")).strip():
                         focus=[str(top_thesis["Team"])]
                     elif str(top_thesis.get("Game","")).strip() and "@" in str(top_thesis["Game"]):
                         focus=[x.strip() for x in str(top_thesis["Game"]).split("@") if x.strip()]
-                    st.session_state["classic_pref_stack"]=[x for x in focus if x in teams]
+
+                    # A thesis should influence the build, not restrict it to one game/QB path.
+                    # Preferred QB stack teams remain a separate explicit HARD control in Build.
+                    st.session_state["classic_pref_stack"]=[]
+
                     pname=str(top_thesis.get("Player","")).strip()
                     if pname:
                         hit=df[df["Name"].astype(str).eq(pname)]
@@ -2716,11 +2720,13 @@ if mode=="Classic":
                             if cur.get("Priority","Neutral")=="Neutral":
                                 cur["Priority"]="Like"
                             st.session_state["strategy_master"][pid]=cur
-                    for tm in st.session_state["classic_pref_stack"]:
+
+                    for tm in [x for x in focus if x in teams]:
                         if st.session_state["team_strategy_master"].get(tm,"Neutral")=="Neutral":
                             st.session_state["team_strategy_master"][tm]="Like"
+
                     st.session_state["classic_thesis_applied"]=str(top_thesis["Thesis"])
-                    st.success("Top thesis staged as a build lean. Nothing was locked or forced.")
+                    st.success("Top thesis added as a soft lean. DFS LAB can still build through other games and quarterbacks.")
                 if st.session_state.get("classic_thesis_applied"):
                     st.caption("Active thesis lean: "+str(st.session_state["classic_thesis_applied"]))
 
@@ -2770,7 +2776,7 @@ if mode=="Classic":
         with tabs[1]:
             st.markdown('<div class="card-title">Build</div><div class="card-sub">Choose team preferences after reviewing Slate Intel, then generate the portfolio with your Rules settings.</div>',unsafe_allow_html=True)
             preferred_stack_teams=st.multiselect("Preferred QB stack teams",teams,key="classic_pref_stack",
-                help="This can be staged by a game/QB/WR/TE/RB thesis. A receiver-led thesis can therefore determine the QB path rather than the other way around.")
+                help="Hard control: if you select teams here, the optimizer must use a QB from one of them. Strategy Theses no longer populate this automatically.")
             team_df=pd.DataFrame({"Team":teams,"Priority":[st.session_state["team_strategy_master"].get(t,"Neutral") for t in teams]})
             team_edit=st.data_editor(team_df,hide_index=True,use_container_width=True,disabled=["Team"],column_config={"Priority":st.column_config.SelectboxColumn("Lean",options=["Core","Like","Neutral","Fade","Exclude"])},key="v4_classic_team")
             for _,r in team_edit.iterrows(): st.session_state["team_strategy_master"][r["Team"]]=r["Priority"]
