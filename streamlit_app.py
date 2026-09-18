@@ -1817,18 +1817,52 @@ def generate_showdown_lineups(df, field_size, payout_style, count, attempts, min
                               entry_format,
                               cpt_qb_passcatchers, wrte_cpt_qb_pair_pct, rb_cpt_dst_k_pct,
                               max_k, max_dst, min_unique, seed, relationship_rules=None, world_influence=50):
+    """Generate a Showdown portfolio without wasting attempts on one randomly chosen build shape.
+
+    V6.5 reliability change: every attempt now tries every user-allowed team construction
+    (and both 4-2 / 5-1 orientations) before declaring that attempt infeasible. This keeps
+    Game Worlds as preference/ordering, but a single impossible sampled construction can no
+    longer make DFS LAB report "no legal lineup" when another allowed construction is legal.
+    """
     aggr=showdown_aggression(field_size,payout_style,entry_format); rng=np.random.default_rng(seed)
     teams=[t for t in df["Team"].dropna().unique().tolist() if t]
     rows=[]; exposure=defaultdict(int); cpt_exp=defaultdict(int); previous=[]; seen=set()
+
+    def _allowed_targets():
+        if len(teams)!=2:
+            return [None]
+        out=[]
+        if float(construction_weights.get("3-3",0))>0:
+            # 3-3 has no meaningful orientation.
+            out.append((teams[0],3))
+        if float(construction_weights.get("4-2",0))>0:
+            out.extend([(teams[0],4),(teams[1],4)])
+        if float(construction_weights.get("5-1",0))>0:
+            out.extend([(teams[0],5),(teams[1],5)])
+        return out or [(teams[0],3)]
+
+    legal_targets=_allowed_targets()
     prog=st.progress(0,text="Building Showdown lineups...")
     for attempt in range(attempts):
         if len(rows)>=count: break
+
         game_world=choose_game_world(rng,entry_format,field_size,script)
         world_weights=world_construction_weights(construction_weights,game_world,entry_format)
-        target=choose_construction_target(rng,teams,world_weights,script,script_team)
+        preferred=choose_construction_target(rng,teams,world_weights,script,script_team)
+
+        # Try the Game World's preferred shape first, then every other shape the user
+        # explicitly allowed. This is deterministic feasibility fallback, not a relaxation.
+        candidates=[]
+        if preferred in legal_targets:
+            candidates.append(preferred)
+        rest=[x for x in legal_targets if x not in candidates]
+        if len(rest)>1:
+            order=rng.permutation(len(rest))
+            rest=[rest[int(i)] for i in order]
+        candidates.extend(rest)
+
         # Exact minimum-exposure scheduling: only force a minimum when all remaining
-        # accepted lineups are needed to reach it. Existing objective steering tries
-        # to satisfy the target earlier and avoid a last-lineup pileup.
+        # accepted lineups are needed to reach it.
         remaining=count-len(rows)
         forced_overall=[]; forced_cpt=[]
         for pid,strat in strategy_map.items():
@@ -1836,11 +1870,21 @@ def generate_showdown_lineups(df, field_size, payout_style, count, attempts, min
             cneed=max(0, int(math.ceil(float(strat.get("CPT Min",0))*count/100.0))-cpt_exp[pid])
             if need>=remaining and need>0: forced_overall.append(pid)
             if cneed>=remaining and cneed>0: forced_cpt.append(pid)
-        chosen=solve_showdown_one(df,aggr,rng,strategy_map,min_salary,max_salary,target,script,script_team,
-                                  cpt_qb_passcatchers,wrte_cpt_qb_pair_pct,rb_cpt_dst_k_pct,max_k,max_dst,
-                                  min_unique,previous,exposure,cpt_exp,len(rows),noise_scale=.14+.13*aggr,
-                                  relationship_rules=relationship_rules,forced_overall_ids=forced_overall,forced_cpt_ids=forced_cpt,game_world=game_world,world_influence=world_influence)
-        if not chosen: continue
+
+        chosen=None
+        for target in candidates:
+            chosen=solve_showdown_one(
+                df,aggr,rng,strategy_map,min_salary,max_salary,target,script,script_team,
+                cpt_qb_passcatchers,wrte_cpt_qb_pair_pct,rb_cpt_dst_k_pct,max_k,max_dst,
+                min_unique,previous,exposure,cpt_exp,len(rows),noise_scale=.14+.13*aggr,
+                relationship_rules=relationship_rules,forced_overall_ids=forced_overall,
+                forced_cpt_ids=forced_cpt,game_world=game_world,world_influence=world_influence
+            )
+            if chosen:
+                break
+        if not chosen:
+            continue
+
         ids=tuple(sorted(str(df.loc[i,"ID"]) for _,i in chosen))
         cpt_id=str(df.loc[[i for slot,i in chosen if slot=="CPT"][0],"ID"])
         key=(cpt_id,ids)
@@ -1857,6 +1901,7 @@ def generate_showdown_lineups(df, field_size, payout_style, count, attempts, min
                     cexp=100*(cpt_exp[pid]+1)/(len(rows)+1)
                     if cexp>float(strat.get("CPT Max",100))+3: reject=True; break
         if reject: continue
+
         seen.add(key)
         detail=showdown_lineup_details(df,chosen,strategy_map,script,script_team,game_world)
         row=dict(detail)
@@ -1867,8 +1912,8 @@ def generate_showdown_lineups(df, field_size, payout_style, count, attempts, min
         for slot,i in chosen:
             pid=str(df.loc[i,"ID"]); exposure[pid]+=1
             if slot=="CPT": cpt_exp[pid]+=1
-        # Update after every accepted lineup so the UI never appears frozen.
         prog.progress(min(1.0,len(rows)/max(1,count)), text=f"Built {len(rows)} / {count}")
+
     prog.empty()
     out=pd.DataFrame(rows)
     if out.empty:return out
@@ -1879,7 +1924,6 @@ def generate_showdown_lineups(df, field_size, payout_style, count, attempts, min
     out=out.sort_values(["Rating Score","Projection"],ascending=[False,False]).reset_index(drop=True)
     out.insert(0,"Rank",np.arange(1,len(out)+1))
     return out
-
 
 def showdown_exposure_table(df,result,strategy_map):
     if result is None or result.empty:return pd.DataFrame()
