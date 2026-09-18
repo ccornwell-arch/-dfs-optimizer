@@ -466,7 +466,8 @@ def solve_one(
     min_salary, qb_stack_min, bringback_mode,
     exposure_state=None, built_count=0,
     no_dst_from_qb_game=True, no_offense_vs_dst=False,
-    noise_scale=0.16
+    noise_scale=0.16, max_players_team=9, max_players_game=9,
+    max_te=3, allow_qb_with_rb=True
 ):
     n = len(df)
     s = len(ROSTER_SLOTS)
@@ -630,6 +631,48 @@ def solve_one(
                     coeff[vidx(d, j)] = coeff.get(vidx(d, j), 0.0) + 1.0
             rows.append(coeff); lows.append(0.0); highs.append(1.0)
 
+    # Classic portfolio structure controls.
+    if int(max_players_team) < 9:
+        for team in df["Team"].dropna().unique().tolist():
+            coeff={}
+            for i in df.index[df["Team"].eq(team)]:
+                for j in range(s):
+                    if elig[ROSTER_SLOTS[j]][i]:
+                        coeff[vidx(i,j)] = 1.0
+            if coeff:
+                rows.append(coeff); lows.append(0.0); highs.append(float(max_players_team))
+
+    if int(max_players_game) < 9 and "Matchup" in df.columns:
+        for matchup in [m for m in df["Matchup"].dropna().unique().tolist() if str(m).strip()]:
+            coeff={}
+            for i in df.index[df["Matchup"].eq(matchup)]:
+                for j in range(s):
+                    if elig[ROSTER_SLOTS[j]][i]:
+                        coeff[vidx(i,j)] = 1.0
+            if coeff:
+                rows.append(coeff); lows.append(0.0); highs.append(float(max_players_game))
+
+    if int(max_te) < 3:
+        coeff={}
+        for i in df.index[df["is_TE"]]:
+            for j in range(s):
+                if elig[ROSTER_SLOTS[j]][i]:
+                    coeff[vidx(i,j)] = 1.0
+        if coeff:
+            rows.append(coeff); lows.append(0.0); highs.append(float(max_te))
+
+    if not bool(allow_qb_with_rb):
+        for q in df.index[df["is_QB"] & df["ActiveForBuild"]]:
+            qteam=df.loc[q,"Team"]
+            for rb in df.index[df["is_RB"] & df["ActiveForBuild"] & df["Team"].eq(qteam)]:
+                coeff={}
+                for j in range(s):
+                    if elig[ROSTER_SLOTS[j]][q]:
+                        coeff[vidx(q,j)] = coeff.get(vidx(q,j),0.0)+1.0
+                    if elig[ROSTER_SLOTS[j]][rb]:
+                        coeff[vidx(rb,j)] = coeff.get(vidx(rb,j),0.0)+1.0
+                rows.append(coeff); lows.append(0.0); highs.append(1.0)
+
     A = lil_matrix((len(rows), total_vars), dtype=float)
     for r, coeff in enumerate(rows):
         for col, val in coeff.items():
@@ -721,7 +764,8 @@ def lineup_details(df, chosen, strategy_map, preferred_stack_teams):
 def generate_lineups(
     df, field_size, payout_style, count, attempts, min_salary,
     qb_stack_min, bringback_mode, preferred_stack_teams,
-    strategy_map, team_strategy_map, no_dst_from_qb_game, no_offense_vs_dst, seed
+    strategy_map, team_strategy_map, no_dst_from_qb_game, no_offense_vs_dst, seed,
+    max_players_team=9, max_players_game=9, max_te=3, allow_qb_with_rb=True
 ):
     aggr = contest_aggression(field_size, payout_style)
     rng = np.random.default_rng(seed)
@@ -742,7 +786,11 @@ def generate_lineups(
             built_count=len(rows),
             no_dst_from_qb_game=no_dst_from_qb_game,
             no_offense_vs_dst=no_offense_vs_dst,
-            noise_scale=0.13 + 0.11 * aggr
+            noise_scale=0.13 + 0.11 * aggr,
+            max_players_team=max_players_team,
+            max_players_game=max_players_game,
+            max_te=max_te,
+            allow_qb_with_rb=allow_qb_with_rb
         )
         if not chosen:
             continue
@@ -790,6 +838,133 @@ def generate_lineups(
     return out
 
 
+
+
+def _classic_time_bucket(game_info):
+    import re
+    s=str(game_info or "")
+    m=re.search(r"(\\d{1,2}):(\\d{2})\\s*(AM|PM)",s,re.I)
+    if not m:
+        return "Time unknown"
+    h=int(m.group(1))%12
+    if m.group(3).upper()=="PM": h+=12
+    return "Night" if h>=18 else "Day"
+
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def classic_context_evidence(intel_df):
+    """Historical + opponent-vs-position evidence for Classic Slate Intel."""
+    base=intel_df[["Name","Position","Team","Opponent","Game Info","My Proj"]].copy()
+    base["Hist FPPG"]=np.nan; base["Recent 6"]=np.nan; base["Hist Games"]=0
+    base["DVP Adj %"]=0.0; base["Current Window"]="Unavailable"
+    base["Time"]=base["Game Info"].map(_classic_time_bucket)
+    try:
+        season=2026
+        stats=_load_nflverse_projection_inputs(season).copy()
+        nc=_name_col(stats); sc=_season_col(stats); oc=_opp_col(stats)
+        if not nc or not sc:
+            return base
+        stats["Name"]=stats[nc].astype(str).str.strip()
+        stats["Season"]=pd.to_numeric(stats[sc],errors="coerce")
+        stats["_fp"]=_dk_fantasy_points_from_stats(stats)
+        week_col=_first_existing(stats.columns,["week","Week"])
+        pos_col=_first_existing(stats.columns,["position","position_group","Pos"])
+        stats["_week"]=pd.to_numeric(stats[week_col],errors="coerce").fillna(0) if week_col else 0
+        hist=stats.groupby("Name")["_fp"].agg(["mean","count"]).reset_index().rename(columns={"mean":"Hist FPPG","count":"Hist Games"})
+        recent=(stats.sort_values(["Season","_week"]).groupby("Name").tail(6).groupby("Name")["_fp"].mean().reset_index().rename(columns={"_fp":"Recent 6"}))
+        base=base.drop(columns=["Hist FPPG","Recent 6","Hist Games"]).merge(hist,on="Name",how="left").merge(recent,on="Name",how="left")
+        base["Current Window"]="2023–2026 + recent 6"
+        if oc and pos_col:
+            stats["Opp"]=stats[oc].astype(str).str.strip()
+            stats["Pos"]=stats[pos_col].astype(str).str.upper().replace({"HB":"RB","FB":"RB"})
+            use=stats[stats["Pos"].isin(["QB","RB","WR","TE"])]
+            league=use.groupby("Pos")["_fp"].mean().to_dict()
+            allowed=use.groupby(["Opp","Pos"],as_index=False).agg(Allowed=("_fp","mean"),N=("_fp","size"))
+            dvp={}
+            for _,r in allowed.iterrows():
+                denom=max(float(league.get(r["Pos"],0)),1.0)
+                raw=float(r["Allowed"])/denom-1.0
+                shrink=float(r["N"])/(float(r["N"])+24.0)
+                dvp[(str(r["Opp"]),str(r["Pos"]))]=float(np.clip(raw*shrink,-0.12,0.12))*100
+            base["DVP Adj %"]=[round(dvp.get((str(r["Opponent"]),str(r["Position"]).upper()),0.0),1) for _,r in base.iterrows()]
+    except Exception:
+        pass
+    for col in ["Hist FPPG","Recent 6","DVP Adj %"]:
+        base[col]=pd.to_numeric(base[col],errors="coerce")
+    base["Hist Games"]=pd.to_numeric(base["Hist Games"],errors="coerce").fillna(0).astype(int)
+    return base
+
+
+@st.cache_data(show_spinner=False)
+def classic_simulate_slate(sim_df, sims=5000, seed=42):
+    """Projection-driven Monte Carlo for comparative Classic game environments."""
+    d=sim_df.copy()
+    d=d[pd.to_numeric(d["Sim Proj"],errors="coerce").fillna(0)>0.05].reset_index(drop=True)
+    if d.empty:
+        return pd.DataFrame()
+    rng=np.random.default_rng(int(seed)); sims=int(max(1000,sims))
+    games=[g for g in d["Matchup"].dropna().astype(str).unique().tolist() if g.strip()]
+    if not games:
+        return pd.DataFrame()
+    gshock={g:rng.normal(0,1,sims) for g in games}
+    tshock={t:rng.normal(0,1,sims) for t in d["Team"].dropna().astype(str).unique().tolist()}
+    totals={g:np.zeros(sims) for g in games}
+    pos_vol={"QB":0.26,"RB":0.42,"WR":0.50,"TE":0.48,"DST":0.62}
+    for _,r in d.iterrows():
+        g=str(r["Matchup"]); t=str(r["Team"])
+        if g not in totals: continue
+        mu=max(float(r["Sim Proj"]),0.05); vol=pos_vol.get(str(r["Position"]).upper(),0.45)
+        eps=rng.normal(0,1,sims)
+        shock=0.13*gshock[g]+0.09*tshock.get(t,0)+vol*eps
+        vals=np.maximum(0.0,mu*np.exp(shock-0.5*(vol**2+0.13**2+0.09**2)))
+        totals[g]+=vals
+    mat=np.vstack([totals[g] for g in games]); winners=np.argmax(mat,axis=0)
+    rows=[]
+    for gi,g in enumerate(games):
+        v=mat[gi]
+        rows.append({"Game":g,"Mean DFS env":round(float(np.mean(v)),1),"P75":round(float(np.quantile(v,.75)),1),
+                     "P90":round(float(np.quantile(v,.90)),1),"Volatility":round(float(np.std(v)),1),
+                     "Slate ceiling %":round(float(np.mean(winners==gi)*100),1)})
+    return pd.DataFrame(rows).sort_values(["Slate ceiling %","P90"],ascending=False).reset_index(drop=True)
+
+
+def classic_contest_recommendations(field_size, payout_style, entry_format, sim_table):
+    aggr=contest_aggression(field_size,payout_style)
+    aggr=float(np.clip(aggr+{"Single Entry":-0.12,"3-Max":-0.04,"20-Max":0.06,"150-Max":0.14}.get(entry_format,0),0.03,1.0))
+    top_share=float(sim_table["Slate ceiling %"].max()) if sim_table is not None and not sim_table.empty else 0.0
+    concentrated=top_share>=22.0
+    qb_stack=2 if (aggr>=0.28 or concentrated) else 1
+    if entry_format=="Single Entry" and field_size<=1000:
+        bringback="Required" if concentrated else "Optional"
+    elif aggr>=0.68:
+        bringback="Optional"
+    else:
+        bringback="Required"
+    min_salary=49000 if aggr<0.22 else 48500 if aggr<0.48 else 47500 if aggr<0.72 else 46500
+    return {"aggression":round(aggr,2),"qb_stack":qb_stack,"bringback":bringback,"min_salary":min_salary,
+            "max_team":4 if aggr<0.25 else 5,"max_game":5 if concentrated or aggr>=0.45 else 4,"max_te":2,
+            "no_dst":True,"no_off":False,"allow_qb_rb":True,"top_game_share":round(top_share,1)}
+
+
+def classic_ai_slate_answer(question, packet):
+    try:
+        from openai import OpenAI
+        try: api_key=st.secrets.get("OPENAI_API_KEY",None)
+        except Exception: api_key=os.getenv("OPENAI_API_KEY")
+        if api_key:
+            instructions="""You are DFS LAB Classic Slate Intel. Analyze an NFL DraftKings Classic slate before optimizer rules are chosen. Be contest-aware. Use only supplied evidence. Clearly distinguish projection-driven simulation from historical/context evidence. Never invent injuries, Vegas lines, weather, travel, day/night history, or probabilities not in the packet. Explain WHY a rule recommendation fits this contest."""
+            prompt=f"{instructions}\\n\\nSLATE PACKET:\\n{json.dumps(packet,default=str)}\\n\\nUSER:\\n{question}"
+            resp=OpenAI(api_key=api_key).responses.create(model="gpt-5.6-sol",reasoning={"effort":"medium"},input=prompt,max_output_tokens=1200)
+            if resp.output_text:
+                return resp.output_text
+    except Exception as e:
+        st.session_state["classic_ai_error"]=str(e)
+    rec=packet.get("recommendations",{}); top=packet.get("simulations",[])
+    top_game=top[0]["Game"] if top else "the top simulated game"
+    return (f"DFS LAB is treating **{top_game}** as the strongest ceiling environment in this slate sample. "
+            f"For this {packet['contest']['entry_format']} contest, I recommend **{rec.get('qb_stack',1)} QB pass catcher(s)**, "
+            f"**{rec.get('bringback','Optional')}** bring-backs, a salary floor of **" + "$" + f"{int(rec.get('min_salary',0)):,}**, "
+            f"and no more than **{rec.get('max_game',5)} players from one game**. These are recommendations, not hidden rules.")
 
 def calculate_exposure_table(df, result, strategy_map):
     if result is None or result.empty:
