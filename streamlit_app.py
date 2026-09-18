@@ -932,6 +932,101 @@ def classic_simulate_slate(sim_df, sims=5000, seed=42):
     return pd.DataFrame(rows).sort_values(["Slate ceiling %","P90"],ascending=False).reset_index(drop=True)
 
 
+def classic_strategy_theses(df, intel, sim_table, field_size, payout_style, entry_format):
+    """Find evidence-backed ways to attack the slate. A thesis may start with a game, QB, receiver, or RB."""
+    x=df[["ID","Name","Position","Team","Opponent","Matchup","Salary","My Proj","My Own"]].copy()
+    if intel is not None and not intel.empty:
+        keep=[z for z in ["Name","Hist FPPG","Recent 6","DVP Adj %"] if z in intel.columns]
+        x=x.merge(intel[keep].drop_duplicates("Name"),on="Name",how="left")
+    for col in ["Hist FPPG","Recent 6","DVP Adj %"]:
+        if col not in x.columns: x[col]=0.0
+        x[col]=pd.to_numeric(x[col],errors="coerce").fillna(0.0)
+    x["My Proj"]=pd.to_numeric(x["My Proj"],errors="coerce").fillna(0.0)
+    x["My Own"]=pd.to_numeric(x["My Own"],errors="coerce").fillna(0.0)
+    x["Salary"]=pd.to_numeric(x["Salary"],errors="coerce").fillna(0.0)
+
+    def pct(s):
+        s=pd.to_numeric(s,errors="coerce").fillna(0.0)
+        if len(s)<=1 or float(s.max())==float(s.min()): return pd.Series(0.5,index=s.index)
+        return s.rank(pct=True,method="average")
+
+    x["_proj"]=pct(x["My Proj"])
+    x["_recent"]=pct(x["Recent 6"])
+    x["_dvp"]=pct(x["DVP Adj %"])
+    x["_lev"]=pct(x["My Proj"]/(x["My Own"]+4.0))
+    x["_value"]=pct(x["My Proj"]/(x["Salary"]/1000.0+1.0))
+
+    game_share={}
+    game_p90={}
+    if sim_table is not None and not sim_table.empty:
+        game_share={str(r["Game"]):float(r.get("Slate ceiling %",0)) for _,r in sim_table.iterrows()}
+        game_p90={str(r["Game"]):float(r.get("P90",0)) for _,r in sim_table.iterrows()}
+    if game_share:
+        vals=pd.Series(list(game_share.values()))
+        lo=float(vals.min()); hi=float(vals.max())
+        game_norm={g:(v-lo)/(hi-lo) if hi>lo else 0.5 for g,v in game_share.items()}
+    else:
+        game_norm={}
+
+    theses=[]
+    def add(kind,title,score,team="",game="",player="",paired_qb="",why=""):
+        theses.append({"Type":kind,"Thesis":title,"Score":float(score),"Team":str(team),"Game":str(game),
+                       "Player":str(player),"Paired QB":str(paired_qb),"Why":why})
+
+    # Game-led theses.
+    if sim_table is not None and not sim_table.empty:
+        p90s=pd.to_numeric(sim_table["P90"],errors="coerce").fillna(0.0)
+        p90pct=p90s.rank(pct=True,method="average")
+        for ix,r in sim_table.iterrows():
+            score=0.62*(float(r.get("Slate ceiling %",0))/max(float(sim_table["Slate ceiling %"].max()),1.0))+0.38*float(p90pct.loc[ix])
+            add("Game",f"{r['Game']} game environment",score,game=r["Game"],
+                why=f"{float(r.get('Slate ceiling %',0)):.1f}% slate-ceiling share · P90 {float(r.get('P90',0)):.1f}")
+
+    # Player-led theses. Receiver/RB routes can choose the QB rather than starting from him.
+    qbs=x[x["Position"].astype(str).str.upper().eq("QB")].copy()
+    for _,r in x.iterrows():
+        pos=str(r["Position"]).upper()
+        if pos not in ["QB","RB","WR","TE"]: continue
+        g=float(game_norm.get(str(r["Matchup"]),0.5))
+        if pos=="QB":
+            score=.34*r["_proj"]+.22*g+.16*r["_recent"]+.12*r["_dvp"]+.16*r["_lev"]
+            add("QB",f"{r['Name']} passing/rushing ceiling",score,team=r["Team"],game=r["Matchup"],player=r["Name"],
+                paired_qb=r["Name"],why=f"Proj {r['My Proj']:.1f} · DVP {r['DVP Adj %']:+.1f}% · own {r['My Own']:.1f}%")
+        elif pos in ["WR","TE"]:
+            same=qbs[qbs["Team"].astype(str).eq(str(r["Team"]))].sort_values("My Proj",ascending=False)
+            pq=str(same.iloc[0]["Name"]) if not same.empty else ""
+            score=.30*r["_proj"]+.24*g+.17*r["_recent"]+.13*r["_dvp"]+.16*r["_lev"]
+            add("Receiver",f"{r['Name']} receiving ceiling",score,team=r["Team"],game=r["Matchup"],player=r["Name"],
+                paired_qb=pq,why=f"Proj {r['My Proj']:.1f} · recent {r['Recent 6']:.1f} · DVP {r['DVP Adj %']:+.1f}% · own {r['My Own']:.1f}%")
+        else:
+            score=.30*r["_proj"]+.20*g+.16*r["_recent"]+.10*r["_dvp"]+.14*r["_lev"]+.10*r["_value"]
+            add("RB",f"{r['Name']} RB-led script",score,team=r["Team"],game=r["Matchup"],player=r["Name"],
+                why=f"Proj {r['My Proj']:.1f} · recent {r['Recent 6']:.1f} · value/ownership support")
+
+    if not theses:
+        return pd.DataFrame(),{"label":"Open slate","reason":"No usable thesis evidence was available."}
+
+    t=pd.DataFrame(theses).sort_values("Score",ascending=False).reset_index(drop=True)
+    # Entry format changes how sharply we CONCENTRATE on evidence; it does not choose a fixed number of QBs.
+    sharp={"Single Entry":3.0,"3-Max":2.35,"20-Max":1.45,"150-Max":0.90}.get(entry_format,1.5)
+    scores=t["Score"].to_numpy(float)
+    z=np.exp((scores-scores.max())*sharp*3.0)
+    t["Attention %"]=100.0*z/max(z.sum(),1e-9)
+    t["Attention %"]=t["Attention %"].round(1)
+
+    top=float(t.iloc[0]["Attention %"])
+    top3=float(t.head(3)["Attention %"].sum())
+    gap=float(t.iloc[0]["Score"]-t.iloc[1]["Score"]) if len(t)>1 else 1.0
+    if top>=34 or gap>=0.11:
+        label="Clear stand"
+    elif top3>=48:
+        label="Strong cluster"
+    else:
+        label="Open slate"
+    reason=(f"{entry_format} rewards {'concentration' if entry_format in ['Single Entry','3-Max'] else 'coverage'}, "
+            f"but the slate evidence decides how many paths deserve attention. Top thesis attention {top:.1f}%; top three {top3:.1f}%.")
+    return t,{"label":label,"reason":reason,"top_attention":round(top,1),"top3_attention":round(top3,1)}
+
 def classic_contest_recommendations(field_size, payout_style, entry_format, sim_table):
     aggr=contest_aggression(field_size,payout_style)
     aggr=float(np.clip(aggr+{"Single Entry":-0.12,"3-Max":-0.04,"20-Max":0.06,"150-Max":0.14}.get(entry_format,0),0.03,1.0))
@@ -2503,6 +2598,8 @@ if mode=="Classic":
         st.session_state.setdefault("classic_no_dst",True)
         st.session_state.setdefault("classic_no_off",False)
         st.session_state.setdefault("classic_allow_qb_rb",True)
+        st.session_state.setdefault("classic_thesis_applied","")
+        st.session_state.setdefault("classic_pref_stack",[])
 
         st.markdown("""
         <style>
@@ -2569,6 +2666,7 @@ if mode=="Classic":
         sim_input["DVP Adj %"]=sim_input["Name"].map(intel_map["DVP Adj %"] if not intel.empty else {}).fillna(0.0)
         sim_input["Sim Proj"]=pd.to_numeric(sim_input["My Proj"],errors="coerce").fillna(0.0)*(1+0.50*pd.to_numeric(sim_input["DVP Adj %"],errors="coerce").fillna(0.0)/100.0)
         sim_table=classic_simulate_slate(sim_input[["Name","Position","Team","Matchup","Sim Proj"]],5000,seed)
+        thesis_table,thesis_state=classic_strategy_theses(df,intel,sim_table,field_size,payout_style,entry_format)
         rec=classic_contest_recommendations(field_size,payout_style,entry_format,sim_table)
 
         tabs=st.tabs(["🧠 Slate Intel","⚡ Build","👤 Players","⚙ Rules","📋 Lineups","📊 Exposure"])
@@ -2594,6 +2692,38 @@ if mode=="Classic":
                 cols=["Name","Position","Team","Opponent","Proj","Hist FPPG","Recent 6","Hist Games","DVP Adj %","Time"]
                 st.dataframe(intel_view[[x for x in cols if x in intel_view.columns]].sort_values("Proj",ascending=False).head(80),hide_index=True,use_container_width=True,height=430)
 
+            st.markdown("#### Strategy theses")
+            st.markdown(f"<div class='intel-card'><div class='intel-kicker'>DFS LAB stance</div><div class='intel-big'>{thesis_state['label']}</div><div class='intel-copy'>{thesis_state['reason']}</div></div>",unsafe_allow_html=True)
+            st.caption("A thesis can start with a game, QB, receiver, or RB. The quarterback does not have to be the first decision.")
+            if thesis_table is not None and not thesis_table.empty:
+                thesis_cols=["Type","Thesis","Attention %","Team","Game","Paired QB","Why"]
+                st.dataframe(thesis_table[[x for x in thesis_cols if x in thesis_table.columns]].head(10),
+                    hide_index=True,use_container_width=True,height=min(430,70+35*min(10,len(thesis_table))))
+                top_thesis=thesis_table.iloc[0]
+                if st.button("USE TOP THESIS AS BUILD LEAN",type="primary",use_container_width=True,key="classic_apply_thesis"):
+                    focus=[]
+                    if str(top_thesis.get("Team","")).strip():
+                        focus=[str(top_thesis["Team"])]
+                    elif str(top_thesis.get("Game","")).strip() and "@" in str(top_thesis["Game"]):
+                        focus=[x.strip() for x in str(top_thesis["Game"]).split("@") if x.strip()]
+                    st.session_state["classic_pref_stack"]=[x for x in focus if x in teams]
+                    pname=str(top_thesis.get("Player","")).strip()
+                    if pname:
+                        hit=df[df["Name"].astype(str).eq(pname)]
+                        if not hit.empty:
+                            pid=str(hit.iloc[0]["ID"])
+                            cur=st.session_state["strategy_master"].get(pid,{})
+                            if cur.get("Priority","Neutral")=="Neutral":
+                                cur["Priority"]="Like"
+                            st.session_state["strategy_master"][pid]=cur
+                    for tm in st.session_state["classic_pref_stack"]:
+                        if st.session_state["team_strategy_master"].get(tm,"Neutral")=="Neutral":
+                            st.session_state["team_strategy_master"][tm]="Like"
+                    st.session_state["classic_thesis_applied"]=str(top_thesis["Thesis"])
+                    st.success("Top thesis staged as a build lean. Nothing was locked or forced.")
+                if st.session_state.get("classic_thesis_applied"):
+                    st.caption("Active thesis lean: "+str(st.session_state["classic_thesis_applied"]))
+
             st.markdown("#### DFS LAB recommended setup")
             rr1,rr2,rr3,rr4=st.columns(4)
             rr1.metric("QB pass catchers",rec["qb_stack"])
@@ -2616,6 +2746,8 @@ if mode=="Classic":
             packet={
                 "contest":{"entry_format":entry_format,"field_size":int(field_size),"payout":payout_style},
                 "recommendations":rec,
+                "thesis_state":thesis_state,
+                "theses":thesis_table.head(10).to_dict(orient="records") if thesis_table is not None and not thesis_table.empty else [],
                 "simulations":sim_table.head(10).to_dict(orient="records") if sim_table is not None and not sim_table.empty else [],
                 "context_players":intel_view.sort_values("Proj",ascending=False).head(30).to_dict(orient="records") if not intel.empty else [],
                 "limitations":["No injury/news feed in this Classic build","No weather/travel feed in this Classic build","Day/night history is not inferred when unavailable"]
@@ -2637,10 +2769,13 @@ if mode=="Classic":
 
         with tabs[1]:
             st.markdown('<div class="card-title">Build</div><div class="card-sub">Choose team preferences after reviewing Slate Intel, then generate the portfolio with your Rules settings.</div>',unsafe_allow_html=True)
-            preferred_stack_teams=st.multiselect("Preferred QB stack teams",teams,key="classic_pref_stack")
+            preferred_stack_teams=st.multiselect("Preferred QB stack teams",teams,key="classic_pref_stack",
+                help="This can be staged by a game/QB/WR/TE/RB thesis. A receiver-led thesis can therefore determine the QB path rather than the other way around.")
             team_df=pd.DataFrame({"Team":teams,"Priority":[st.session_state["team_strategy_master"].get(t,"Neutral") for t in teams]})
             team_edit=st.data_editor(team_df,hide_index=True,use_container_width=True,disabled=["Team"],column_config={"Priority":st.column_config.SelectboxColumn("Lean",options=["Core","Like","Neutral","Fade","Exclude"])},key="v4_classic_team")
             for _,r in team_edit.iterrows(): st.session_state["team_strategy_master"][r["Team"]]=r["Priority"]
+            if st.session_state.get("classic_thesis_applied"):
+                st.markdown("**Build thesis:** "+str(st.session_state["classic_thesis_applied"]))
             st.info("Current rule set · QB + "+str(st.session_state["classic_qb_stack"])+" pass catcher(s) · Bring-back "+str(st.session_state["classic_bringback"])+" · Min salary $"+f"{int(st.session_state['classic_min_salary']):,}"+" · Max "+str(st.session_state["classic_max_game"])+" from one game")
             build_btn=st.button(f"⚡ GENERATE {lineup_count} RATED LINEUPS",type="primary",use_container_width=True,key="v4_classic_build")
 
