@@ -1132,24 +1132,101 @@ def classic_contest_recommendations(field_size, payout_style, entry_format, sim_
 
 
 def classic_ai_slate_answer(question, packet):
+    """Contest-aware DFS LAB assistant.
+
+    Prefer the OpenAI model when available. If the API is unavailable, the local fallback
+    still answers the user's ACTUAL question from Slate Intel instead of repeating a canned
+    recommendation block.
+    """
+    q=str(question or "").strip()
+    ql=q.lower()
     try:
         from openai import OpenAI
         try: api_key=st.secrets.get("OPENAI_API_KEY",None)
         except Exception: api_key=os.getenv("OPENAI_API_KEY")
         if api_key:
-            instructions="""You are DFS LAB Classic Slate Intel. Analyze an NFL DraftKings Classic slate before optimizer rules are chosen. Be contest-aware. Use only supplied evidence. Clearly distinguish projection-driven simulation from historical/context evidence. Never invent injuries, Vegas lines, weather, travel, day/night history, or probabilities not in the packet. Explain WHY a rule recommendation fits this contest."""
-            prompt=f"{instructions}\\n\\nSLATE PACKET:\\n{json.dumps(packet,default=str)}\\n\\nUSER:\\n{question}"
-            resp=OpenAI(api_key=api_key).responses.create(model="gpt-5.6-sol",reasoning={"effort":"medium"},input=prompt,max_output_tokens=1200)
+            instructions="""You are DFS LAB Classic Slate Intel, an NFL DraftKings strategy assistant.
+Answer the user's exact question first. Do not dump generic recommendations unless they are relevant.
+Use the supplied slate packet and contest context. Be willing to disagree with DFS LAB's default settings
+when the evidence supports it. Explain tradeoffs rather than pretending there is one correct DFS answer.
+For Single Entry and 3-Max, discuss concentration and taking stands when evidence separates. For 20-Max
+and 150-Max, discuss portfolio coverage and diversification. A thesis may originate from a QB, receiver,
+RB, or game environment. Distinguish field ownership from user exposure. Never invent injuries, Vegas,
+weather, travel, or facts missing from the packet. When the user challenges a number (for example, '24 QBs
+is too many'), directly evaluate that number using the QB concentration evidence and recommend what the
+program should change or what evidence would justify keeping it."""
+            prompt=f"{instructions}\n\nSLATE PACKET:\n{json.dumps(packet,default=str)}\n\nUSER QUESTION:\n{q}"
+            resp=OpenAI(api_key=api_key).responses.create(model="gpt-5.6-sol",reasoning={"effort":"medium"},input=prompt,max_output_tokens=1400)
             if resp.output_text:
+                st.session_state.pop("classic_ai_error",None)
                 return resp.output_text
     except Exception as e:
         st.session_state["classic_ai_error"]=str(e)
-    rec=packet.get("recommendations",{}); top=packet.get("simulations",[])
-    top_game=top[0]["Game"] if top else "the top simulated game"
-    return (f"DFS LAB is treating **{top_game}** as the strongest ceiling environment in this slate sample. "
-            f"For this {packet['contest']['entry_format']} contest, I recommend **{rec.get('qb_stack',1)} QB pass catcher(s)**, "
-            f"**{rec.get('bringback','Optional')}** bring-backs, a salary floor of **" + "$" + f"{int(rec.get('min_salary',0)):,}**, "
-            f"and no more than **{rec.get('max_game',5)} players from one game**. These are recommendations, not hidden rules.")
+
+    # Local evidence-aware fallback. This should still be conversational and answer intent.
+    rec=packet.get("recommendations",{})
+    contest=packet.get("contest",{})
+    sims=packet.get("simulations",[]) or []
+    qb=packet.get("qb_concentration",{}) or {}
+    qbc=packet.get("qb_candidates",[]) or []
+    theses=packet.get("theses",[]) or []
+    entry=str(contest.get("entry_format","this contest"))
+    field=int(contest.get("field_size",0) or 0)
+
+    # QB-pool / concentration questions.
+    if any(k in ql for k in ["qb","quarterback"]) and any(k in ql for k in ["too many","too big","field","pool","narrow","fewer","many"]):
+        kept=[x for x in qbc if bool(x.get("In build pool",False))]
+        # Older packet rows may not include the boolean; fall back to concentration names.
+        names=list(qb.get("names",[]) or [])
+        n=len(names) if names else len(kept)
+        if n==0 and qbc:
+            floor=float(qb.get("relative_floor",0) or 0)
+            n=sum(1 for x in qbc if float(x.get("Relative %",0) or 0)>=floor)
+        top=qbc[:6]
+        evidence=", ".join(f"{x.get('QB','?')} {float(x.get('Relative %',0) or 0):.0f}%" for x in top)
+        if entry in ["Single Entry","3-Max"]:
+            stance=("I agree that **"+str(n)+" QBs is too broad for "+entry+"** unless the slate is exceptionally flat. "
+                    "With only a few actual entries, candidate generation should concentrate on the strongest evidence-backed routes, "
+                    "not preserve nearly every viable quarterback just because each can make a legal lineup.")
+        elif entry=="20-Max":
+            stance=("For **20-Max**, "+str(n)+" QBs is probably too broad if most of them sit well below the top evidence tier. "
+                    "Twenty entries still benefit from taking stands; diversification should come from multiple correlated constructions, "
+                    "not automatically from using almost every quarterback.")
+        else:
+            stance=("For **"+entry+"**, a wider QB pool can make sense, but it should still be earned by the evidence rather than by randomness.")
+        return (stance+"\n\nThe current QB evidence is: **"+evidence+"**. "
+                "I would tighten the QB evidence band until the remaining quarterbacks are meaningfully competitive with the top routes, "
+                "while preserving tied/near-tied options. That means the number of QBs can change slate to slate instead of using a fixed cap.")
+
+    # Stack questions.
+    if any(k in ql for k in ["pass catcher","double stack","single stack","stack"]):
+        return (f"For **{entry}** in a {field:,}-entry field, DFS LAB currently recommends **{rec.get('qb_stack',1)} QB pass catcher(s)**. "
+                "That should be treated as a slate-driven starting point, not a universal rule. The better implementation is to let the "
+                "simulation/thesis evidence determine a mix of single and double stacks, then concentrate that mix more aggressively in "
+                "Single Entry/3-Max and spread it more in larger portfolios.")
+
+    # Game / thesis questions.
+    if any(k in ql for k in ["game","thesis","why","disappoint"]):
+        top=sims[0] if sims else {}
+        tg=top.get("Game","the leading game")
+        share=float(top.get("Slate ceiling %",0) or 0)
+        runner=float(sims[1].get("Slate ceiling %",0) or 0) if len(sims)>1 else 0
+        return (f"**{tg}** is the current leading simulated game environment at **{share:.1f}%** of slate-leading outcomes"
+                +(f", versus **{runner:.1f}%** for the next game" if runner else "")+
+                ". That is a lead, not domination. I would treat it as a lean, not a lock, and keep other strong theses alive unless the "
+                "gap becomes much larger.")
+
+    # Exposure / ownership questions.
+    if "exposure" in ql or "ownership" in ql:
+        return ("**Field ownership** is what the contest is projected to roster; **your exposure** is how often a player appears in your generated portfolio. "
+                "If you're asking whether one of your exposures is too high or low, give me the player or percentage and I should compare it with projection, "
+                "field ownership, slate thesis support and contest format.")
+
+    # General fallback still uses the actual contest/slate.
+    top=sims[0]["Game"] if sims else "the top simulated game"
+    return (f"For **{entry}** in a {field:,}-entry field, the strongest current game environment is **{top}**. "
+            f"The current QB concentration plan is **{qb.get('label','open')}**. Ask me about a specific player, QB pool, stack, game, "
+            "exposure, or rule and I'll evaluate that decision from the slate evidence rather than repeat the default settings.")
 
 def calculate_exposure_table(df, result, strategy_map):
     if result is None or result.empty:
