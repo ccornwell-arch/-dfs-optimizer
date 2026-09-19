@@ -1149,12 +1149,43 @@ def classic_ai_slate_answer(question, packet):
 Answer the user's exact question first. Do not dump generic recommendations unless they are relevant.
 Use the supplied slate packet and contest context. Be willing to disagree with DFS LAB's default settings
 when the evidence supports it. Explain tradeoffs rather than pretending there is one correct DFS answer.
+
+DFS PRO PLAYBOOK:
+- Contest size changes strategy. A 200-person Single Entry should not be built like a 150,000-entry GPP.
+- Low-entry contests should take stands when evidence separates. Large portfolios can spread more.
+- In 20-Max, do not scatter across 10-12+ quarterbacks just because they are viable. Concentrate enough
+  that each QB path gets multiple correlated combinations around it. The exact QB count should be earned
+  by the slate, not fixed in advance.
+- Quarterback ownership is usually naturally spread. Do not fade a QB you like solely because of ownership
+  unless the ownership is truly extreme relative to alternatives.
+- Game stacks matter most when offensive production is concentrated among a few players. A high-scoring
+  game with points spread across many players can still disappoint for DFS stacking.
+- Popular games can still be played, but if using the most popular pieces together, find leverage elsewhere
+  or use a less common construction within that game.
+- Run-backs are contextual, not mandatory. Some stacks should be brought back; others can stand alone if
+  the opposing piece is weak or the offense can score without being pushed.
+- Cheap chalk is not automatically bad. If a cheap popular player unlocks multiple true ceiling plays,
+  the construction can still be strong; judge the whole lineup, not the isolated ownership.
+- One-off plays are allowed. Do not force every player into a correlation rule if a strong standalone play
+  improves ceiling and lineup construction.
+- Consider team tendencies and game scripts: some offenses keep throwing with a lead, others may shut down
+  and lean on the run. Use that to judge whether a stack needs an opponent bring-back.
+- Manual projection changes are a valid way to express conviction when the user believes one player should
+  project materially better or worse than the model.
+- In very large fields, identify where the lineup is different. Playing a popular core is fine if another
+  part of the construction creates enough leverage or uniqueness.
+- Late swap matters when live results are available: lineups doing well can move toward safer/chalkier paths;
+  lineups behind can pivot toward lower-owned ceiling outcomes.
+
 For Single Entry and 3-Max, discuss concentration and taking stands when evidence separates. For 20-Max
 and 150-Max, discuss portfolio coverage and diversification. A thesis may originate from a QB, receiver,
 RB, or game environment. Distinguish field ownership from user exposure. Never invent injuries, Vegas,
 weather, travel, or facts missing from the packet. When the user challenges a number (for example, '24 QBs
 is too many'), directly evaluate that number using the QB concentration evidence and recommend what the
-program should change or what evidence would justify keeping it."""
+program should change or what evidence would justify keeping it. When evaluating lineups, think in terms
+of the STORY the lineup tells, whether that story is coherent, whether ownership is concentrated in the
+same obvious places as the field, and whether the portfolio gives enough combinations to its strongest
+theses."""
             prompt=f"{instructions}\n\nSLATE PACKET:\n{json.dumps(packet,default=str)}\n\nUSER QUESTION:\n{q}"
             resp=OpenAI(api_key=api_key).responses.create(model="gpt-5.6-sol",reasoning={"effort":"medium"},input=prompt,max_output_tokens=1400)
             if resp.output_text:
