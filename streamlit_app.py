@@ -1131,7 +1131,104 @@ def classic_contest_recommendations(field_size, payout_style, entry_format, sim_
             "no_dst":True,"no_off":False,"allow_qb_rb":True,"top_game_share":round(top_share,1)}
 
 
-def classic_ai_slate_answer(question, packet):
+def classic_portfolio_intelligence(df, result):
+    """Deterministic portfolio diagnostics for the conversational DFS strategist."""
+    if result is None or not isinstance(result, pd.DataFrame) or result.empty:
+        return {"built": False, "lineups": 0, "note": "No Classic portfolio has been generated yet."}
+
+    lineup_cols=[x for x in ROSTER_SLOTS if x in result.columns]
+    n=int(len(result))
+    name_meta={}
+    for _,p in df.iterrows():
+        name_meta[str(p["Name"])]={
+            "position":str(p.get("Position","")),
+            "team":str(p.get("Team","")),
+            "game":str(p.get("Matchup","")),
+            "field_own":float(pd.to_numeric(pd.Series([p.get("My Own",0)]),errors="coerce").fillna(0).iloc[0]),
+            "projection":float(pd.to_numeric(pd.Series([p.get("My Proj",0)]),errors="coerce").fillna(0).iloc[0]),
+        }
+
+    counts=defaultdict(int); pair_counts=defaultdict(int); triple_counts=defaultdict(int)
+    game_stack_counts=defaultdict(int); qb_counts=defaultdict(int)
+    for _,lr in result.iterrows():
+        names=[str(lr.get(col,"")) for col in lineup_cols if str(lr.get(col,"")).strip() and str(lr.get(col,""))!="nan"]
+        for nm in names: counts[nm]+=1
+        if "QB" in result.columns and str(lr.get("QB","")).strip():
+            qb_counts[str(lr.get("QB"))]+=1
+        sn=sorted(set(names))
+        for a in range(len(sn)):
+            for b in range(a+1,len(sn)):
+                pair_counts[(sn[a],sn[b])]+=1
+                for d in range(b+1,len(sn)):
+                    triple_counts[(sn[a],sn[b],sn[d])]+=1
+        games=defaultdict(int)
+        for nm in names:
+            g=name_meta.get(nm,{}).get("game","")
+            if g: games[g]+=1
+        for g,k in games.items():
+            if k>=3: game_stack_counts[g]+=1
+
+    exposures=[]
+    for nm,cnt in counts.items():
+        meta=name_meta.get(nm,{})
+        my=100.0*cnt/max(n,1); field=float(meta.get("field_own",0.0))
+        exposures.append({
+            "player":nm,"position":meta.get("position",""),"team":meta.get("team",""),
+            "lineups":int(cnt),"exposure_pct":round(my,1),"field_own_pct":round(field,1),
+            "leverage_pct":round(my-field,1),"projection":round(float(meta.get("projection",0.0)),2)
+        })
+    exposures=sorted(exposures,key=lambda x:(x["exposure_pct"],x["projection"]),reverse=True)
+    overweight=sorted(exposures,key=lambda x:x["leverage_pct"],reverse=True)[:8]
+    underweight=sorted(exposures,key=lambda x:x["leverage_pct"])[:8]
+    qbs=[{"qb":k,"lineups":int(v),"exposure_pct":round(100.0*v/max(n,1),1)} for k,v in sorted(qb_counts.items(),key=lambda z:z[1],reverse=True)]
+
+    stack_mix={}
+    if "QB Stack" in result.columns:
+        for k,v in result["QB Stack"].value_counts().sort_index().items(): stack_mix[str(int(k))]=int(v)
+    bringback_mix={}
+    if "Bring-backs" in result.columns:
+        for k,v in result["Bring-backs"].value_counts().sort_index().items(): bringback_mix[str(int(k))]=int(v)
+
+    def top_cores(source,size,limit=8):
+        out=[]
+        for core,cnt in sorted(source.items(),key=lambda z:z[1],reverse=True)[:limit]:
+            out.append({"players":list(core),"lineups":int(cnt),"portfolio_pct":round(100.0*cnt/max(n,1),1)})
+        return out
+
+    salary_left=pd.to_numeric(result.get("Salary Left",pd.Series(dtype=float)),errors="coerce").dropna()
+    avg_own=pd.to_numeric(result.get("Avg Own",pd.Series(dtype=float)),errors="coerce").dropna()
+    proj=pd.to_numeric(result.get("Projection",pd.Series(dtype=float)),errors="coerce").dropna()
+
+    top_lineups=[]
+    for _,lr in result.head(8).iterrows():
+        top_lineups.append({
+            "rank":int(lr.get("Rank",0) or 0),"rating":str(lr.get("Rating","")),
+            "projection":round(float(lr.get("Projection",0) or 0),2),
+            "salary":int(lr.get("Salary",0) or 0),"salary_left":int(lr.get("Salary Left",0) or 0),
+            "avg_player_own_pct":round(float(lr.get("Avg Own",0) or 0),1),
+            "stack":str(lr.get("Stack Summary","")),
+            "players":[str(lr.get(col,"")) for col in lineup_cols]
+        })
+
+    return {
+        "built":True,"lineups":n,"unique_qbs":len(qbs),"qb_usage":qbs,
+        "stack_mix":stack_mix,"bringback_mix":bringback_mix,
+        "salary_left":{"mean":round(float(salary_left.mean()),1) if len(salary_left) else None,
+                       "median":round(float(salary_left.median()),1) if len(salary_left) else None,
+                       "max":int(salary_left.max()) if len(salary_left) else None},
+        "projection":{"mean":round(float(proj.mean()),2) if len(proj) else None,
+                      "max":round(float(proj.max()),2) if len(proj) else None,
+                      "min":round(float(proj.min()),2) if len(proj) else None},
+        "avg_player_ownership":{"mean":round(float(avg_own.mean()),1) if len(avg_own) else None},
+        "top_exposures":exposures[:15],"most_overweight":overweight,"most_underweight":underweight,
+        "top_three_plus_game_exposure":[{"game":g,"lineups":int(v),"portfolio_pct":round(100.0*v/max(n,1),1)}
+                                        for g,v in sorted(game_stack_counts.items(),key=lambda z:z[1],reverse=True)[:10]],
+        "repeated_pairs":top_cores(pair_counts,2),"repeated_triples":top_cores(triple_counts,3),
+        "top_lineups":top_lineups,
+    }
+
+
+def classic_ai_slate_answer(question, packet, history=None):
     """Contest-aware DFS LAB assistant.
 
     Prefer the OpenAI model when available. If the API is unavailable, the local fallback
@@ -1438,13 +1535,19 @@ program should change or what evidence would justify keeping it. When evaluating
 of the STORY the lineup tells, whether that story is coherent, whether ownership is concentrated in the
 same obvious places as the field, and whether the portfolio gives enough combinations to its strongest
 theses."""
-            prompt=f"{instructions}\n\nSLATE PACKET:\n{json.dumps(packet,default=str)}\n\nUSER QUESTION:\n{q}"
-            resp=OpenAI(api_key=api_key).responses.create(model="gpt-5.6-sol",reasoning={"effort":"medium"},input=prompt,max_output_tokens=1400)
+            recent_history=(history or [])[-8:]
+            history_text="\n".join([f"USER: {x[0]}\nDFS LAB: {x[1]}" for x in recent_history if isinstance(x,(list,tuple)) and len(x)>=2])
+            prompt=f"{instructions}\n\nSLATE + PORTFOLIO PACKET:\n{json.dumps(packet,default=str)}\n\nRECENT CONVERSATION:\n{history_text}\n\nUSER QUESTION:\n{q}"
+            try: model_name=st.secrets.get("OPENAI_MODEL",None)
+            except Exception: model_name=None
+            model_name=model_name or os.getenv("OPENAI_MODEL") or "gpt-5.6-sol"
+            resp=OpenAI(api_key=api_key).responses.create(model=model_name,reasoning={"effort":"medium"},input=prompt,max_output_tokens=1800)
+            st.session_state["classic_ai_model"]=model_name
             if resp.output_text:
                 st.session_state.pop("classic_ai_error",None)
                 return resp.output_text
     except Exception as e:
-        st.session_state["classic_ai_error"]=str(e)
+        st.session_state["classic_ai_error"]=f"{type(e).__name__}: {str(e)[:500]}"
 
     # Local evidence-aware fallback. This should still be conversational and answer intent.
     rec=packet.get("recommendations",{})
@@ -1453,6 +1556,7 @@ theses."""
     qb=packet.get("qb_concentration",{}) or {}
     qbc=packet.get("qb_candidates",[]) or []
     theses=packet.get("theses",[]) or []
+    portfolio=packet.get("portfolio",{}) or {}
     entry=str(contest.get("entry_format","this contest"))
     field=int(contest.get("field_size",0) or 0)
 
@@ -1500,10 +1604,26 @@ theses."""
                 "gap becomes much larger.")
 
     # Exposure / ownership questions.
-    if "exposure" in ql or "ownership" in ql:
-        return ("**Field ownership** is what the contest is projected to roster; **your exposure** is how often a player appears in your generated portfolio. "
-                "If you're asking whether one of your exposures is too high or low, give me the player or percentage and I should compare it with projection, "
-                "field ownership, slate thesis support and contest format.")
+    if "exposure" in ql or "ownership" in ql or "overweight" in ql or "underweight" in ql:
+        if portfolio.get("built"):
+            ow=portfolio.get("most_overweight",[])[:4]; uw=portfolio.get("most_underweight",[])[:4]
+            ow_txt=", ".join(f"{x['player']} {x['exposure_pct']:.0f}% vs {x['field_own_pct']:.0f}% ({x['leverage_pct']:+.0f})" for x in ow)
+            uw_txt=", ".join(f"{x['player']} {x['exposure_pct']:.0f}% vs {x['field_own_pct']:.0f}% ({x['leverage_pct']:+.0f})" for x in uw)
+            return (f"Your current {portfolio.get('lineups',0)}-lineup portfolio is most overweight on **{ow_txt}**. "
+                    f"The largest underweights are **{uw_txt}**. Those deltas are exposure minus projected field ownership; "
+                    "they are not automatically good or bad. I would judge each against ceiling, role, correlation and the contest.")
+        return ("There is no built portfolio yet, so I can discuss projected field ownership but not your actual exposure. "
+                "Generate lineups first and I can compare your exposure with the field player by player.")
+
+    if portfolio.get("built") and any(k in ql for k in ["portfolio","critique","spread","concentrated","chalky","change","risk"]):
+        qbs=portfolio.get("qb_usage",[])
+        pairs=portfolio.get("repeated_pairs",[])
+        qtxt=", ".join(f"{x['qb']} {x['exposure_pct']:.0f}%" for x in qbs[:5]) or "none"
+        ptxt=", ".join(f"{' + '.join(x['players'])} {x['portfolio_pct']:.0f}%" for x in pairs[:3]) or "none"
+        return (f"Your current portfolio has **{portfolio.get('lineups',0)} lineups and {portfolio.get('unique_qbs',0)} QBs**. "
+                f"Top QB usage: **{qtxt}**. The most repeated two-player cores are **{ptxt}**. "
+                f"Stack mix is {portfolio.get('stack_mix',{})}; bring-back mix is {portfolio.get('bringback_mix',{})}. "
+                "That is the right place to start the critique: whether those concentrations represent independent first-place stories or the same bet repeated.")
 
     # General fallback still uses the actual contest/slate.
     top=sims[0]["Game"] if sims else "the top simulated game"
@@ -3043,6 +3163,12 @@ if mode=="Classic":
                 if _pid in st.session_state["classic_projection_overrides"]:
                     df.at[_i,"My Proj"]=float(st.session_state["classic_projection_overrides"][_pid])
         st.session_state.setdefault("classic_ai_chat",[])
+        st.session_state.setdefault("classic_ai_model","")
+        st.session_state.setdefault("classic_ai_error","")
+        _classic_chat_fp=f"{entry_format}|{int(field_size)}|{payout_style}|{getattr(dk_file,'name','slate')}"
+        if st.session_state.get("classic_ai_chat_fingerprint") != _classic_chat_fp:
+            st.session_state["classic_ai_chat"]=[]
+            st.session_state["classic_ai_chat_fingerprint"]=_classic_chat_fp
         st.session_state.setdefault("classic_qb_stack",2)
         st.session_state.setdefault("classic_bringback","Optional")
         st.session_state.setdefault("classic_min_salary",48500)
@@ -3213,31 +3339,69 @@ if mode=="Classic":
                 st.session_state["classic_allow_qb_rb"]=bool(rec["allow_qb_rb"])
                 st.success("DFS LAB recommendations staged in Rules. Review them before building.")
 
+            _portfolio_result=st.session_state.get("classic_result_v4")
+            portfolio=classic_portfolio_intelligence(df,_portfolio_result)
             packet={
-                "contest":{"entry_format":entry_format,"field_size":int(field_size),"payout":payout_style},
+                "contest":{"entry_format":entry_format,"field_size":int(field_size),"payout":payout_style,"requested_lineups":int(lineup_count)},
                 "recommendations":rec,
+                "active_rules":{"qb_pass_catchers":int(st.session_state["classic_qb_stack"]),"bringback":st.session_state["classic_bringback"],
+                                "min_salary":int(st.session_state["classic_min_salary"]),"max_team":int(st.session_state["classic_max_team"]),
+                                "max_game":int(st.session_state["classic_max_game"]),"max_te":int(st.session_state["classic_max_te"]),
+                                "no_dst_from_qb_game":bool(st.session_state["classic_no_dst"]),"no_offense_vs_dst":bool(st.session_state["classic_no_off"]),
+                                "allow_qb_rb":bool(st.session_state["classic_allow_qb_rb"])},
                 "thesis_state":thesis_state,
                 "qb_concentration":qb_plan,
-                "qb_candidates":qb_plan_table.head(12).to_dict(orient="records") if qb_plan_table is not None and not qb_plan_table.empty else [],
-                "theses":thesis_table.head(10).to_dict(orient="records") if thesis_table is not None and not thesis_table.empty else [],
-                "simulations":sim_table.head(10).to_dict(orient="records") if sim_table is not None and not sim_table.empty else [],
-                "context_players":intel_view.sort_values("Proj",ascending=False).head(30).to_dict(orient="records") if not intel.empty else [],
+                "qb_candidates":qb_plan_table.head(20).to_dict(orient="records") if qb_plan_table is not None and not qb_plan_table.empty else [],
+                "theses":thesis_table.head(15).to_dict(orient="records") if thesis_table is not None and not thesis_table.empty else [],
+                "simulations":sim_table.head(12).to_dict(orient="records") if sim_table is not None and not sim_table.empty else [],
+                "context_players":intel_view.sort_values("Proj",ascending=False).head(45).to_dict(orient="records") if not intel.empty else [],
+                "portfolio":portfolio,
                 "limitations":["No injury/news feed in this Classic build","No weather/travel feed in this Classic build","Day/night history is not inferred when unavailable"]
             }
-            st.markdown("#### Ask DFS LAB why")
+
+            if portfolio.get("built"):
+                st.markdown("#### Portfolio intelligence")
+                pi1,pi2,pi3,pi4=st.columns(4)
+                pi1.metric("Built lineups",portfolio.get("lineups",0))
+                pi2.metric("QBs used",portfolio.get("unique_qbs",0))
+                pi3.metric("Avg salary left",f"$"+f"{float(portfolio.get('salary_left',{}).get('mean') or 0):,.0f}")
+                pi4.metric("Avg player own",f"{float(portfolio.get('avg_player_ownership',{}).get('mean') or 0):.1f}%")
+                _qbtxt=" · ".join(f"{x['qb']} {x['exposure_pct']:.0f}%" for x in portfolio.get("qb_usage",[])[:6])
+                st.caption("QB portfolio · "+(_qbtxt or "No QB usage available"))
+
+            st.markdown("#### Ask DFS LAB")
+            st.caption("Ask about the slate, the rules DFS LAB chose, or the portfolio it actually built. The conversation stays with this slate and contest.")
+            quick_cols=st.columns(4)
+            quick_questions=["Critique my portfolio","Where am I too spread?","Where am I too chalky?","What would you change?"]
+            quick_ask=None
+            for _i,_qq in enumerate(quick_questions):
+                with quick_cols[_i]:
+                    if st.button(_qq,use_container_width=True,key=f"classic_ai_quick_{_i}"):
+                        quick_ask=_qq
             with st.form("classic_intel_ai_form",clear_on_submit=True):
-                cq=st.text_input("Ask about the slate or a recommendation",placeholder="Why do you want two pass catchers? What if I think the top game disappoints?")
+                cq=st.text_input("Ask DFS LAB",placeholder="Why is my QB pool this big? What are my riskiest exposures? Explain what this portfolio is betting on.")
                 cask=st.form_submit_button("ASK DFS LAB  ↗",type="primary",use_container_width=True)
-            if cask and cq.strip():
-                with st.spinner("Reading contest → simulations → matchup evidence → rules…"):
-                    ca=classic_ai_slate_answer(cq.strip(),packet)
-                st.session_state["classic_ai_chat"].append((cq.strip(),ca))
+            _asked=(cq.strip() if cask and cq.strip() else quick_ask)
+            if _asked:
+                with st.spinner("Reading contest → slate → portfolio → conversation…"):
+                    ca=classic_ai_slate_answer(_asked,packet,st.session_state["classic_ai_chat"])
+                st.session_state["classic_ai_chat"].append((_asked,ca))
             if st.session_state["classic_ai_chat"]:
-                uq,ar=st.session_state["classic_ai_chat"][-1]
-                st.markdown(f"**You:** {uq}")
-                st.markdown(ar)
-                if st.session_state.get("classic_ai_error"):
-                    st.caption("AI API fallback is active; the answer above used DFS LAB's local slate evidence.")
+                for uq,ar in st.session_state["classic_ai_chat"][-6:]:
+                    st.markdown(f"<div class='dfs-chat-user'><b>You</b><br>{uq}</div>",unsafe_allow_html=True)
+                    st.markdown(f"<div class='dfs-chat-ai'><b>DFS LAB</b><br>{ar}</div>",unsafe_allow_html=True)
+                cc1,cc2=st.columns([1,3])
+                with cc1:
+                    if st.button("CLEAR CHAT",use_container_width=True,key="classic_ai_clear"):
+                        st.session_state["classic_ai_chat"]=[]
+                        st.rerun()
+                with cc2:
+                    if st.session_state.get("classic_ai_error"):
+                        with st.expander("AI connection status"):
+                            st.warning("Full AI is unavailable, so this answer used DFS LAB's local evidence engine.")
+                            st.code(st.session_state.get("classic_ai_error","Unknown API error"))
+                    elif st.session_state.get("classic_ai_model"):
+                        st.caption("Full AI connected · "+str(st.session_state["classic_ai_model"]))
 
         with tabs[1]:
             st.markdown('<div class="card-title">Build</div><div class="card-sub">Choose team preferences after reviewing Slate Intel, then generate the portfolio with your Rules settings.</div>',unsafe_allow_html=True)
