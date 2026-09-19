@@ -3370,7 +3370,7 @@ if mode=="Classic":
                 st.caption("QB portfolio · "+(_qbtxt or "No QB usage available"))
 
             st.markdown("#### Ask DFS LAB")
-            st.caption("Ask about the slate, the rules DFS LAB chose, or the portfolio it actually built. The conversation stays with this slate and contest.")
+            st.caption("Build: Portfolio AI v2 · Ask about the slate, the rules DFS LAB chose, or the portfolio it actually built. The conversation stays with this slate and contest.")
             quick_cols=st.columns(4)
             quick_questions=["Critique my portfolio","Where am I too spread?","Where am I too chalky?","What would you change?"]
             quick_ask=None
