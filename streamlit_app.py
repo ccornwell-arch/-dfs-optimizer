@@ -1247,6 +1247,36 @@ DFS PRO PLAYBOOK:
   downgrading the entire offense. Conversely, large favorites may increase RB and DST correlation while reducing full-game stack appeal.
 - Avoid overconfidence in tiny samples from preseason or the prior season. Use them as evidence about role and scheme, but weight current
   depth chart, coaching changes, injuries and market expectations more heavily than one or two recent games.
+- Week 2 is a recency-bias trap. Do not automatically crown Week 1 breakouts or bury Week 1 failures. Separate what changed in role
+  (snaps, routes, targets, carries, red-zone work, designed QB runs) from what was merely one-game scoring variance.
+- Role evidence should update faster than box-score efficiency. A player who earned a large snap share, route share or target share but failed
+  can be a stronger tournament buy-back than a player who scored efficiently on limited opportunity.
+- When a starter is removed, identify the actual beneficiary by role. Reallocate routes, targets, carries, goal-line work and pass-protection snaps
+  separately instead of assuming one backup inherits the entire workload.
+- Running-back snap share alone can mislead. Distinguish early-down rushing work, third-down/pass-protection work, targets and goal-line usage;
+  a 50/50 snap split can still hide a much more valuable fantasy role for one back.
+- Pass protection can cap a running back's routes and two-minute work even when he leads carries. Treat protection trust as a workload constraint,
+  especially for young or recently activated backs.
+- Cheap quarterbacks create lineup-construction leverage only when they retain a realistic tournament ceiling. Salary savings are valuable because
+  they can buy additional ceiling elsewhere, but a cheap QB projecting 18-20 points is not automatically superior to a premium QB with 30-point upside.
+- Buy-back candidates are especially useful when the field overreacts to one bad game but the underlying role, matchup mechanism and ceiling remain intact.
+  Do not fade a strong player merely because he disappointed at high ownership the previous week.
+- When quarterback ownership is broadly distributed, low ownership by itself is weak leverage. Prefer quarterbacks whose exact stacks are under-owned,
+  whose rushing creates standalone ceiling, or whose salary unlocks materially stronger roster construction.
+- Evaluate quarterback ceiling through touchdown pathways. When an offense loses or lacks a dominant goal-line running back, passing-touchdown share can rise;
+  when an elite rushing QB owns red-zone equity, his ceiling can remain high even if pass-catcher concentration is uncertain.
+- Exact stack correlation matters more than generic team exposure. Some receivers' ceiling games are tightly tied to a quarterback eruption, while high-volume
+  receivers can post strong scores even when the QB has only an ordinary fantasy day. Use route depth, target concentration and touchdown dependence to distinguish them.
+- WR3/secondary-receiver exposure becomes more interesting when explicitly betting on a game exceeding expectations. In a true shootout, ancillary players can
+  capture the extra touchdowns that make the game environment beat its median; do not use them merely because they are cheap.
+- When ownership is flat across a position, the slate may offer more freedom to prioritize projection, role and correlation instead of forcing low-owned plays.
+  Game theory matters most where the field is actually concentrated.
+- Defensive selection should emphasize opponent pressure rate, sack susceptibility, turnover risk, offensive-line weakness and likely negative game script.
+  Repeatedly targeting mistake-prone quarterbacks can be rational, but do not convert a small sample into an unconditional rule.
+- Historical split trends such as home tight-end performance may be used as a weak prior only. Do not hard-code them without a football mechanism, sufficient sample,
+  and current role/matchup support; avoid double-counting trends already reflected in projections or market inputs.
+- Contest simulation output is only as reliable as its projections, ownership assumptions, field-generation model and correlation logic. Treat simulated EV as one
+  diagnostic rather than truth, and compare it with simpler lineup-level measures such as projection, ceiling, ownership concentration, correlation and duplication risk.
 - When a player's role is uncertain, favor ceiling-aware scenario analysis over blindly trusting a single median projection.
   Ask what happens if the player earns 70-80% of the work rather than the market's assumed 50-60%, and compare that outcome
   with ownership.
@@ -1299,7 +1329,8 @@ DFS PRO PLAYBOOK:
 - Use market movement as evidence, not gospel. Material moves in game total, team total, props or availability can strengthen a thesis,
   but the program should still explain the football mechanism behind the move.
 - Separate prediction from game theory. A player can look mediocre by film or recent box scores yet remain a valid DFS play if salary,
-  opportunity, ownership and scoring environment create positive tournament value.- Late-swap flexibility has value before games begin. When practical, place later-starting players in FLEX and preserve salary/
+  opportunity, ownership and scoring environment create positive tournament value.
+- Late-swap flexibility has value before games begin. When practical, place later-starting players in FLEX and preserve salary/
   positional paths so underperforming early lineups can pivot to lower-owned ceiling plays without unnecessary dead ends.
 - Late swap matters when live results are available: lineups doing well can move toward safer/chalkier paths;
   lineups behind can pivot toward lower-owned ceiling outcomes.
