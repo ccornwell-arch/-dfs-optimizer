@@ -2897,7 +2897,17 @@ if mode=="Classic":
             view=df.copy(); team_filter=st.multiselect("Teams",teams,key="v4_cteam"); pos_filter=st.multiselect("Positions",["QB","RB","WR","TE","DST"],key="v4_cpos")
             if team_filter:view=view[view["Team"].isin(team_filter)]
             if pos_filter:view=view[view["Position"].isin(pos_filter)]
-            ed=pd.DataFrame({"ID":view["ID"].astype(str),"Name":view["Name"],"Pos":view["Position"],"Team":view["Team"],"Salary":view["Salary"],"Base Proj":view["Base Proj"].round(2),"Proj":view["My Proj"].round(2),"Own":view["My Own"].round(1),"Lock":False,"Exclude":False,"Priority":"Neutral","Min Exposure":0,"Max Exposure":100})
+            s1,s2=st.columns([2,1])
+            with s1:
+                sort_by=st.selectbox("Sort players by",["Salary","Projection","Ownership","Name"],index=0,key="classic_player_sort")
+            with s2:
+                sort_dir=st.segmented_control("Order",["High → Low","Low → High"],default="High → Low",key="classic_player_sort_dir")
+            _sort_col={"Salary":"Salary","Projection":"My Proj","Ownership":"My Own","Name":"Name"}[sort_by]
+            _ascending=(sort_dir=="Low → High")
+            if sort_by=="Name":
+                _ascending=(sort_dir=="Low → High")
+            view=view.sort_values(_sort_col,ascending=_ascending,kind="mergesort").reset_index(drop=True)
+            ed=pd.DataFrame({"ID":view["ID"].astype(str),"Name":view["Name"],"Pos":view["Position"],"Team":view["Team"],"Salary":view["Salary"],"Base Proj":view["Base Proj"].round(2),"Proj":view["My Proj"].round(2),"Own":pd.to_numeric(view["My Own"],errors="coerce").fillna(0.0).round(1),"Lock":False,"Exclude":False,"Priority":"Neutral","Min Exposure":0,"Max Exposure":100})
             for x,r in ed.iterrows():
                 e=st.session_state["strategy_master"].get(str(r["ID"]),{})
                 for cc,k,dv in [("Lock","Lock",False),("Exclude","Exclude",False),("Priority","Priority","Neutral"),("Min Exposure","Min Exposure",0),("Max Exposure","Max Exposure",100)]: ed.at[x,cc]=e.get(k,dv)
