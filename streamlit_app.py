@@ -2674,6 +2674,13 @@ if mode=="Classic":
     try:
         df=prepare_player_pool(dk_file,ss_file); teams=sorted(df["Team"].dropna().unique().tolist())
         st.session_state.setdefault("strategy_master",{}); st.session_state.setdefault("team_strategy_master",{})
+        st.session_state.setdefault("classic_projection_overrides",{})
+        df["Base Proj"]=pd.to_numeric(df["My Proj"],errors="coerce").fillna(0.0)
+        if st.session_state["classic_projection_overrides"]:
+            for _i,_r in df.iterrows():
+                _pid=str(_r["ID"])
+                if _pid in st.session_state["classic_projection_overrides"]:
+                    df.at[_i,"My Proj"]=float(st.session_state["classic_projection_overrides"][_pid])
         st.session_state.setdefault("classic_ai_chat",[])
         st.session_state.setdefault("classic_qb_stack",2)
         st.session_state.setdefault("classic_bringback","Optional")
@@ -2886,31 +2893,48 @@ if mode=="Classic":
             build_btn=st.button(f"⚡ GENERATE {lineup_count} RATED LINEUPS",type="primary",use_container_width=True,key="v4_classic_build")
 
         with tabs[2]:
+            st.markdown('<div class="card-title">Players</div><div class="card-sub">Edit your own projection when you disagree with the model. Your projection becomes the number DFS LAB uses for simulations and lineup building until you reset it.</div>',unsafe_allow_html=True)
             view=df.copy(); team_filter=st.multiselect("Teams",teams,key="v4_cteam"); pos_filter=st.multiselect("Positions",["QB","RB","WR","TE","DST"],key="v4_cpos")
             if team_filter:view=view[view["Team"].isin(team_filter)]
             if pos_filter:view=view[view["Position"].isin(pos_filter)]
-            ed=pd.DataFrame({"ID":view["ID"].astype(str),"Name":view["Name"],"Pos":view["Position"],"Team":view["Team"],"Salary":view["Salary"],"Proj":view["My Proj"].round(2),"Own":view["My Own"].round(1),"Lock":False,"Exclude":False,"Priority":"Neutral","Min Exposure":0,"Max Exposure":100})
+            ed=pd.DataFrame({"ID":view["ID"].astype(str),"Name":view["Name"],"Pos":view["Position"],"Team":view["Team"],"Salary":view["Salary"],"Base Proj":view["Base Proj"].round(2),"Proj":view["My Proj"].round(2),"Own":view["My Own"].round(1),"Lock":False,"Exclude":False,"Priority":"Neutral","Min Exposure":0,"Max Exposure":100})
             for x,r in ed.iterrows():
                 e=st.session_state["strategy_master"].get(str(r["ID"]),{})
                 for cc,k,dv in [("Lock","Lock",False),("Exclude","Exclude",False),("Priority","Priority","Neutral"),("Min Exposure","Min Exposure",0),("Max Exposure","Max Exposure",100)]: ed.at[x,cc]=e.get(k,dv)
             with st.form("classic_player_editor_form",clear_on_submit=False):
                 edited=st.data_editor(ed,hide_index=True,use_container_width=True,height=620,
-                    disabled=["ID","Name","Pos","Team","Salary","Proj","Own"],
-                    column_order=["Name","Pos","Team","Salary","Proj","Own","Lock","Exclude","Priority","Min Exposure","Max Exposure"],
+                    disabled=["ID","Name","Pos","Team","Salary","Base Proj","Own"],
+                    column_order=["Name","Pos","Team","Salary","Base Proj","Proj","Own","Lock","Exclude","Priority","Min Exposure","Max Exposure"],
                     column_config={
                         "Name":st.column_config.TextColumn("Player",width=190,pinned=True),"Pos":st.column_config.TextColumn("Pos",width=60),
                         "Team":st.column_config.TextColumn("Team",width=70),"Salary":st.column_config.NumberColumn("Salary",width=85,format="$%d"),
-                        "Proj":st.column_config.NumberColumn("Proj",width=75,format="%.2f"),"Own":st.column_config.NumberColumn("Own",width=70,format="%.1f"),
+                        "Base Proj":st.column_config.NumberColumn("Base Proj",width=85,format="%.2f",help="Original uploaded/model projection."),
+                        "Proj":st.column_config.NumberColumn("My Proj",width=85,format="%.2f",min_value=0.0,step=0.25,help="Editable. DFS LAB uses this value everywhere after you apply changes."),
+                        "Own":st.column_config.NumberColumn("Own %",width=70,format="%.1f"),
                         "Priority":st.column_config.SelectboxColumn("Lean",options=PRIORITY_OPTIONS,width=95),"Lock":st.column_config.CheckboxColumn("Lock",width=65),
                         "Exclude":st.column_config.CheckboxColumn("Out",width=60),"Min Exposure":st.column_config.NumberColumn("Min %",min_value=0,max_value=100,step=5,width=75),
                         "Max Exposure":st.column_config.NumberColumn("Max %",min_value=0,max_value=100,step=5,width=75),
                     },key="v4_classic_players")
-                apply_classic_players=st.form_submit_button("Apply player changes",type="primary",use_container_width=True)
+                pc1,pc2=st.columns(2)
+                with pc1:
+                    apply_classic_players=st.form_submit_button("APPLY PLAYER CHANGES",type="primary",use_container_width=True)
+                with pc2:
+                    reset_classic_proj=st.form_submit_button("RESET VISIBLE PROJECTIONS",use_container_width=True)
+            if reset_classic_proj:
+                for _,r in edited.iterrows():
+                    st.session_state["classic_projection_overrides"].pop(str(r["ID"]),None)
+                st.rerun()
             if apply_classic_players:
                 for _,r in edited.iterrows():
-                    ex=bool(r["Exclude"])
-                    st.session_state["strategy_master"][str(r["ID"])]={"Lock":bool(r["Lock"]) and not ex,"Exclude":ex,"Priority":"Exclude" if ex else str(r["Priority"]),"Min Exposure":float(r["Min Exposure"]),"Max Exposure":float(r["Max Exposure"])}
-                st.success("Player settings applied.")
+                    pid=str(r["ID"]); ex=bool(r["Exclude"])
+                    st.session_state["strategy_master"][pid]={"Lock":bool(r["Lock"]) and not ex,"Exclude":ex,"Priority":"Exclude" if ex else str(r["Priority"]),"Min Exposure":float(r["Min Exposure"]),"Max Exposure":float(r["Max Exposure"])}
+                    base=float(r["Base Proj"]); newp=float(r["Proj"])
+                    if abs(newp-base)>=0.005:
+                        st.session_state["classic_projection_overrides"][pid]=newp
+                    else:
+                        st.session_state["classic_projection_overrides"].pop(pid,None)
+                st.session_state.pop("classic_result_v4",None)
+                st.rerun()
 
         with tabs[3]:
             st.markdown('<div class="card-title">Classic Rules</div><div class="card-sub">Contest-aware structure controls. Slate Intel can recommend these, but you decide what gets enforced.</div>',unsafe_allow_html=True)
