@@ -2993,8 +2993,55 @@ if mode=="Classic":
             else:
                 st.markdown('<div class="card-title">Exposure Lab</div><div class="card-sub">Review the portfolio, then tighten or loosen individual players without going back to the Players tab.</div>',unsafe_allow_html=True)
                 exp=calculate_exposure_table(df,res,st.session_state["strategy_master"]).copy()
-                st.caption("Actual Exp % is what the current portfolio used. Change Min Target % or Max Target %, then rebuild. Example: if a player is at 55% and you only want 30%, set Max Target % to 30.")
+                st.caption("My Exposure % is what the current portfolio used. Field Own % is projected contest ownership. Change a player's target, then rebuild.")
 
+                # iPad-friendly quick adjustment. The Streamlit grid's in-cell editor can be
+                # awkward on touch devices, so this gives exposure changes a reliable path.
+                st.markdown("#### Quick exposure adjustment")
+                _exp_names=exp["Name"].astype(str).tolist()
+                _pick=st.selectbox("Player to adjust",_exp_names,key="classic_quick_exp_player")
+                _row=exp[exp["Name"].astype(str).eq(str(_pick))].iloc[0]
+                _pid=str(_row["ID"])
+                _cur=st.session_state["strategy_master"].get(_pid,{})
+                _default_min=int(round(float(_cur.get("Min Exposure",0))))
+                _default_max=int(round(float(_cur.get("Max Exposure",100))))
+                qa,qb,qc=st.columns([1,1,1.2])
+                with qa:
+                    _qmin=st.number_input("Min exposure %",min_value=0,max_value=100,value=_default_min,step=5,key="classic_quick_exp_min")
+                with qb:
+                    _qmax=st.number_input("Max exposure %",min_value=0,max_value=100,value=_default_max,step=5,key="classic_quick_exp_max")
+                with qc:
+                    st.metric("Current My Exposure",f"{float(_row['Actual Exp %']):.1f}%")
+                qd,qe=st.columns(2)
+                with qd:
+                    _save_quick=st.button("SAVE EXPOSURE TARGET",use_container_width=True,key="classic_quick_exp_save")
+                with qe:
+                    _rebuild_quick=st.button(f"SAVE + REBUILD {lineup_count}",type="primary",use_container_width=True,key="classic_quick_exp_rebuild")
+                if _save_quick or _rebuild_quick:
+                    if float(_qmin)>float(_qmax):
+                        st.error("Minimum exposure cannot be higher than maximum exposure.")
+                    else:
+                        _cur["Min Exposure"]=float(_qmin); _cur["Max Exposure"]=float(_qmax)
+                        st.session_state["strategy_master"][_pid]=_cur
+                        if _rebuild_quick:
+                            with st.spinner("Rebuilding with your new exposure target…"):
+                                new_res=generate_lineups(
+                                    df,field_size,payout_style,lineup_count,max(300,lineup_count*12),
+                                    int(st.session_state["classic_min_salary"]),int(st.session_state["classic_qb_stack"]),st.session_state["classic_bringback"],
+                                    preferred_stack_teams,st.session_state["strategy_master"],st.session_state["team_strategy_master"],
+                                    bool(st.session_state["classic_no_dst"]),bool(st.session_state["classic_no_off"]),seed,
+                                    max_players_team=int(st.session_state["classic_max_team"]),
+                                    max_players_game=int(st.session_state["classic_max_game"]),
+                                    max_te=int(st.session_state["classic_max_te"]),
+                                    allow_qb_with_rb=bool(st.session_state["classic_allow_qb_rb"]),
+                                    allowed_qb_ids=classic_qb_ids
+                                )
+                            st.session_state["classic_result_v4"]=new_res
+                            st.rerun()
+                        else:
+                            st.success(f"{_pick}: exposure target saved at {_qmin}%–{_qmax}%.")
+
+                st.markdown("#### Full exposure table")
                 with st.form("classic_exposure_editor_form",clear_on_submit=False):
                     exp_edit=st.data_editor(
                         exp,
@@ -3010,8 +3057,8 @@ if mode=="Classic":
                             "Opponent":st.column_config.TextColumn("Opponent",width=82),
                             "Salary":st.column_config.NumberColumn("Salary",format="$%d",width=85),
                             "Proj":st.column_config.NumberColumn("Proj",format="%.2f",width=75),
-                            "Proj Own":st.column_config.NumberColumn("Proj Own %",format="%.1f",width=85),
-                            "Actual Exp %":st.column_config.NumberColumn("Actual Exp %",format="%.1f",width=95),
+                            "Proj Own":st.column_config.NumberColumn("Field Own %",format="%.1f",width=85),
+                            "Actual Exp %":st.column_config.NumberColumn("My Exposure %",format="%.1f",width=95),
                             "Lineups":st.column_config.NumberColumn("Lineups",width=75),
                             "Min Target %":st.column_config.NumberColumn("Min %",min_value=0,max_value=100,step=5,width=80),
                             "Max Target %":st.column_config.NumberColumn("Max %",min_value=0,max_value=100,step=5,width=80),
