@@ -1236,7 +1236,45 @@ DFS PRO PLAYBOOK:
   forced universally.
 - When a popular RB can fail because his team's scoring shifts through the air, the QB/pass-catcher stack can be direct leverage.
   The inverse is also true: a lower-owned RB can leverage popular passing stacks from the same offense.
-- Late-swap flexibility has value before games begin. When practical, place later-starting players in FLEX and preserve salary/
+- Roster construction itself is a leverage point. When the field is concentrated on the same cheap RBs, deliberately test
+  alternate constructions such as one cheap RB, two pay-up RBs, WR/TE in FLEX, or balanced midrange builds when they still preserve ceiling.
+- Do not confuse projected team points with DFS usefulness. A high team total is most actionable when scoring is concentrated enough to
+  identify where the touchdowns and volume are likely to land; diffuse offenses can be strong real-life spots but poor stacking targets.
+- When a team carries an unusually high implied total, ask where those points come from. If fading the obvious chalk piece, create
+  correlated alternatives that capture the same team scoring through the quarterback, pass catchers, or complementary RB/DEF paths.
+- Cheap volume can be strong chalk. A low-salary starter with a near-workhorse role and strong touchdown equity can remain viable even
+  at heavy ownership because the opportunity-cost penalty for failure is smaller than with an expensive chalk player.
+- Evaluate cheap RBs by workload certainty, not salary alone. Distinguish true workhorse injury replacements from committee backs whose
+  pass protection, goal-line role, or backup involvement can cap their ceiling.
+- On slates with many viable offenses, a concentrated offense can be more valuable than a higher-total but highly distributed offense.
+  Prefer stacks where the likely fantasy production can be captured through a manageable number of players.
+- If an offense is difficult to stack because targets are distributed, a naked rushing quarterback can be viable when his own rushing
+  equity is a major part of the ceiling and no pass catcher is required for him to post a slate-winning score.
+- A game can be attractive because it is cheap, not only because its median total is high. Cheap correlated stacks can unlock elite
+  one-offs or secondary stacks elsewhere and create a stronger whole-lineup ceiling profile.
+- When multiple lineups are available, allocate enough combinations to a high-upside offense to cover its meaningful scoring branches.
+  If a team can score through WR1, WR2, TE and RB, one token lineup may be insufficient; either commit enough portfolio resources to
+  explore the branches or reduce exposure to the offense.
+- In small-entry formats, avoid pretending to cover every attractive game. When many spots look good, concentration should come from
+  choosing the few game environments or offenses with the clearest combination of ceiling, concentration and leverage.
+- Ownership at quarterback should be evaluated through the exact stack, not the QB alone. A 5% QB paired with the same two obvious
+  receivers as the field may still produce a common construction; a more unusual correlated combination can create the real leverage.
+- Opposing-player stacks do not always need the quarterback from the same game. A premium QB can be paired with one or two opposing
+  pass catchers if those players are the most likely pieces to force the shootout while the QB can score through rushing or dispersed passing.
+- Late-window allocation is not mandatory. Do not force afternoon players solely to preserve a sweat, but when projected value is close,
+  prefer constructions that preserve meaningful late-swap optionality.
+- After early games begin, ownership information itself becomes actionable. Compare actual early ownership with projections before
+  choosing late pivots; a later star whose early-position alternative came in more popular than expected can become more valuable leverage.
+- Paying up at defense can be correct on slates with several strong defensive mismatches and weak cheap alternatives. Defense should still
+  be judged by pressure, turnover potential, opponent protection and game script rather than salary prestige.
+- A low-owned expensive RB can be useful leverage against concentrated cheap-RB roster construction when his workload and touchdown ceiling
+  remain elite. Compare what the spend-up sacrifices elsewhere with how much unique ceiling it adds.
+- When a popular cheap player fails, the most valuable leverage may be the correlated teammate who benefits from that failure, not a random
+  low-owned replacement from another game.
+- Use market movement as evidence, not gospel. Material moves in game total, team total, props or availability can strengthen a thesis,
+  but the program should still explain the football mechanism behind the move.
+- Separate prediction from game theory. A player can look mediocre by film or recent box scores yet remain a valid DFS play if salary,
+  opportunity, ownership and scoring environment create positive tournament value.- Late-swap flexibility has value before games begin. When practical, place later-starting players in FLEX and preserve salary/
   positional paths so underperforming early lineups can pivot to lower-owned ceiling plays without unnecessary dead ends.
 - Late swap matters when live results are available: lineups doing well can move toward safer/chalkier paths;
   lineups behind can pivot toward lower-owned ceiling outcomes.
