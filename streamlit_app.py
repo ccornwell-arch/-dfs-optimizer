@@ -1205,6 +1205,39 @@ DFS PRO PLAYBOOK:
   who projects well but lacks a plausible 20+ point path may be better for cash than for a massive-field GPP.
 - When two strong plays are mutually dependent, assess whether their success stories conflict. Example: a rushing QB paired
   with a non-pass-catching RB can be negatively correlated and may deserve a rule or reduced pairing rate.
+- Inputs drive outputs. Treat projections, ownership, player-pool exclusions, exposure targets and stack rules
+  as the user's actual DFS opinions; do not assume the optimizer can rescue weak or incoherent inputs.
+- Portfolio diversification should be based on independent paths to first place, not a mechanical minimum-uniques rule.
+  Two lineups can differ by two players yet tell the same story; conversely, similar cores can still represent meaningfully
+  different game environments or leverage points.
+- On soft-pricing slates, assume many lineups will look superficially strong. Evaluate whether each lineup has enough actual
+  ceiling and a coherent path to beating other strong-looking lineups rather than rewarding raw projection alone.
+- In large fields, low-owned plays should have genuine slate-breaking upside. A player projected for a decent median but
+  with little chance to reach roughly 18-25+ DraftKings points may not be a useful tournament differentiator.
+- Secondary correlations are valuable and do not require a quarterback. Examples include RB+opposing WR/TE, RB+DEF,
+  or skill-player pairings from the same game when their paths to ceiling are compatible.
+- A chalk player can be used differently by changing the players around him. Do not evaluate ownership one player at a time;
+  judge the ownership and correlation of the full combination.
+- Overstacking a high-total game can be a legitimate large-field strategy when the lineup is explicitly betting on that game
+  materially exceeding expectations. Do not reject 5-6 player game environments solely because they are unconventional.
+- Embrace uncertainty when the payoff is asymmetric. Week 1 roles, rookies and changing depth charts can create low-owned
+  players whose true workload is wider than the projection assumes; uncertainty itself can create tournament leverage.
+- When a player's role is uncertain, favor ceiling-aware scenario analysis over blindly trusting a single median projection.
+  Ask what happens if the player earns 70-80% of the work rather than the market's assumed 50-60%, and compare that outcome
+  with ownership.
+- Narrowing a QB pool can be more valuable than spreading across every viable passer. Quarterback is naturally distributed,
+  so portfolio conviction can come from concentrating on a smaller number of strong QB theses while diversifying their stacks.
+- Weather should be interpreted by mechanism. Rain alone is not an automatic passing-game downgrade; wind, field conditions,
+  timing and whether the weather persists through the game matter more. Do not overreact to generic precipitation labels.
+- Player props can be used as market evidence, especially for uncertain workloads, but they are not ceilings. A modest median
+  rushing or receiving prop can coexist with a tournament-winning tail outcome.
+- Defense plus running back is a useful positive-correlation construction when the lineup is betting on a team controlling
+  the game, creating sacks/turnovers and producing rushing volume. It should be available as a portfolio thesis rather than
+  forced universally.
+- When a popular RB can fail because his team's scoring shifts through the air, the QB/pass-catcher stack can be direct leverage.
+  The inverse is also true: a lower-owned RB can leverage popular passing stacks from the same offense.
+- Late-swap flexibility has value before games begin. When practical, place later-starting players in FLEX and preserve salary/
+  positional paths so underperforming early lineups can pivot to lower-owned ceiling plays without unnecessary dead ends.
 - Late swap matters when live results are available: lineups doing well can move toward safer/chalkier paths;
   lineups behind can pivot toward lower-owned ceiling outcomes.
 
