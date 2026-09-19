@@ -2955,7 +2955,67 @@ if mode=="Classic":
             if res is None or res.empty:
                 st.info("Generate lineups first.")
             else:
-                st.dataframe(calculate_exposure_table(df,res,st.session_state["strategy_master"]),hide_index=True,use_container_width=True,height=620)
+                st.markdown('<div class="card-title">Exposure Lab</div><div class="card-sub">Review the portfolio, then tighten or loosen individual players without going back to the Players tab.</div>',unsafe_allow_html=True)
+                exp=calculate_exposure_table(df,res,st.session_state["strategy_master"]).copy()
+                st.caption("Actual Exp % is what the current portfolio used. Change Min Target % or Max Target %, then rebuild. Example: if a player is at 55% and you only want 30%, set Max Target % to 30.")
+
+                with st.form("classic_exposure_editor_form",clear_on_submit=False):
+                    exp_edit=st.data_editor(
+                        exp,
+                        hide_index=True,
+                        use_container_width=True,
+                        height=620,
+                        disabled=["ID","Name","Pos","Team","Salary","Proj","Proj Own","Actual Exp %","Lineups"],
+                        column_order=["Name","Pos","Team","Salary","Proj","Proj Own","Actual Exp %","Lineups","Min Target %","Max Target %"],
+                        column_config={
+                            "Name":st.column_config.TextColumn("Player",width=190,pinned=True),
+                            "Pos":st.column_config.TextColumn("Pos",width=60),
+                            "Team":st.column_config.TextColumn("Team",width=70),
+                            "Salary":st.column_config.NumberColumn("Salary",format="$%d",width=85),
+                            "Proj":st.column_config.NumberColumn("Proj",format="%.2f",width=75),
+                            "Proj Own":st.column_config.NumberColumn("Proj Own %",format="%.1f",width=85),
+                            "Actual Exp %":st.column_config.NumberColumn("Actual Exp %",format="%.1f",width=95),
+                            "Lineups":st.column_config.NumberColumn("Lineups",width=75),
+                            "Min Target %":st.column_config.NumberColumn("Min %",min_value=0,max_value=100,step=5,width=80),
+                            "Max Target %":st.column_config.NumberColumn("Max %",min_value=0,max_value=100,step=5,width=80),
+                        },
+                        key="classic_exposure_editor"
+                    )
+                    ea,eb=st.columns(2)
+                    with ea:
+                        apply_exp=st.form_submit_button("APPLY EXPOSURE CHANGES",use_container_width=True)
+                    with eb:
+                        rebuild_exp=st.form_submit_button(f"APPLY + REBUILD {lineup_count} LINEUPS",type="primary",use_container_width=True)
+
+                if apply_exp or rebuild_exp:
+                    bad=[]
+                    for _,r in exp_edit.iterrows():
+                        pid=str(r["ID"]); mn=float(r["Min Target %"]); mx=float(r["Max Target %"])
+                        if mn>mx:
+                            bad.append(str(r["Name"])); continue
+                        cur=st.session_state["strategy_master"].get(pid,{})
+                        cur["Min Exposure"]=mn; cur["Max Exposure"]=mx
+                        st.session_state["strategy_master"][pid]=cur
+                    if bad:
+                        st.error("Minimum exposure cannot be higher than maximum for: "+", ".join(bad[:8]))
+                    elif rebuild_exp:
+                        with st.spinner("Rebuilding with your new exposure limits…"):
+                            new_res=generate_lineups(
+                                df,field_size,payout_style,lineup_count,max(300,lineup_count*12),
+                                int(st.session_state["classic_min_salary"]),int(st.session_state["classic_qb_stack"]),st.session_state["classic_bringback"],
+                                preferred_stack_teams,st.session_state["strategy_master"],st.session_state["team_strategy_master"],
+                                bool(st.session_state["classic_no_dst"]),bool(st.session_state["classic_no_off"]),seed,
+                                max_players_team=int(st.session_state["classic_max_team"]),
+                                max_players_game=int(st.session_state["classic_max_game"]),
+                                max_te=int(st.session_state["classic_max_te"]),
+                                allow_qb_with_rb=bool(st.session_state["classic_allow_qb_rb"]),
+                                allowed_qb_ids=classic_qb_ids
+                            )
+                        st.session_state["classic_result_v4"]=new_res
+                        st.success("Exposure changes applied and the portfolio was rebuilt.")
+                        st.rerun()
+                    else:
+                        st.success("Exposure targets saved. They will be used on the next build.")
     except Exception as e:
         st.error(f"Classic build error: {e}")
 else:
