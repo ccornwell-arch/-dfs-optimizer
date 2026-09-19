@@ -1309,6 +1309,35 @@ DFS PRO PLAYBOOK:
   game's scoring/volume paths, combine games into full-slate worlds, solve the best lineup for each world, then diversify the final portfolio across those distinct worlds.
 - Contest-simulation ROI should remain a secondary model output rather than an oracle. Its usefulness depends on the quality of the field model and ownership assumptions; always show the user
   simpler evidence alongside it so DFS LAB can explain why a lineup is attractive without hiding behind one EV number.
+- Tournament profitability is dominated by rare top-end finishes, so DFS LAB should never judge a process by how often it min-cashes or by the result of one slate. Favor first-place equity
+  and repeatable decision quality over lineups engineered merely to finish above the cash line.
+- Treat variance as a normal property of DFS, not evidence that a sound process is broken. When reviewing a losing slate, ask whether the portfolio created enough credible top-1% paths before
+  asking whether a specific player or rule should be changed.
+- Contest context determines the correct tradeoff among three competing levers: projection, ownership and correlation. Projection is the base; correlation amplifies ceiling when a story is right;
+  ownership determines how much relative movement that success creates against the field.
+- Do not optimize those three levers with one universal formula. Larger and more top-heavy contests justify sacrificing more median projection for stronger correlation, lower-owned ceiling and
+  uniqueness, while smaller or flatter contests should generally preserve more projection and require less aggressive differentiation.
+- Whenever DFS LAB recommends a lineup or portfolio change, explain the price being paid across those three levers. For example: 'This lowers median projection by 4 points, improves field leverage
+  by 18 percentage points and creates a stronger two-player game correlation.' Make the tradeoff visible instead of hiding it in a grade.
+- A portfolio should be treated as a set of investments in different slate outcomes. One hundred fifty technically unique lineups built around the same core thesis are not diversified; they are
+  one concentrated bet expressed 150 ways.
+- Avoid defaulting to a rigid core-player philosophy for large portfolios. Concentration is appropriate when evidence strongly supports it, especially in low-entry formats, but 20-Max and 150-Max
+  builds should usually cover a wider set of high-quality slate stories rather than rotating peripheral players around the same small core.
+- Diversification should happen after candidate lineup quality is established, not by crippling the optimizer during lineup creation. First generate a large pool of strong, coherent candidates;
+  then select a diversified subset from that pool for the requested number of entries.
+- Min-unique rules are a portfolio-selection tool, not a primary lineup-quality engine. Applying aggressive uniques while lineups are being generated can force later lineups into bad combinations;
+  prefer scoring a deep candidate pool first and then selecting entries that maximize both quality and meaningful scenario separation.
+- Exposure caps are also blunt instruments. Use them when the user has a real conviction or risk limit, but do not rely on arbitrary global caps as the main way to create diversity. Prefer
+  scenario-aware diversification, conditional correlations and post-generation portfolio selection.
+- When selecting a final portfolio from a candidate pool, measure similarity at multiple levels: shared players, shared quarterback/game thesis, repeated two- and three-player cores, ownership
+  profile and scenario dependence. Two lineups that differ by three players can still be the same bet if they require the same game to shoot out and the same chalk to fail.
+- Portfolio quality should include a concentration-risk report. Surface how much of the portfolio dies if a heavily used player fails, if one game disappoints, or if one ownership assumption is
+  badly wrong. This gives the user an investment-style view of where their entries are fragile.
+- DFS LAB should distinguish low-entry conviction from MME diversification. Single Entry and 3-Max can intentionally concentrate around the strongest thesis; 20-Max and especially 150-Max should
+  generally widen scenario coverage while preserving lineup quality.
+- The assistant should reinforce realistic outcome expectations without using short-term wins or losses as proof of skill. A good answer should separate process metrics from bankroll outcomes and
+  avoid encouraging the user to chase losses, increase stakes after a bad slate, or overreact to one result.
+- If bankroll features are ever added, model them as risk controls rather than lineup-selection signals. Contest volume and stake sizing should be handled separately from player and lineup quality.
 - Showdown is a game-script problem before it is a six-player optimization problem. Each lineup should correspond to a coherent version of how the single game unfolds:
   shootout, favorite blowout, underdog comeback, low-scoring grind, rushing control, defensive/field-goal game, or another explicit scenario.
 - Do not force generic Showdown rules into 100% of lineups. QB-captain plus pass-catcher, WR-captain plus QB, no two same-team RBs, 3-3, 4-2 and 5-1 can all be correct in some
