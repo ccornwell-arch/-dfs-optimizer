@@ -1277,6 +1277,39 @@ DFS PRO PLAYBOOK:
   and current role/matchup support; avoid double-counting trends already reflected in projections or market inputs.
 - Contest simulation output is only as reliable as its projections, ownership assumptions, field-generation model and correlation logic. Treat simulated EV as one
   diagnostic rather than truth, and compare it with simpler lineup-level measures such as projection, ceiling, ownership concentration, correlation and duplication risk.
+- Showdown is a game-script problem before it is a six-player optimization problem. Each lineup should correspond to a coherent version of how the single game unfolds:
+  shootout, favorite blowout, underdog comeback, low-scoring grind, rushing control, defensive/field-goal game, or another explicit scenario.
+- Do not force generic Showdown rules into 100% of lineups. QB-captain plus pass-catcher, WR-captain plus QB, no two same-team RBs, 3-3, 4-2 and 5-1 can all be correct in some
+  game states and wrong in others. Let the game script determine when a construction belongs rather than assuming a universal rule.
+- In Showdown, the objective is not merely to find a high-projection lineup. The lineup must have a plausible path to being the actual optimal six for a specific game outcome.
+- Captain decisions should be evaluated by conditional game stories. Ask what has to happen for this player to be the optimal captain, which teammates benefit from that same story,
+  and which expensive teammates may fail to justify salary in that branch.
+- Showdown portfolio construction should diversify across independent game scripts rather than mechanically changing one or two players. Twenty lineups that all require the same
+  shootout path are not meaningfully diversified even if every lineup is technically unique.
+- Duplication is materially more important in Showdown than on large Classic slates because the player pool is tiny and top prizes can be split many ways. Evaluate expected payout
+  using both the chance a lineup is optimal and the likelihood that many opponents reach the same construction.
+- Being correct about the game but duplicated hundreds of times can still be a poor tournament result. Salary left, unusual captain choices and less common player combinations can
+  matter when they reduce duplication without destroying the lineup's football story.
+- Do not chase uniqueness for its own sake. A unique lineup still needs a realistic route to first place. Prefer differentiation that is caused by a coherent alternative game script,
+  role assumption, touchdown allocation or captain thesis.
+- When changing a captain exposure or fading a popular captain, rebuild the rest of the portfolio around that opinion instead of swapping the captain into otherwise unrelated lineups.
+  The surrounding five players should be the best complements to the new captain thesis.
+- User takes should act like head-coach directions, not manual chores. If the user says 'less Puka captain, more Adams captain' or 'I think this is a defensive grind,' DFS LAB should
+  translate that into the correlated lineup branches, exposure shifts and construction changes that logically follow.
+- When the user specifies two, three or four players they want together in Showdown, treat them as the beginning of a game story and autocomplete the remaining spots with the strongest
+  correlated complements rather than merely filling salary by projection.
+- Showdown feedback should quantify the cost of a user's take. Compare the adjusted portfolio with the baseline in projection, ceiling, leverage, duplication risk, construction mix and
+  scenario coverage so the user can decide whether the conviction is worth the tradeoff.
+- Evaluate 3-3, 4-2 and 5-1 as outcomes, not quotas. A blowout can naturally create 5-1; a competitive shootout may favor 3-3; a controlled favorite win may create 4-2. Construction mix
+  should emerge from the scenario distribution and user beliefs rather than fixed target percentages whenever the simulator has enough evidence.
+- Kicker and DST inclusion should also be scenario-driven. Low totals, stalled drives, sacks, turnovers and field-position games increase their optimal paths; aggressive shootouts and
+  concentrated touchdown environments reduce them.
+- A QB does not always need his highest-priced receiver in Showdown. Touchdowns can distribute across secondary receivers, tight ends or rushing scores, so conditional simulations should
+  preserve those lower-frequency but valid branches instead of deleting them with hard pairing rules.
+- Process evaluation must be separated from short-term bankroll results. Showdown wins are rare and top-heavy; review whether lineups had strong simulated/estimated optimality, payout-adjusted
+  value, duplication profile and scenario coverage even when the actual game did not cooperate.
+- Post-slate analysis is strongest when actual contest ownership and duplication are available. Compare projected field behavior with the real field, identify where DFS LAB misestimated
+  ownership or duplication, and use that error to recalibrate future Showdown builds rather than judging only by finishing position.
 - When a player's role is uncertain, favor ceiling-aware scenario analysis over blindly trusting a single median projection.
   Ask what happens if the player earns 70-80% of the work rather than the market's assumed 50-60%, and compare that outcome
   with ownership.
