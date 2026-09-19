@@ -1222,6 +1222,31 @@ DFS PRO PLAYBOOK:
   materially exceeding expectations. Do not reject 5-6 player game environments solely because they are unconventional.
 - Embrace uncertainty when the payoff is asymmetric. Week 1 roles, rookies and changing depth charts can create low-owned
   players whose true workload is wider than the projection assumes; uncertainty itself can create tournament leverage.
+- Early-season slates deserve wider scenario ranges. In Weeks 1-3, preseason usage, new coordinators, rookie roles and
+  incomplete depth-chart information make median projections less trustworthy than later in the year; increase scenario breadth rather
+  than pretending the inputs are equally certain.
+- Coaching continuity is a real contextual input. Offenses returning the same quarterback, line, skill core and system can deserve a
+  narrower uncertainty band than teams installing new schemes, changing play callers or replacing multiple starters.
+- New coaching staffs can create both risk and leverage. When the market is anchored to last year's usage, test alternate target shares,
+  pace, pass rate and red-zone roles that fit the new coach's historical tendencies instead of assuming last year's distribution persists.
+- Offensive-line quality and specific line mismatches should influence DFS ceilings. Strong pass rush versus a weak or injured offensive
+  line can lower a quarterback stack's clean-pocket ceiling while increasing opposing DST upside, sack/turnover paths and short-field scoring.
+- Treat major offensive-line injuries as team-level changes, not just small player projection downgrades. They can alter pace, route depth,
+  pressure rate, rushing efficiency and play-calling, changing the viability of an entire game stack.
+- When injuries or trades remove receiving options, explicitly reallocate target concentration before merely boosting every remaining player.
+  Fewer available weapons can make an offense more DFS-friendly if volume funnels toward one or two players.
+- Distinguish uncertainty about talent from uncertainty about opportunity. A player can be hard to evaluate as an NFL talent but still be
+  attractive in DFS if his role, salary and concentration are favorable; conversely, a talented player in a diffuse role may remain a poor tournament bet.
+- Do not import betting heuristics or historical trend slogans directly into DFS. Home/road, division, prime-time and similar labels matter only
+  through mechanisms already affecting projection, ownership, pace, weather, matchup or role; avoid double-counting narratives already embedded in inputs.
+- Market lines are useful context, not standalone DFS answers. Use spread, total and line movement to shape likely game scripts, but require a
+  football explanation for how that script creates fantasy production and which players capture it.
+- Separate real-football team strength from DFS usefulness. A team can be a strong favorite yet produce a poor tournament stack if scoring is
+  diffuse, pace is slow or the opponent cannot push; an underdog can still be DFS-viable when concentrated volume and pass-heavy comeback paths create ceiling.
+- When a team is expected to trail, model whether the quarterback and receivers benefit from increased dropbacks rather than automatically
+  downgrading the entire offense. Conversely, large favorites may increase RB and DST correlation while reducing full-game stack appeal.
+- Avoid overconfidence in tiny samples from preseason or the prior season. Use them as evidence about role and scheme, but weight current
+  depth chart, coaching changes, injuries and market expectations more heavily than one or two recent games.
 - When a player's role is uncertain, favor ceiling-aware scenario analysis over blindly trusting a single median projection.
   Ask what happens if the player earns 70-80% of the work rather than the market's assumed 50-60%, and compare that outcome
   with ownership.
