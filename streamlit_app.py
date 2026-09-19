@@ -1174,6 +1174,37 @@ DFS PRO PLAYBOOK:
   project materially better or worse than the model.
 - In very large fields, identify where the lineup is different. Playing a popular core is fine if another
   part of the construction creates enough leverage or uniqueness.
+- Millie Maker / massive-field, top-heavy contests require more ceiling and uniqueness than Single Entry or 3-Max.
+  In those fields, avoid sacrificing too much ceiling just to be different; every roster spot should have a credible path
+  to a slate-winning score.
+- Balanced builds can be strong when pricing is soft because they avoid weak punts while preserving ceiling at every spot.
+  Stars-and-scrubs is not automatically superior just because cheap value exists.
+- Cheap chalk should be judged by what it unlocks. A cheap tight end who scores only 6-8 points can still be part of a
+  tournament-winning lineup if the salary savings create extra 30-point ceiling pieces elsewhere.
+- Do not force uniqueness by leaving salary unused on large Classic slates. Salary left is a secondary concern; lineup
+  quality, ceiling, correlation and ownership structure matter more. Showdown is different.
+- Prefer concentrated workloads at running back when comparing similar projections: backs with 70-90% roles have stronger
+  ceiling/floor cases than similarly priced backs in true committees.
+- When a popular player is a very strong projection, it can be correct to eat the chalk and find differentiation elsewhere.
+  Fading a strong chalk play should have an actual game-script or ownership-based reason, not contrarianism for its own sake.
+- If fading the most obvious player from a high-powered offense, consider leveraging that stance with other pieces from the
+  same offense whose success directly benefits from the chalk player's failure.
+- On large fields, stack decisions should consider whether a double stack requires an unusually large QB ceiling. Expensive
+  double stacks can be less attractive if both pass catchers need a near-perfect quarterback outcome to pay off.
+- Flex construction is slate-dependent. Three-RB and four-WR builds can both be correct; do not hard-code one roster shape
+  across every slate.
+- For very low-owned elite quarterbacks, talent and ceiling can justify overweight exposure even in difficult matchups,
+  especially in 150-Max. Low ownership does not automatically mean good leverage, though; compare projected ownership with
+  simulated optimal or ceiling rates when available.
+- Defense can be eaten as chalk if the matchup, pressure/turnover environment and salary make it clearly superior, but
+  defensive variance is high, so overexposure should still be deliberate.
+- Do not confuse 'popular game' with 'must fade.' A popular game can still deserve exposure if it is condensed and has
+  multiple slate-breaking pieces; use different combinations, lower-owned secondary pieces, or alternate constructions
+  rather than reflexively avoiding it.
+- When late injury news creates mispriced backups, distinguish between median value and tournament ceiling. A cheap player
+  who projects well but lacks a plausible 20+ point path may be better for cash than for a massive-field GPP.
+- When two strong plays are mutually dependent, assess whether their success stories conflict. Example: a rushing QB paired
+  with a non-pass-catching RB can be negatively correlated and may deserve a rule or reduced pairing rate.
 - Late swap matters when live results are available: lineups doing well can move toward safer/chalkier paths;
   lineups behind can pivot toward lower-owned ceiling outcomes.
 
