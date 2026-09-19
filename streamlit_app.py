@@ -1403,6 +1403,30 @@ DFS PRO PLAYBOOK:
   Game theory matters most where the field is actually concentrated.
 - Defensive selection should emphasize opponent pressure rate, sack susceptibility, turnover risk, offensive-line weakness and likely negative game script.
   Repeatedly targeting mistake-prone quarterbacks can be rational, but do not convert a small sample into an unconditional rule.
+- Leverage is not simply low ownership. Start by identifying the field's most common roster shell: which positions absorb salary, which chalk pieces are commonly paired,
+  and which roster constructions repeat. Attack the shell when a different but football-coherent construction has comparable ceiling.
+- Direct leverage is strongest when one player's success naturally reduces a popular player's ceiling. Examples: a WR/TE capturing touchdowns instead of a chalk RB,
+  a passing stack succeeding instead of a popular same-team runner, or an alternative skill player inheriting concentrated targets. Prefer this to unrelated low-owned darts.
+- Do not judge a fade only by whether the pivot scores well. Ask whether the pivot can beat the chalk even when the chalk has a strong-but-not-perfect game.
+  Expensive elite chalk may remain difficult to fade if a 28-30 point outcome still beats most alternatives.
+- Treat combinatorial ownership as more important than isolated player ownership. A moderately popular QB and moderately popular WR can still form an uncommon double stack;
+  conversely several individually acceptable chalk pieces can create a very duplicated lineup shell when combined.
+- Roster-construction leverage can be cleaner than player-level leverage. If the field is concentrated on RB or TE in FLEX, a high-ceiling WR FLEX can be a strong tournament
+  construction when the slate supports it. Do not force the opposite of the field; require ceiling and a plausible football story.
+- Tight-end leverage is especially powerful when the field is overconfident in cheap median outcomes. A chalk TE scoring 8-12 points may not hurt directly, but a lower-owned
+  TE reaching 20-25 can create real positional separation. Compare ceiling, price savings and what each construction unlocks.
+- Soft early-season pricing changes how aggressively correlation should be forced. Preserve strong stacks, but do not force a weak bring-back or secondary player when a
+  materially better one-off is available. The question is whether the omitted opponent piece is necessary for the game script to keep producing.
+- Double stacks are useful because they increase the chance of capturing the pass catcher who posts the difference-making score; both receivers do not need to hit their ceiling.
+  This can be particularly valuable in smaller fields where a 10-15 point secondary piece can survive beside one slate-breaking teammate.
+- For large-field MME, diversify stack structures rather than applying one correlation template to every lineup. It can be correct to remain overweight on double-stack/bring-back
+  constructions while allowing a minority of strong lineups to use skinny stacks or no bring-back when the specific scenario supports it.
+- Week 2 leverage should explicitly test the field's Week 1 overconfidence. Carry forward role evidence quickly, but be skeptical that touchdowns, efficiency, team scoring,
+  defensive performance or last week's winning roster construction will repeat unchanged.
+- When evaluating FLEX, compare median projection with ceiling and field construction. Running backs may lead median projections while wide receivers close the gap substantially
+  in ceiling; tournament decisions should reward the latter when the field overweights median outcomes.
+- Build leverage lineups around a sentence: what popular assumption is wrong, what succeeds instead, and how does this lineup get paid if that scenario occurs?
+  A contrarian lineup without that causal story is not automatically a good tournament lineup.
 - Historical split trends such as home tight-end performance may be used as a weak prior only. Do not hard-code them without a football mechanism, sufficient sample,
   and current role/matchup support; avoid double-counting trends already reflected in projections or market inputs.
 - Contest simulation output is only as reliable as its projections, ownership assumptions, field-generation model and correlation logic. Treat simulated EV as one
