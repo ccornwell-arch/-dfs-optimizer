@@ -1173,7 +1173,7 @@ def calculate_exposure_table(df, result, strategy_map):
             "Name": name,
             "Pos": p["Position"],
             "Team": p["Team"],
-            "Opp": p.get("Opponent",""),
+            "Opponent": p.get("Opponent",""),
             "Salary": int(p["Salary"]),
             "Proj": round(float(p["My Proj"]), 2),
             "Proj Own": round(float(p["My Own"]), 1),
@@ -2908,17 +2908,17 @@ if mode=="Classic":
             if sort_by=="Name":
                 _ascending=(sort_dir=="Low → High")
             view=view.sort_values(_sort_col,ascending=_ascending,kind="mergesort").reset_index(drop=True)
-            ed=pd.DataFrame({"ID":view["ID"].astype(str),"Name":view["Name"],"Pos":view["Position"],"Team":view["Team"],"Opp":view["Opponent"],"Salary":view["Salary"],"Base Proj":view["Base Proj"].round(2),"Proj":view["My Proj"].round(2),"Own":pd.to_numeric(view["My Own"],errors="coerce").fillna(0.0).round(1),"Lock":False,"Exclude":False,"Priority":"Neutral","Min Exposure":0,"Max Exposure":100})
+            ed=pd.DataFrame({"ID":view["ID"].astype(str),"Name":view["Name"],"Pos":view["Position"],"Team":view["Team"],"Opponent":view["Opponent"],"Salary":view["Salary"],"Base Proj":view["Base Proj"].round(2),"Proj":view["My Proj"].round(2),"Own":pd.to_numeric(view["My Own"],errors="coerce").fillna(0.0).round(1),"Lock":False,"Exclude":False,"Priority":"Neutral","Min Exposure":0,"Max Exposure":100})
             for x,r in ed.iterrows():
                 e=st.session_state["strategy_master"].get(str(r["ID"]),{})
                 for cc,k,dv in [("Lock","Lock",False),("Exclude","Exclude",False),("Priority","Priority","Neutral"),("Min Exposure","Min Exposure",0),("Max Exposure","Max Exposure",100)]: ed.at[x,cc]=e.get(k,dv)
             with st.form("classic_player_editor_form",clear_on_submit=False):
                 edited=st.data_editor(ed,hide_index=True,use_container_width=True,height=620,
-                    disabled=["ID","Name","Pos","Team","Opp","Salary","Base Proj","Own"],
-                    column_order=["Name","Pos","Team","Opp","Salary","Base Proj","Proj","Own","Lock","Exclude","Priority","Min Exposure","Max Exposure"],
+                    disabled=["ID","Name","Pos","Team","Opponent","Salary","Base Proj","Own"],
+                    column_order=["Name","Pos","Team","Opponent","Salary","Base Proj","Proj","Own","Lock","Exclude","Priority","Min Exposure","Max Exposure"],
                     column_config={
                         "Name":st.column_config.TextColumn("Player",width=190,pinned=True),"Pos":st.column_config.TextColumn("Pos",width=60),
-                        "Team":st.column_config.TextColumn("Team",width=70),"Opp":st.column_config.TextColumn("Opp",width=70),
+                        "Team":st.column_config.TextColumn("Team",width=70),"Opponent":st.column_config.TextColumn("Opponent",width=82),
                         "Salary":st.column_config.NumberColumn("Salary",width=85,format="$%d"),
                         "Base Proj":st.column_config.NumberColumn("Base Proj",width=85,format="%.2f",help="Original uploaded/model projection."),
                         "Proj":st.column_config.NumberColumn("My Proj",width=85,format="%.2f",min_value=0.0,step=0.25,help="Editable. DFS LAB uses this value everywhere after you apply changes."),
@@ -3002,12 +3002,12 @@ if mode=="Classic":
                         use_container_width=True,
                         height=620,
                         disabled=["ID","Name","Pos","Team","Salary","Proj","Proj Own","Actual Exp %","Lineups"],
-                        column_order=["Name","Pos","Team","Opp","Salary","Proj","Proj Own","Actual Exp %","Lineups","Min Target %","Max Target %"],
+                        column_order=["Name","Pos","Team","Opponent","Salary","Proj","Proj Own","Actual Exp %","Lineups","Min Target %","Max Target %"],
                         column_config={
                             "Name":st.column_config.TextColumn("Player",width=190,pinned=True),
                             "Pos":st.column_config.TextColumn("Pos",width=60),
                             "Team":st.column_config.TextColumn("Team",width=70),
-                            "Opp":st.column_config.TextColumn("Opp",width=70),
+                            "Opponent":st.column_config.TextColumn("Opponent",width=82),
                             "Salary":st.column_config.NumberColumn("Salary",format="$%d",width=85),
                             "Proj":st.column_config.NumberColumn("Proj",format="%.2f",width=75),
                             "Proj Own":st.column_config.NumberColumn("Proj Own %",format="%.1f",width=85),
