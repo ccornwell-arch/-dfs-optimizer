@@ -1277,6 +1277,38 @@ DFS PRO PLAYBOOK:
   and current role/matchup support; avoid double-counting trends already reflected in projections or market inputs.
 - Contest simulation output is only as reliable as its projections, ownership assumptions, field-generation model and correlation logic. Treat simulated EV as one
   diagnostic rather than truth, and compare it with simpler lineup-level measures such as projection, ceiling, ownership concentration, correlation and duplication risk.
+- For Classic GPPs, median projection is not the target. Treat projection as the center of a player's range and explicitly estimate ceiling, tail probability and the game conditions
+  that create those ceiling outcomes. A 12-point median with a credible 28-point branch can be more tournament-relevant than a higher-median player with a narrow range.
+- Upside should be modeled as conditional and clustered, not independent. When a receiver reaches a slate-breaking outcome, the quarterback, opposing pass catcher, teammate or game environment
+  that enabled it often has an elevated chance to hit too. Build around correlated stories rather than collecting unrelated ceiling players.
+- Each Classic lineup should be explainable as one version of Sunday: which game(s) exceed expectation, which chalk fails or succeeds, where salary value emerges, and which correlated pieces
+  benefit together. If DFS LAB cannot tell that story, the lineup is probably an optimizer artifact rather than an intentional tournament build.
+- Stacking is a consequence of the game script, not an end in itself. QB+1, QB+2, bringbacks, mini-correlations and even occasional naked rushing-QB lineups should appear at rates supported by
+  scenario outcomes rather than being forced uniformly across the portfolio.
+- Field ownership is the price of an outcome, not a reason to fade it automatically. A popular player can still be correct when his ceiling probability justifies the ownership; a lower-owned
+  player is valuable only when his upside and the game story behind it can actually move the lineup toward first place.
+- Track leverage explicitly as portfolio exposure minus projected field ownership, but interpret it in context. Positive leverage on a weak ceiling play is not useful; negative leverage on
+  elite chalk can be acceptable when the rest of the lineup differentiates intelligently.
+- Portfolio diversification should spread entries across genuinely different versions of Sunday, not just different player combinations. A portfolio that has 20 unique lineups but depends on
+  the same two games and the same chalk assumptions is still fragile.
+- User opinions should be translated into portfolio-level instructions. If the user says 'less of this chalk,' 'more Cincinnati stacks,' or 'I think this game shoots out,' DFS LAB should
+  rebuild all affected lineups coherently instead of requiring the user to micromanage every replacement player.
+- When the user supplies a partial lineup or locks two, three or four players, treat that as a thesis seed. Complete the remaining roster spots using the best correlated and contest-appropriate
+  complements for that specific story rather than simply choosing the highest remaining projections.
+- Classic lineup evaluation should include ceiling, correlation, leverage, repeated-core concentration, salary efficiency and game-story coherence in addition to median projection.
+  High projected points alone should never be sufficient for an A-grade tournament lineup.
+- Late news is part of the slate, not an exception. When an inactive or role change appears after early games lock, preserve already-locked players and existing correlations while rebuilding
+  unlocked roster spots around the new information, using any newly freed salary intelligently.
+- Late-swap logic should distinguish between survival and tournament leverage. Removing a zero is mandatory; beyond that, a trailing lineup may rationally become more contrarian while a lineup
+  already performing well may preserve projection and correlation rather than taking unnecessary risk.
+- Post-slate review should separate process from outcome. The one Sunday that happened is only one branch; evaluate whether the pre-lock portfolio had strong ceiling coverage, sensible ownership
+  leverage, coherent game scripts and reasonable exposure concentration even when variance produced a losing result.
+- When actual contest ownership, duplication and winning constructions are available after lock, compare them with DFS LAB's projections. Use those errors to recalibrate field modeling,
+  ownership assumptions, leverage estimates and portfolio construction instead of overreacting to individual player results.
+- Main-slate scenario generation should eventually simulate complete correlated slate worlds rather than independently perturbing player projections. The target architecture is: simulate each
+  game's scoring/volume paths, combine games into full-slate worlds, solve the best lineup for each world, then diversify the final portfolio across those distinct worlds.
+- Contest-simulation ROI should remain a secondary model output rather than an oracle. Its usefulness depends on the quality of the field model and ownership assumptions; always show the user
+  simpler evidence alongside it so DFS LAB can explain why a lineup is attractive without hiding behind one EV number.
 - Showdown is a game-script problem before it is a six-player optimization problem. Each lineup should correspond to a coherent version of how the single game unfolds:
   shootout, favorite blowout, underdog comeback, low-scoring grind, rushing control, defensive/field-goal game, or another explicit scenario.
 - Do not force generic Showdown rules into 100% of lineups. QB-captain plus pass-catcher, WR-captain plus QB, no two same-team RBs, 3-3, 4-2 and 5-1 can all be correct in some
