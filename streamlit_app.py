@@ -3003,8 +3003,12 @@ def solve_showdown_one(
                 coeff[vidx(cpt,0)] = coeff.get(vidx(cpt,0),0)+(max_flex-float(n))
                 _add_constraint(rows,lows,highs,coeff,-np.inf,max_flex)
 
-        # WR/TE captain -> pair same-team QB in chosen percentage of solves.
-        if r["is_passcatcher"] and rng.random() < wrte_cpt_qb_pair_pct/100.0:
+        # WR/TE captain -> same-team QB.
+        # Reliability rule: "Sometimes" and "Usually" are portfolio preferences, NOT hard
+        # MILP constraints. Only "Always" may make a lineup infeasible. Random hard rules
+        # were causing entire Showdown builds to fail depending on which captain branches
+        # happened to be sampled.
+        if r["is_passcatcher"] and float(wrte_cpt_qb_pair_pct) >= 99.5:
             qbs=df.index[df["ActiveForBuild"] & df["Team"].eq(r["Team"]) & df["is_QB"]].tolist()
             if qbs:
                 coeff={}
@@ -3012,9 +3016,13 @@ def solve_showdown_one(
                     for j in range(1,s): coeff[vidx(q,j)] = coeff.get(vidx(q,j),0)+1
                 coeff[vidx(cpt,0)] = coeff.get(vidx(cpt,0),0)-1
                 _add_constraint(rows,lows,highs,coeff,0,np.inf)
+            else:
+                # If no active same-team QB exists, this player simply cannot be Captain
+                # under an explicit Always rule.
+                _add_constraint(rows,lows,highs,{vidx(cpt,0):1.0},0,0)
 
-        # RB captain -> same team DST or K in chosen percentage of solves.
-        if r["is_RB"] and rng.random() < rb_cpt_dst_k_pct/100.0:
+        # RB captain -> same-team DST/K. As above, only "Always" is a hard constraint.
+        if r["is_RB"] and float(rb_cpt_dst_k_pct) >= 99.5:
             partners=df.index[df["ActiveForBuild"] & df["Team"].eq(r["Team"]) & (df["is_DST"]|df["is_K"])].tolist()
             if partners:
                 coeff={}
@@ -3022,6 +3030,8 @@ def solve_showdown_one(
                     for j in range(1,s): coeff[vidx(p,j)] = coeff.get(vidx(p,j),0)+1
                 coeff[vidx(cpt,0)] = coeff.get(vidx(cpt,0),0)-1
                 _add_constraint(rows,lows,highs,coeff,0,np.inf)
+            else:
+                _add_constraint(rows,lows,highs,{vidx(cpt,0):1.0},0,0)
 
     # Portfolio uniqueness relative to previously accepted lineups.
     if min_unique > 0:
@@ -4316,13 +4326,15 @@ else:
                 qb_cpt_pc_rule = st.selectbox(
                     "When QB is CPT · pass catchers",
                     ["No rule", "Minimum 1", "Minimum 2", "No more than 1", "No more than 2"],
-                    index=1,
-                    help="Minimum means at least this many same-team WR/TE pass catchers. No more than sets a maximum."
+                    index=0,
+                    help="This is a HARD Captain rule. Minimum means at least this many same-team WR/TE pass catchers when a QB is Captain. Use No rule unless you intentionally want to force it."
                 )
                 cpt_qb_pc = {"No rule":0, "Minimum 1":1, "Minimum 2":2, "No more than 1":-1, "No more than 2":-2}[qb_cpt_pc_rule]
             pair_map={"Never":0,"Sometimes":35,"Usually":80,"Always":100}
-            with b: wrte_pair=st.selectbox("When WR/TE is CPT · pair QB",list(pair_map),index=2)
-            with c: rb_pair=st.selectbox("When RB is CPT · pair DST/K",list(pair_map),index=1)
+            with b: wrte_pair=st.selectbox("When WR/TE is CPT · pair QB",list(pair_map),index=2,
+                help="Sometimes/Usually are SOFT portfolio preferences and will not block a legal build. Always is a hard rule.")
+            with c: rb_pair=st.selectbox("When RB is CPT · pair DST/K",list(pair_map),index=1,
+                help="Sometimes/Usually are SOFT portfolio preferences and will not block a legal build. Always is a hard rule.")
             wrte_qb=pair_map[wrte_pair]; rb_ctrl=pair_map[rb_pair]
             d,e=st.columns(2)
             with d:max_k=st.selectbox("Max kickers",[0,1,2],index=2)
@@ -4661,7 +4673,10 @@ else:
 
                 tests=[]
                 tests.append(("Relationship rules", _diag_build(_rels=[])))
-                tests.append(("Captain-pairing rules", _diag_build(_qb=0,_wrte=0,_rb=0)))
+                tests.append(("QB-Captain pass-catcher rule", _diag_build(_qb=0)))
+                tests.append(("WR/TE-Captain QB rule", _diag_build(_wrte=0)))
+                tests.append(("RB-Captain DST/K rule", _diag_build(_rb=0)))
+                tests.append(("All Captain-pairing rules", _diag_build(_qb=0,_wrte=0,_rb=0)))
                 tests.append(("Allowed team builds", _diag_build(_weights={"3-3":1.0,"4-2":1.0,"5-1":1.0})))
                 tests.append((f"Minimum salary (${int(min_salary):,})", _diag_build(_min_salary=0)))
                 tests.append(("Uniqueness requirement", _diag_build(_unique=0)))
