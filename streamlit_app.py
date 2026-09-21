@@ -3067,6 +3067,18 @@ def solve_showdown_one(
             options={"time_limit": 8.0, "mip_rel_gap": 0.05, "presolve": True},
         )
     if result.x is None:
+        # Last-resort FEASIBILITY solve using the exact same bounds and constraints.
+        # This intentionally drops the optimization objective but changes NO user rule.
+        # A zero-objective MILP is much easier for HiGHS to satisfy and prevents a hard
+        # but legal Showdown branch from being mislabeled as "no legal lineup."
+        result=milp(
+            c=np.zeros(total_vars,dtype=float),
+            integrality=integrality,
+            bounds=Bounds(lb,ub),
+            constraints=LinearConstraint(A.tocsr(),np.array(lows),np.array(highs)),
+            options={"time_limit": 6.0, "mip_rel_gap": 0.10, "presolve": True},
+        )
+    if result.x is None:
         return None
 
     # HiGHS may hit the short time limit after already finding a valid incumbent.
@@ -4715,7 +4727,7 @@ else:
 
                 blockers=[name for name,works in tests if works]
                 if blockers:
-                    st.warning("**Feasibility diagnostic:** A legal lineup appears as soon as DFS Lab relaxes: **" + ", ".join(blockers) + "**. Your settings were not changed.")
+                    st.warning("**Feasibility diagnostic:** A test build succeeded when DFS LAB relaxed: **" + ", ".join(blockers) + "**. This is a clue, not proof that the setting itself is invalid. Your settings were not changed.")
                 else:
                     clean_strategy={}
                     for _,rr in build_df.iterrows():
