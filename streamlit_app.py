@@ -3054,6 +3054,18 @@ def solve_showdown_one(
         constraints=LinearConstraint(A.tocsr(),np.array(lows),np.array(highs)),
         options={"time_limit": 2.5, "mip_rel_gap": 0.02, "presolve": True},
     )
+    # A short Showdown solve can time out without an incumbent and look identical to
+    # "infeasible" to the caller. Captain-pairing constraints add enough rows that this
+    # can happen on otherwise legal slates. Retry the SAME rules with a longer window
+    # before declaring the branch impossible; no user setting is relaxed here.
+    if result.x is None:
+        result=milp(
+            c=c,
+            integrality=integrality,
+            bounds=Bounds(lb,ub),
+            constraints=LinearConstraint(A.tocsr(),np.array(lows),np.array(highs)),
+            options={"time_limit": 8.0, "mip_rel_gap": 0.05, "presolve": True},
+        )
     if result.x is None:
         return None
 
@@ -4655,7 +4667,7 @@ else:
             if result is not None and not result.empty and len(result) < int(lineup_count):
                 st.warning(f"Built {len(result)} of {int(lineup_count)} requested lineups. DFS LAB stopped after the optimizer stalled on the current hard rules instead of hanging indefinitely. Loosen the rule called out below or build the smaller portfolio.")
             if result is None or result.empty:
-                st.error("No legal lineup found with the current rules. DFS Lab is checking the exact constraint that blocks the build…")
+                st.error("DFS LAB could not produce a lineup with the current rules. It is checking whether this is a true rule conflict or a solver branch that needs more time…")
 
                 def _diag_build(_strategy=strategy_map, _min_salary=min_salary, _weights=build_weights,
                                 _qb=eff_qb_pc, _wrte=eff_wrte_qb, _rb=eff_rb_ctrl,
@@ -4663,7 +4675,7 @@ else:
                                 _max_k=max_k, _max_dst=max_dst):
                     try:
                         x=generate_showdown_lineups(
-                            build_df,field_size,payout_style,1,2,_min_salary,max_salary,_weights,
+                            build_df,field_size,payout_style,1,12,_min_salary,max_salary,_weights,
                             effective_script,effective_team,_strategy,entry_format,
                             _qb,_wrte,_rb,_max_k,_max_dst,_unique,seed+991,
                             relationship_rules=_rels,world_influence=intensity)
