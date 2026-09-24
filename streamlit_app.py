@@ -5239,6 +5239,7 @@ else:
                     # LINEUPS FIRST: the primary output must be visible before the analysis.
                     st.markdown("### 🏈 Your lineups")
                     st.caption("Built successfully. Start with the actual lineups; portfolio analysis and Game Worlds are below.")
+                    import html as _html
                     _top_rows=list(result.head(3).iterrows())
                     _top_cols=st.columns(3)
                     _headshot_map={}
@@ -5246,7 +5247,6 @@ else:
                         _headshot_map={str(r["Name"]):str(r.get("Headshot URL","")) for _,r in build_df.iterrows()
                                        if str(r.get("Headshot URL","")).lower() not in ["","nan","none"]}
                     def _avatar_html(_name,_captain=False):
-                        import html as _html
                         _safe_name=_html.escape(str(_name))
                         _url=_html.escape(_headshot_map.get(str(_name),""))
                         _cls="player-avatar captain-avatar" if _captain else "player-avatar flex-avatar"
