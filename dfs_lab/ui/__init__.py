@@ -22,5 +22,8 @@ def render_app():
         st.session_state.pop("lineup_lab_pick", None)
         st.markdown(styles.GLOBAL_CSS, unsafe_allow_html=True)
         st.markdown(styles.SIDEBAR_V26_CSS, unsafe_allow_html=True)
-        settings = setup.render_setup()
-        main.render_main(settings)
+    # NOTE: everything below must run on EVERY script run, not just the first.
+    # It was accidentally indented inside the `if` above during the refactor,
+    # which blanked the page on any widget-triggered rerun.
+    settings = setup.render_setup()
+    main.render_main(settings)
