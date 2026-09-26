@@ -552,9 +552,12 @@ html body .intel-card{background:linear-gradient(135deg,#0c1d2d,#10263a)!importa
 # moved verbatim from streamlit_app.py line 4207
 MAIN_TABS_CSS = """
         <style>
+        /* NOTE: sticky positioning for the primary tab bar lives ONLY in the
+           authoritative rule in RCC_DARK_CSS (top:0, solid background, no
+           backdrop-filter — the translucent attempt broke sticky on iPad
+           Safari). This legacy block keeps visual styling only. */
         [data-testid="stTabs"] [data-baseweb="tab-list"]{
-            position:sticky!important;top:3.55rem!important;z-index:950!important;
-            background:rgba(229,234,240,.96)!important;backdrop-filter:blur(16px)!important;
+            background:rgba(229,234,240,.96)!important;
             border:1px solid #b9c5d3!important;border-radius:14px!important;padding:6px!important;
             box-shadow:0 8px 22px rgba(37,52,76,.12)!important;margin-bottom:12px!important;
         }
@@ -576,7 +579,6 @@ MAIN_TABS_CSS = """
         .intel-big{font-size:1.18rem;font-weight:850;color:#172033;margin-top:4px}
         .intel-copy{font-size:.9rem;color:#59677a;line-height:1.45;margin-top:4px}
         [data-testid="stTabs"] [role="tablist"]{
-            position:sticky!important;top:.35rem!important;z-index:999!important;
             background:#e5ebf3!important;border:1px solid #aebccc!important;
             border-radius:14px!important;padding:6px 8px!important;
             box-shadow:0 8px 22px rgba(37,52,76,.16)!important;
@@ -609,9 +611,9 @@ MAIN_TABS_CSS = """
 # moved verbatim from streamlit_app.py line 4750
 SHOWDOWN_SHELL_CSS = """
         <style>
-        /* Keep Showdown on the same command-tab shell as Classic. */
+        /* Keep Showdown on the same command-tab shell as Classic.
+           Sticky positioning lives ONLY in the authoritative RCC_DARK_CSS rule. */
         [data-testid="stTabs"] [role="tablist"]{
-            position:sticky!important;top:.35rem!important;z-index:999!important;
             background:#e5ebf3!important;border:1px solid #aebccc!important;
             border-radius:14px!important;padding:6px 8px!important;
             box-shadow:0 8px 22px rgba(37,52,76,.16)!important;
@@ -1200,6 +1202,28 @@ html body .dfs-chat-ai,html body .chat-agent,html body .agent-status{background:
 .rcc-chips{display:flex;flex-wrap:wrap;gap:7px;margin:12px 0 4px;}
 .rcc-chips span{padding:6px 10px;border-radius:999px;background:#182637;border:1px solid #2c4a68;
   color:#a9c4dc;font-size:.72rem;font-weight:800;letter-spacing:.02em;}
+/* ---------- lineups-first: slim banner + cards + avatars ---------- */
+.rcc-banner{display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:linear-gradient(115deg,#0e2a1e,#14402a);
+  border:1px solid #2f7355;border-radius:14px;padding:12px 16px;margin:2px 0 16px;
+  color:#d9ecdf;font-size:.92rem;font-weight:600;box-shadow:0 10px 26px rgba(0,0,0,.25);}
+.rcc-banner b{color:#fff;font-weight:850;}
+.rcc-card{background:var(--rcc-panel);border:1px solid var(--rcc-line);border-radius:18px;
+  padding:16px 18px;margin:0 0 14px;box-shadow:0 12px 30px rgba(0,0,0,.28);}
+.rcc-card-head{display:flex;align-items:center;gap:12px;margin-bottom:10px;}
+.rcc-rank{display:inline-flex;align-items:center;justify-content:center;min-width:46px;height:32px;
+  padding:0 10px;border-radius:999px;background:#ffbd3e;color:#1a2028!important;
+  font-size:.82rem;font-weight:950;}
+.rcc-grade-sm{min-width:46px!important;height:32px!important;font-size:.88rem!important;border-radius:10px!important;}
+.rcc-card-titlewrap{min-width:0;}
+.rcc-card-title{font-size:1.06rem;font-weight:900;color:#fff;letter-spacing:-.01em;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.rcc-card-meta{font-size:.8rem;color:var(--rcc-muted);margin-top:2px;}
+.rcc-card-foot{font-size:.82rem;color:var(--rcc-muted);line-height:1.5;margin-top:10px;
+  border-top:1px solid var(--rcc-line);padding-top:10px;}
+.rcc-avatar{width:34px;height:34px;border-width:1px;flex:0 0 auto;}
+.rcc-avatar.avatar-fallback{font-size:.6rem;}
+table.rcc-roster td.av,table.rcc-grid td.av{width:46px;padding:5px 2px 5px 9px;}
+@media(max-width:900px){.rcc-card{padding:12px 13px;}.rcc-card-title{font-size:.95rem;white-space:normal;}}
 table.rcc-roster{width:100%;border-collapse:collapse;margin:6px 0 4px;font-size:.88rem;}
 table.rcc-roster th{text-align:left;font-size:.68rem;letter-spacing:.08em;color:var(--rcc-faint);
   padding:7px 9px;border-bottom:1px solid var(--rcc-line2);text-transform:uppercase;}
@@ -1244,7 +1268,11 @@ table.rcc-roster tr:last-child td{border-bottom:0;}
    (via #root), so the dark command-center look holds regardless of
    injection order. Injected last in render_main.
    ============================================================ */
-/* ---------- sticky primary tab bar: always reachable ---------- */
+/* ---------- sticky primary tab bar: always reachable ----------
+   THE single sticky rule for the primary tab bar. All legacy sticky tab
+   declarations (MAIN_TABS_CSS, SHOWDOWN_SHELL_CSS) were neutralized so they
+   cannot fight this one. Solid background + no backdrop-filter: the old
+   translucent attempt broke position:sticky on iPad Safari. */
 html body [data-testid="stTabs"]:not(.st-key-sd_results_hub) [role="tablist"],
 html body [data-testid="stTabs"]:not(.st-key-sd_results_hub) [data-baseweb="tab-list"]{
   position:sticky!important;top:0!important;z-index:999999!important;
