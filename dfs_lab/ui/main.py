@@ -18,7 +18,7 @@ from scipy.sparse import lil_matrix
 
 from dfs_lab import styles
 from dfs_lab.config import APP_BUILD, PRIORITY_OPTIONS, ROSTER_SLOTS
-from dfs_lab.ui.results import render_results_command_center
+from dfs_lab.ui.results import render_results_command_center, postbuild_lineups_context
 from dfs_lab.data import prepare_player_pool, prepare_showdown_pool, apply_projection_overrides, apply_post_edit_availability_gate
 from dfs_lab.classic import (generate_lineups, classic_apply_qb_cap,
     classic_contest_recommendations, classic_context_evidence,
@@ -311,7 +311,12 @@ def render_main(settings):
 
                     _coach_asked=(_coach_q.strip() if _coach_send and _coach_q.strip() else _why_ask)
                     if _coach_asked:
-                        _coach_answer=classic_postbuild_answer(_coach_asked,packet,st.session_state["classic_ai_chat"])
+                        _coach_ctx=None
+                        try:
+                            _coach_ctx=postbuild_lineups_context(st.session_state.get("classic_result_v4"),df,sim_table)
+                        except Exception:
+                            _coach_ctx=None
+                        _coach_answer=classic_postbuild_answer(_coach_asked,packet,st.session_state["classic_ai_chat"],lineups_ctx=_coach_ctx)
                         st.session_state["classic_ai_chat"].append((_coach_asked,_coach_answer))
                         st.rerun()
 

@@ -10,6 +10,7 @@ the render_* functions below are thin Streamlit wrappers around them.
 """
 
 import html
+import os
 
 import numpy as np
 import pandas as pd
@@ -267,6 +268,84 @@ def swap_suggestions(df, lineup_row, slot, min_salary):
     return out
 
 
+def _fnum(v):
+    """Float-or-0.0 for messy dataframe cells. Never raises."""
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def postbuild_lineups_context(res, df, sim_table=None, n=20):
+    """Compact text context of the built lineups for the LLM coach.
+
+    One section per lineup: rank, grade, projection, ceiling P90, break-slate %,
+    salary left, QB/stack summary, one-line game-script story, and compact roster
+    lines (SLOT:Name Team $salary proj own%). Ends with the top game worlds.
+    Pure; never raises; returns "" when there is nothing to describe.
+    """
+    try:
+        if res is None or getattr(res, "empty", True):
+            return ""
+        lines = []
+        frame = res.head(n)
+        use_df = df is not None and not getattr(df, "empty", True)
+        for _, row in frame.iterrows():
+            rank = row.get("Rank", "?")
+            grade = str(row.get("Rating", "-"))
+            proj = _fnum(row.get("Projection"))
+            ceil = _fnum(row.get("Ceiling P90"))
+            brk = _fnum(row.get("Break Slate %"))
+            try:
+                left_s = f"${int(float(row.get('Salary Left', 0))):,}"
+            except (TypeError, ValueError):
+                left_s = str(row.get("Salary Left", ""))
+            title = lineup_title(row)
+            story = short_story(row)
+            lines.append(
+                f"#{rank} {title} | Grade {grade} | Proj {proj:.1f} | Ceil {ceil:.1f} | "
+                f"Break {brk:.1f}% | {left_s} left | {story}"
+            )
+            if use_df:
+                try:
+                    pt = player_table_for_lineup(row, df)
+                    ros = []
+                    for _, pr in pt.iterrows():
+                        ros.append(
+                            f"{pr['Slot']}:{pr['Player']} {pr['Team']} "
+                            f"${pr['Salary']} {_fnum(pr['Proj']):.0f}p {_fnum(pr['Own %']):.0f}%o"
+                        )
+                    lines.append("  " + " | ".join(ros))
+                except Exception:
+                    pass
+        if sim_table is not None and not getattr(sim_table, "empty", True):
+            try:
+                wr = world_rows(sim_table)[:6]
+                if wr:
+                    wtxt = "; ".join(
+                        f"{w['game']} {w['prob']:.0f}% ({w['archetype']}, P90 {w['p90']:.0f})"
+                        for w in wr
+                    )
+                    lines.append(
+                        "GAME WORLDS (share of sims where this game set the slate ceiling): " + wtxt
+                    )
+            except Exception:
+                pass
+        return "\n".join(lines)
+    except Exception:
+        return ""
+
+
+def _lab_llm_available():
+    """True when an OpenAI key is reachable via Streamlit secrets or env."""
+    try:
+        if st.secrets.get("OPENAI_API_KEY"):
+            return True
+    except Exception:
+        pass
+    return bool(os.getenv("OPENAI_API_KEY"))
+
+
 # ---------------------------------------------------------------------------
 # Render: results shell
 # ---------------------------------------------------------------------------
@@ -516,19 +595,25 @@ def render_worlds_view(sim_table):
 # Render: Lab+Agent view
 # ---------------------------------------------------------------------------
 
-def _agent_ask(question, packet):
+def _agent_ask(question, packet, lineups_ctx=None):
     if not str(question or "").strip():
         return
-    ans = classic_postbuild_answer(str(question).strip(), packet, st.session_state.get("classic_ai_chat", []))
+    ans = classic_postbuild_answer(
+        str(question).strip(), packet, st.session_state.get("classic_ai_chat", []),
+        lineups_ctx=lineups_ctx,
+    )
     st.session_state["classic_ai_chat"].append((str(question).strip(), ans))
     st.rerun()
 
 
-def render_agent_view(packet, res):
+def render_agent_view(packet, res, df=None, sim_table=None):
     st.markdown("<div class='rcc-section-title'>🧪 Lab + Agent</div>"
                 "<div class='rcc-section-sub'>Challenge the build. The agent only answers from lineups DFS LAB actually built.</div>",
                 unsafe_allow_html=True)
     st.session_state.setdefault("classic_ai_chat", [])
+    lineups_ctx = postbuild_lineups_context(res, df, sim_table)
+    if not _lab_llm_available():
+        st.caption("Tip: add OPENAI_API_KEY in Streamlit secrets for the full conversational agent — it answers from your actual lineups.")
     top_qb = ""
     try:
         if res is not None and not res.empty:
@@ -545,7 +630,7 @@ def render_agent_view(packet, res):
     for i, col in enumerate(cols):
         with col:
             if st.button(starters[i], use_container_width=True, key=f"rcc_agent_starter_{i}"):
-                _agent_ask(starters[i], packet)
+                _agent_ask(starters[i], packet, lineups_ctx)
     for uq, ar in st.session_state["classic_ai_chat"][-6:]:
         st.markdown(f"<div class='rcc-chat-user'><b>You</b><br>{uq}</div>", unsafe_allow_html=True)
         st.markdown(f"<div class='rcc-chat-ai'><b>DFS LAB</b><br>{ar}</div>", unsafe_allow_html=True)
@@ -554,18 +639,18 @@ def render_agent_view(packet, res):
         f1, f2, f3 = st.columns(3)
         with f1:
             if st.button("Explain the grade", key="rcc_fu_grade", use_container_width=True):
-                _agent_ask("Explain how the DFS LAB Grade is calculated and what it rewards.", packet)
+                _agent_ask("Explain how the DFS LAB Grade is calculated and what it rewards.", packet, lineups_ctx)
         with f2:
             if st.button("Compare #1 and #2", key="rcc_fu_cmp", use_container_width=True):
-                _agent_ask("Compare lineup #1 and lineup #2: projection, ceiling, correlation, and who each one needs.", packet)
+                _agent_ask("Compare lineup #1 and lineup #2: projection, ceiling, correlation, and who each one needs.", packet, lineups_ctx)
         with f3:
             if st.button("What would you change?", key="rcc_fu_chg", use_container_width=True):
-                _agent_ask("What is the weakest assumption in this portfolio, and what would you change?", packet)
+                _agent_ask("What is the weakest assumption in this portfolio, and what would you change?", packet, lineups_ctx)
     with st.form("rcc_agent_form", clear_on_submit=True):
         q = st.text_input("Ask the Lab", placeholder="Why so much chalk at RB? Which game do I need most?")
         send = st.form_submit_button("ASK  ↗", type="primary", use_container_width=True)
     if send:
-        _agent_ask(q, packet)
+        _agent_ask(q, packet, lineups_ctx)
     if st.button("CLEAR CHAT HISTORY", use_container_width=True, key="rcc_agent_clear"):
         st.session_state["classic_ai_chat"] = []
         st.rerun()
@@ -588,6 +673,6 @@ def render_results_command_center(res, df, sim_table, sim_worlds, packet):
     if view == "Game Worlds":
         render_worlds_view(sim_table)
     elif view == "Lab+Agent":
-        render_agent_view(packet, res)
+        render_agent_view(packet, disp, df, sim_table)
     else:
         render_lineups_view(disp, df)
