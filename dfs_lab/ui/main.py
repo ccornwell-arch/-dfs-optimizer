@@ -446,11 +446,11 @@ def render_main(settings):
                 if flex_control:
                     fa,fb,fc=st.columns(3)
                     with fa:
-                        flex_rb=st.number_input("RB in FLEX %",0,100,int(st.session_state["classic_flex_rb"]),5,key="classic_flex_rb")
+                        flex_rb=st.slider("RB in FLEX %",0,100,int(st.session_state["classic_flex_rb"]),5,key="classic_flex_rb")
                     with fb:
-                        flex_wr=st.number_input("WR in FLEX %",0,100,int(st.session_state["classic_flex_wr"]),5,key="classic_flex_wr")
+                        flex_wr=st.slider("WR in FLEX %",0,100,int(st.session_state["classic_flex_wr"]),5,key="classic_flex_wr")
                     with fc:
-                        flex_te=st.number_input("TE in FLEX %",0,100,int(st.session_state["classic_flex_te"]),5,key="classic_flex_te")
+                        flex_te=st.slider("TE in FLEX %",0,100,int(st.session_state["classic_flex_te"]),5,key="classic_flex_te")
                     _flex_sum=int(flex_rb)+int(flex_wr)+int(flex_te)
                     if _flex_sum!=100:
                         st.error(f"FLEX percentages must total 100%. Current total: {_flex_sum}%.")
