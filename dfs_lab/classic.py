@@ -156,7 +156,8 @@ def solve_one(
     exposure_state=None, built_count=0,
     no_dst_from_qb_game=True, no_offense_vs_dst=False,
     noise_scale=0.16, max_players_team=9, max_players_game=9,
-    max_te=3, allow_qb_with_rb=True, allowed_qb_ids=None, flex_position=None
+    max_te=3, allow_qb_with_rb=True, allowed_qb_ids=None, flex_position=None,
+    bringback_worthy=None,
 ):
     n = len(df)
     s = len(ROSTER_SLOTS)
@@ -253,7 +254,9 @@ def solve_one(
                 coeff[vidx(q, j)] = coeff.get(vidx(q, j), 0.0) - float(qb_stack_min)
         rows.append(coeff); lows.append(0.0); highs.append(np.inf)
 
-        if bringback_mode == "Required":
+        # A forced bring-back from a weak offense is bad process: the "shootout"
+        # game script is a blowout instead. Only enforce it against worthy offenses.
+        if bringback_mode == "Required" and (bringback_worthy is None or str(opp).upper() in bringback_worthy):
             opp_skill = df.index[
                 df["ActiveForBuild"] & (df["Team"] == opp)
                 & (df["is_RB"] | df["is_WR"] | df["is_TE"])
@@ -473,7 +476,7 @@ def classic_lineup_coherence(df, chosen):
         "Coherence Flags":"; ".join(hard+warnings) if (hard or warnings) else "No major football contradictions"
     }
 
-def lineup_details(df, chosen, strategy_map, preferred_stack_teams):
+def lineup_details(df, chosen, strategy_map, preferred_stack_teams, bringback_worthy=None):
     idxs = [i for _, i in chosen]
     p = df.loc[idxs].copy()
 
@@ -488,7 +491,13 @@ def lineup_details(df, chosen, strategy_map, preferred_stack_teams):
     matchup = qb["Matchup"]
 
     pass_catchers = p[(p["Team"] == qb_team) & (p["is_WR"] | p["is_TE"])]
-    bringbacks = p[(p["Team"] == opp) & (p["is_RB"] | p["is_WR"] | p["is_TE"])]
+    # A player from a weak opposing offense is salary filler, not a game-script
+    # call — don't frame or score him as a bring-back.
+    _bb_worthy = bringback_worthy is None or str(opp).upper() in bringback_worthy
+    if _bb_worthy:
+        bringbacks = p[(p["Team"] == opp) & (p["is_RB"] | p["is_WR"] | p["is_TE"])]
+    else:
+        bringbacks = p.iloc[0:0]
 
     rb_dst = len(set(p.loc[p["is_RB"], "Team"]) & set(p.loc[p["is_DST"], "Team"]))
     qb_game_players = int((p["Matchup"] == matchup).sum())
@@ -510,9 +519,11 @@ def lineup_details(df, chosen, strategy_map, preferred_stack_teams):
         fit += 1.8
         fit_notes.append(f"{qb_team} preferred stack")
 
+    # No correlation credit for a bring-back from an offense too weak to shoot out.
+    bb_worthy = bringback_worthy is None or str(opp).upper() in bringback_worthy
     correlation_raw = (
         2.0 * min(len(pass_catchers), 2)
-        + 0.9 * min(len(bringbacks), 1)
+        + (0.9 * min(len(bringbacks), 1) if bb_worthy else 0.0)
         + 0.5 * rb_dst
         + 0.35 * max(0, qb_game_players - 2)
     )
@@ -542,7 +553,7 @@ def generate_lineups(
     qb_stack_min, bringback_mode, preferred_stack_teams,
     strategy_map, team_strategy_map, no_dst_from_qb_game, no_offense_vs_dst, seed,
     max_players_team=9, max_players_game=9, max_te=3, allow_qb_with_rb=True,
-    allowed_qb_ids=None, flex_mix=None
+    allowed_qb_ids=None, flex_mix=None, bringback_worthy=None,
 ):
     aggr = contest_aggression(field_size, payout_style)
     rng = np.random.default_rng(seed)
@@ -588,7 +599,8 @@ def generate_lineups(
             max_te=max_te,
             allow_qb_with_rb=allow_qb_with_rb,
             allowed_qb_ids=allowed_qb_ids,
-            flex_position=(flex_schedule[len(rows)] if len(rows)<len(flex_schedule) else None)
+            flex_position=(flex_schedule[len(rows)] if len(rows)<len(flex_schedule) else None),
+            bringback_worthy=bringback_worthy,
         )
         if not chosen:
             continue
@@ -615,7 +627,7 @@ def generate_lineups(
             continue
 
         seen.add(ids)
-        detail = lineup_details(df, chosen, strategy_map, preferred_stack_teams)
+        detail = lineup_details(df, chosen, strategy_map, preferred_stack_teams, bringback_worthy)
         detail.update({
             "Coherence Score":coherence["Coherence Score"],
             "Lineup Story":coherence["Lineup Story"],
@@ -773,6 +785,18 @@ def _team_fantasy_calibration(season):
     ratio = float((m["skill_fp"] / m["pts"]).mean()) if len(m) else 3.2
     emp = m.groupby("_tm")["skill_fp"].mean().to_dict()
     return ratio, emp
+
+def bringback_worthy_teams(df):
+    """Offenses good enough to merit a bring-back.
+
+    A bring-back only pays when the opposing offense can actually score and
+    keep a shootout alive. Worthy = four-season weighted points-scored rating
+    at or above league average. Returns uppercase team abbreviations.
+    """
+    from dfs_lab.data import _slate_season
+    season = _slate_season(df)
+    off, _, lg = _nflverse_team_ratings(season)
+    return {str(t).upper() for t, r in off.items() if r >= lg}
 
 def topdown_simulate_slate(df, sims=10000, seed=42):
     """Top-down game simulation: team scores -> team fantasy -> player shares.
