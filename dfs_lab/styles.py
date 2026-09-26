@@ -734,6 +734,17 @@ section[data-testid="stSidebar"] [data-baseweb="select"]>div,section[data-testid
 .apple-hero{animation:labRise .38s ease both}.lineup-card{animation:labRise .28s ease both}[data-testid="stProgress"]>div>div{background:linear-gradient(90deg,#1473e6,#5b62ef,#16a6c9)!important;animation:labPulse 1.2s ease-in-out infinite!important;}
 @media(max-width:900px){.block-container{padding-left:.8rem!important;padding-right:.8rem!important}.apple-hero{padding:23px 24px!important}.apple-hero .apple-title{font-size:2.15rem!important}.hero-hint{display:none}[data-testid="stSidebarCollapseButton"] button,[data-testid="stSidebarCollapsedControl"] button{width:52px!important;height:52px!important;min-width:52px!important;min-height:52px!important;}}
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important;transition:none!important}}
+/* number-input steppers: visible in dark theme */
+[data-testid="stNumberInputStepDown"],[data-testid="stNumberInputStepUp"]{
+  background:var(--rcc-panel3)!important;border:1px solid var(--rcc-line2)!important;
+  color:var(--rcc-text)!important;opacity:1!important;
+}
+[data-testid="stNumberInputStepDown"] svg,[data-testid="stNumberInputStepUp"] svg{
+  fill:var(--rcc-text)!important;stroke:var(--rcc-text)!important;
+}
+[data-testid="stNumberInputStepDown"]:hover,[data-testid="stNumberInputStepUp"]:hover{
+  background:var(--rcc-accent-dim)!important;
+}
 </style>
 """
 
@@ -1216,5 +1227,16 @@ table.rcc-roster tr:last-child td{border-bottom:0;}
   .rcc-world-row{grid-template-columns:1.2fr 1.6fr 62px;gap:8px;}
 }
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important;transition:none!important}}
+/* number-input steppers: visible in dark theme */
+[data-testid="stNumberInputStepDown"],[data-testid="stNumberInputStepUp"]{
+  background:var(--rcc-panel3)!important;border:1px solid var(--rcc-line2)!important;
+  color:var(--rcc-text)!important;opacity:1!important;
+}
+[data-testid="stNumberInputStepDown"] svg,[data-testid="stNumberInputStepUp"] svg{
+  fill:var(--rcc-text)!important;stroke:var(--rcc-text)!important;
+}
+[data-testid="stNumberInputStepDown"]:hover,[data-testid="stNumberInputStepUp"]:hover{
+  background:var(--rcc-accent-dim)!important;
+}
 </style>
 """
