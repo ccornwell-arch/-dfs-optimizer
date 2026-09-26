@@ -22,7 +22,7 @@ from dfs_lab.data import prepare_player_pool, prepare_showdown_pool, apply_proje
 from dfs_lab.classic import (generate_lineups, classic_apply_qb_cap,
     classic_contest_recommendations, classic_context_evidence,
     classic_portfolio_intelligence, classic_postbuild_answer, classic_postbuild_report,
-    classic_qb_concentration_plan, classic_simulate_slate, classic_strategy_theses,
+    classic_qb_concentration_plan, topdown_simulate_slate, lineup_sim_equity, classic_strategy_theses,
     calculate_exposure_table)
 from dfs_lab.showdown import (apply_context_engine, apply_showdown_scenario,
     generate_showdown_lineups, infer_score_script, script_build_adjustments,
@@ -131,11 +131,10 @@ def render_main(settings):
 
             intel=classic_context_evidence(df[["Name","Position","Team","Opponent","Game Info","My Proj"]].copy())
             intel_map=intel.set_index("Name") if not intel.empty else pd.DataFrame()
-            sim_input=df[["Name","Position","Team","Opponent","Matchup","My Proj"]+ (["Sim Vol"] if "Sim Vol" in df.columns else [])].copy()
-            sim_input["DVP Adj %"]=sim_input["Name"].map(intel_map["DVP Adj %"] if not intel.empty else {}).fillna(0.0)
-            sim_input["Sim Proj"]=pd.to_numeric(sim_input["My Proj"],errors="coerce").fillna(0.0)*(1+0.50*pd.to_numeric(sim_input["DVP Adj %"],errors="coerce").fillna(0.0)/100.0)
-            _sim_cols=["Name","Position","Team","Matchup","Sim Proj"]+([ "Sim Vol"] if "Sim Vol" in sim_input.columns else [])
-            sim_table=classic_simulate_slate(sim_input[_sim_cols],5000,seed)
+            sim_result=topdown_simulate_slate(df, sims=10000, seed=seed)
+            sim_table=sim_result["game_table"]
+            player_sim=sim_result["player_stats"]
+            sim_worlds=sim_result["worlds"]
             thesis_table,thesis_state=classic_strategy_theses(df,intel,sim_table,field_size,payout_style,entry_format)
             classic_qb_ids,qb_plan_table,qb_plan=classic_qb_concentration_plan(df,thesis_table,entry_format)
             classic_qb_ids,qb_plan_table,qb_plan=classic_apply_qb_cap(classic_qb_ids,qb_plan_table,qb_plan,st.session_state.get("classic_qb_cap",0))
@@ -150,9 +149,14 @@ def render_main(settings):
 
                 if sim_table is not None and not sim_table.empty:
                     top=sim_table.iloc[0]
-                    st.markdown(f"<div class='intel-card'><div class='intel-kicker'>5,000-simulation slate read</div><div class='intel-big'>{top['Game']} has the strongest simulated ceiling footprint</div><div class='intel-copy'>It produced the highest DFS environment in {float(top['Slate ceiling %']):.1f}% of projection-driven simulations. P90 environment: {float(top['P90']):.1f}. These are comparative DFS simulations, not sportsbook game probabilities.</div></div>",unsafe_allow_html=True)
+                    st.markdown(f"<div class='intel-card'><div class='intel-kicker'>10,000-simulation slate read</div><div class='intel-big'>{top['Game']} has the strongest simulated ceiling footprint</div><div class='intel-copy'>It produced the highest DFS environment in {float(top['Slate ceiling %']):.1f}% of top-down game simulations. P90 environment: {float(top['P90']):.1f}. Each game is simulated from team offense/defense ratings, so stacks and bring-backs emerge from correlated game scripts. These are comparative DFS simulations, not sportsbook game probabilities.</div></div>",unsafe_allow_html=True)
                     sim_cols=["Game","Mean DFS env","P75","P90","Volatility","Slate ceiling %"]
                     st.dataframe(sim_table[[x for x in sim_cols if x in sim_table.columns]],hide_index=True,use_container_width=True,height=min(430,70+35*len(sim_table)))
+                if player_sim is not None and not player_sim.empty:
+                    with st.expander("Simulation Lab — 10,000 top-down game worlds",expanded=False):
+                        st.caption("Sim Mean should track My Proj (the simulation is built on it). Sim P90 and P(3x) describe ceiling: how often a player breaks the slate in a correlated game script.")
+                        _ps=player_sim.sort_values("Sim P90",ascending=False)
+                        st.dataframe(_ps,hide_index=True,use_container_width=True,height=420)
 
                 st.markdown("#### Context evidence")
                 st.caption("DFS LAB blends the uploaded slate with multi-year player results and opponent-vs-position evidence. Current day/night is shown when DraftKings Game Info exposes kickoff time. Travel, weather and injury/news are not invented when the current data feed does not supply them.")
@@ -467,7 +471,16 @@ def render_main(settings):
                     st.info("Generate lineups from Build.")
                 else:
                     show_cols=["Rank","Rating","Rating Score","Projection","Base Projection","Scenario Delta","Salary","Salary Left","Avg Own","Stack Summary"]+ROSTER_SLOTS
-                    st.dataframe(res[[x for x in show_cols if x in res.columns]],hide_index=True,use_container_width=True,height=590,
+                    disp=res[[x for x in show_cols if x in res.columns]].copy()
+                    try:
+                        eq=lineup_sim_equity(res, sim_worlds, df["Name"].astype(str).tolist())
+                        if not eq.empty and len(eq)==len(disp):
+                            disp["Ceiling P90"]=eq["Ceiling P90"].to_numpy()
+                            disp["Break Slate %"]=eq["Break Slate %"].to_numpy()
+                    except Exception:
+                        pass
+                    st.caption("Ceiling P90 is the lineup's 90th-percentile total across 10,000 correlated game worlds. Break Slate % is how often it posts a slate-breaking score.")
+                    st.dataframe(disp,hide_index=True,use_container_width=True,height=590,
                         column_config={
                             "Rank":st.column_config.NumberColumn("Rank",width=60,pinned=True),
                             "QB":st.column_config.TextColumn("QB",width=150,pinned=True),
