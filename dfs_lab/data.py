@@ -256,22 +256,68 @@ def _slate_season(df, fallback=2026):
     except Exception:
         return int(fallback)
 
-def prepare_player_pool(dk_file, ss_file):
+def estimate_ownership(df, proj_col="My Proj", salary_col="Salary", pos_col="Position"):
+    """V1 estimated field ownership.
+
+    Combines projection, salary-implied value, and position baselines into a
+    self-consistent ownership estimate. The values are normalized to sum to 900
+    (9 roster spots x 100%), which is the accounting identity for any contest:
+    the field's total ownership across the slate must equal 900%.
+
+    This is a directional estimate for leverage, NOT a proprietary projection.
+    Callers should label it as estimated wherever it is displayed.
+
+    Position-group totals respect roster-slot accounting: QB 100 (one QB slot),
+    DST 100 (one DST slot), and RB/WR/TE share 700 (2 RB + 3 WR + 1 TE + 1 FLEX).
+    """
+    proj=pd.to_numeric(df[proj_col],errors="coerce").fillna(0.0).clip(lower=0.0)
+    sal=pd.to_numeric(df[salary_col],errors="coerce").fillna(0.0)
+    pos=df[pos_col].astype(str).str.upper()
+    value=proj/(sal/1000.0+0.5)
+    pos_base={"QB":1.55,"RB":1.0,"WR":1.0,"TE":0.72,"DST":0.85}
+    base=pos.map(pos_base).fillna(0.9)
+    vp=value.rank(pct=True); pp=proj.rank(pct=True)
+    raw=base*(0.25+0.75*vp)*(0.45+0.55*pp)
+    raw=raw*(proj>0.05)
+    own=pd.Series(0.0,index=df.index)
+    groups={"QB":("QB",100.0),"DST":("DST",100.0)}
+    for grp,target in groups.values():
+        m=pos.eq(grp); tot=float(raw[m].sum())
+        if tot>0: own[m]=target*raw[m]/tot
+    skill=pos.isin(["RB","WR","TE"]); stot=float(raw[skill].sum())
+    if stot>0: own[skill]=700.0*raw[skill]/stot
+    return own.round(1)
+
+def prepare_player_pool(dk_file, ss_file=None):
     dk = load_dk_template(dk_file)
-    ss = pd.read_csv(ss_file)
+    own_estimated=False
+    if ss_file is not None:
+        ss = pd.read_csv(ss_file)
 
-    needed = {"Name", "My Proj", "My Own"}
-    missing = needed - set(ss.columns)
-    if missing:
-        raise ValueError(f"SaberSim file is missing columns: {sorted(missing)}")
+        needed = {"Name", "My Proj", "My Own"}
+        missing = needed - set(ss.columns)
+        if missing:
+            raise ValueError(f"SaberSim file is missing columns: {sorted(missing)}")
 
-    ss = ss[["Name", "My Proj", "My Own"]].copy()
-    ss["My Proj"] = pd.to_numeric(ss["My Proj"], errors="coerce").fillna(0.0)
-    ss["My Own"] = pd.to_numeric(ss["My Own"], errors="coerce").fillna(0.0)
+        ss = ss[["Name", "My Proj", "My Own"]].copy()
+        ss["My Proj"] = pd.to_numeric(ss["My Proj"], errors="coerce").fillna(0.0)
+        ss["My Own"] = pd.to_numeric(ss["My Own"], errors="coerce").fillna(0.0)
 
-    df = dk.merge(ss, on="Name", how="left")
-    df["My Proj"] = df["My Proj"].fillna(0.0)
-    df["My Own"] = df["My Own"].fillna(0.0)
+        df = dk.merge(ss, on="Name", how="left")
+        df["My Proj"] = df["My Proj"].fillna(0.0)
+        df["My Own"] = df["My Own"].fillna(0.0)
+    else:
+        # DFS Lab independent projections: no SaberSim file required.
+        # The engine output preserves DK row order (left merge), but merge on
+        # Name explicitly so alignment never depends on that assumption.
+        proj_df = dfs_lab_projection_engine(dk)
+        proj_cols=["Name","DFS Lab Base Proj","Projection Why","Sim Vol","Matchup Adj %"]
+        df = dk.merge(proj_df[[c for c in proj_cols if c in proj_df.columns]], on="Name", how="left")
+        df["My Proj"] = pd.to_numeric(df["DFS Lab Base Proj"], errors="coerce").fillna(0.0)
+        df["My Own"] = estimate_ownership(df)
+        df["Projection Why"] = df["Projection Why"].fillna("DK slate prior fallback")
+        df["Sim Vol"] = pd.to_numeric(df["Sim Vol"], errors="coerce").fillna(0.45)
+        own_estimated=True
 
     away, home, matchup = [], [], []
     for g in df["Game Info"]:
@@ -294,6 +340,7 @@ def prepare_player_pool(dk_file, ss_file):
     # A backup QB should never require a manual exclusion just because DK listed him.
     df=apply_football_reality_guard(df,"Salary","My Proj","ActiveForBuild")
     df=apply_live_availability_guard(df,"ActiveForBuild",_slate_season(df))
+    df["Own Estimated"]=bool(own_estimated)
 
     return df.reset_index(drop=True)
 
@@ -396,12 +443,46 @@ def _dk_fantasy_points_from_stats(stats):
     return pts
 
 @st.cache_data(ttl=21600, show_spinner=False)
-def _load_nflverse_projection_inputs(season):
-    """Load a multi-year evidence window. Current season is included, but never allowed to dominate early."""
+def _load_nflverse_inputs(season):
+    """Multi-year evidence window: weekly player stats + schedules.
+
+    Current season is included, but never allowed to dominate early.
+    Schedules power the DST model (points allowed) and DST matchup table.
+    """
     import nflreadpy as nfl
     seasons=[int(season)-3,int(season)-2,int(season)-1,int(season)]
     stats=nfl.load_player_stats(seasons, summary_level="week").to_pandas()
+    sched=nfl.load_schedules(seasons).to_pandas()
+    return stats, sched
+
+def _load_nflverse_projection_inputs(season):
+    stats, _ = _load_nflverse_inputs(season)
     return stats
+
+def _opp_from_gameinfo(game_info, team):
+    """Opponent abbreviation from a DK 'AWY@HOM' Game Info string."""
+    try:
+        m=str(game_info).split()[0]
+        if "@" in m:
+            a,h=[x.strip().upper() for x in m.split("@",1)]
+            t=str(team).strip().upper()
+            if t==a: return h
+            if t==h: return a
+    except Exception:
+        pass
+    return ""
+
+def _dst_points_allowed_fantasy(pa):
+    """DraftKings DST points-allowed bracket."""
+    try: pa=float(pa)
+    except Exception: return 0.0
+    if pa<=0: return 10.0
+    if pa<=6: return 7.0
+    if pa<=13: return 4.0
+    if pa<=20: return 1.0
+    if pa<=27: return 0.0
+    if pa<=34: return -1.0
+    return -4.0
 
 def _name_col(df):
     return _first_existing(df.columns,["player_display_name","player_name","Name"])
@@ -424,8 +505,13 @@ def dfs_lab_projection_engine(dk):
     Uses four seasons of nflverse weekly evidence, sample-size shrinkage, opportunity/role,
     and opponent-vs-position history when the source exposes opponent_team. DK AvgPointsPerGame
     is only a weak fallback/prior. No SaberSim projection is used.
+
+    Also emits per-player volatility ("Sim Vol") and handles DST rows via a team-defense
+    model (sacks, turnovers, points allowed) so Classic can run without any SaberSim file.
     """
     out=dk.copy(); season=2026
+    if "FlexSalary" not in out.columns and "Salary" in out.columns:
+        out["FlexSalary"]=pd.to_numeric(out["Salary"],errors="coerce")
     try:
         import re
         m=re.search(r"(20\d{2})", " ".join(out["Game Info"].astype(str).tolist()))
@@ -435,6 +521,7 @@ def dfs_lab_projection_engine(dk):
     out["DFS Lab Base Proj"]=pd.to_numeric(out.get("AvgPointsPerGame",0),errors="coerce").fillna(0.0)
     out["History Games"]=0; out["Current Games"]=0; out["Role Signal"]=0.0; out["Matchup Adj %"]=0.0
     out["Projection Why"]="DK slate prior fallback"
+    out["Sim Vol"]=0.45
     try:
         stx=_load_nflverse_projection_inputs(season).copy()
         nc=_name_col(stx); sc=_season_col(stx); oc=_opp_col(stx)
@@ -450,11 +537,11 @@ def dfs_lab_projection_engine(dk):
             stx=stx[active | (stx["_fp"].abs()>0)].copy()
 
         # Per-player per-season summaries. Four-year weights favor recency without letting one game take over.
-        ss=stx.groupby(["Name","Season"],as_index=False).agg(FPPG=("_fp","mean"),Role=("_role","mean"),Games=("_fp","size"))
+        ss=stx.groupby(["Name","Season"],as_index=False).agg(FPPG=("_fp","mean"),Role=("_role","mean"),Games=("_fp","size"),Std=("_fp","std"))
         season_weights={season:0.34,season-1:0.38,season-2:0.19,season-3:0.09}
         rows=[]
         for name,g in ss.groupby("Name"):
-            hist_num=hist_den=role_num=role_den=0.0; hist_games=cur_games=0
+            hist_num=hist_den=role_num=role_den=vol_num=vol_den=0.0; hist_games=cur_games=0
             for _,r in g.iterrows():
                 yr=int(r["Season"]); games=int(r["Games"]); w=season_weights.get(yr,0.0)
                 if w<=0: continue
@@ -463,12 +550,75 @@ def dfs_lab_projection_engine(dk):
                 ew=w*reliability
                 hist_num += ew*float(r["FPPG"]); hist_den += ew
                 role_num += ew*float(r["Role"]); role_den += ew
+                _sd=float(r["Std"]) if pd.notna(r["Std"]) else 0.0
+                vol_num += ew*_sd; vol_den += ew
                 hist_games += games
                 if yr==season: cur_games=games
-            rows.append({"Name":name,"HistProj":hist_num/hist_den if hist_den else 0.0,"RoleSignal":role_num/role_den if role_den else 0.0,"HistoryGames":hist_games,"CurrentGames":cur_games})
+            rows.append({"Name":name,"HistProj":hist_num/hist_den if hist_den else 0.0,"RoleSignal":role_num/role_den if role_den else 0.0,"HistoryGames":hist_games,"CurrentGames":cur_games,"Vol":vol_num/vol_den if vol_den else 0.0})
         ps=pd.DataFrame(rows)
         out=out.merge(ps,on="Name",how="left")
-        for c in ["HistProj","RoleSignal","HistoryGames","CurrentGames"]: out[c]=pd.to_numeric(out[c],errors="coerce").fillna(0.0)
+        for c in ["HistProj","RoleSignal","HistoryGames","CurrentGames","Vol"]: out[c]=pd.to_numeric(out[c],errors="coerce").fillna(0.0)
+
+        # ---- DST model: team-week defensive fantasy scores in DK scoring ----
+        # Fumble recoveries aren't split out in the weekly feed, so recoveries are
+        # estimated at half of forced fumbles (empirically ~50% are recovered by the defense).
+        dst_matchup={}
+        try:
+            _dstats,_sched=_load_nflverse_inputs(season)
+            _d=_dstats.copy()
+            def _dc(n):
+                return pd.to_numeric(_d[n],errors="coerce").fillna(0.0) if n in _d.columns else pd.Series(0.0,index=_d.index)
+            _d["_dteam"]=_d["team"].astype(str).str.strip().str.upper()
+            _d["_sn"]=pd.to_numeric(_d["season"],errors="coerce"); _d["_wk"]=pd.to_numeric(_d["week"],errors="coerce")
+            _d["_dst_pts"]=(_dc("def_sacks")*1.0+_dc("def_interceptions")*2.0+_dc("def_fumbles_forced")*0.5*2.0
+                +_dc("def_tds")*6.0+_dc("def_safeties")*2.0
+                +(_dc("def_fg_blocks")+_dc("def_punt_blocks")+_dc("def_pat_blocks"))*2.0)
+            _tw=_d.groupby(["_dteam","_sn","_wk"],as_index=False).agg(dst_pts=("_dst_pts","sum"))
+            _s=_sched.copy()
+            _hs=pd.to_numeric(_s["home_score"],errors="coerce"); _aws=pd.to_numeric(_s["away_score"],errors="coerce")
+            _pa=pd.concat([
+                pd.DataFrame({"_dteam":_s["home_team"].astype(str).str.upper(),"_sn":pd.to_numeric(_s["season"],errors="coerce"),"_wk":pd.to_numeric(_s["week"],errors="coerce"),"pa":_aws}),
+                pd.DataFrame({"_dteam":_s["away_team"].astype(str).str.upper(),"_sn":pd.to_numeric(_s["season"],errors="coerce"),"_wk":pd.to_numeric(_s["week"],errors="coerce"),"pa":_hs}),
+            ],ignore_index=True)
+            _tw=_tw.merge(_pa,on=["_dteam","_sn","_wk"],how="left")
+            _tw["dst_pts"]=_tw["dst_pts"]+_tw["pa"].apply(_dst_points_allowed_fantasy)
+            _ss=_tw.groupby(["_dteam","_sn"],as_index=False).agg(DSTFPG=("dst_pts","mean"),DSTGames=("dst_pts","size"),DSTStd=("dst_pts","std"))
+            _drows=[]
+            for _t,_g in _ss.groupby("_dteam"):
+                hn=hd=vn=vd=0.0; hg=cg=0
+                for _,_r in _g.iterrows():
+                    _yr=int(_r["_sn"]); _gm=int(_r["DSTGames"]); _wt=season_weights.get(_yr,0.0)
+                    if _wt<=0: continue
+                    _rel=min(1.0,max(0.20,_gm/8.0)) if _yr==season else min(1.0,_gm/8.0)
+                    _ew=_wt*_rel
+                    hn+=_ew*float(_r["DSTFPG"]); hd+=_ew
+                    _sdd=float(_r["DSTStd"]) if pd.notna(_r["DSTStd"]) else 0.0
+                    vn+=_ew*_sdd; vd+=_ew
+                    hg+=_gm
+                    if _yr==season: cg=_gm
+                _drows.append({"Team":_t,"DSTHist":hn/hd if hd else 0.0,"DSTGames":hg,"DSTCur":cg,"DSTVol":vn/vd if vd else 0.0})
+            _dh=pd.DataFrame(_drows)
+            if not _dh.empty:
+                out=out.merge(_dh,on="Team",how="left")
+                # Matchup: fantasy scored by defenses facing each offense.
+                _opp_map={}
+                for _,_r in _s.iterrows():
+                    try:
+                        _ht=str(_r["home_team"]).upper(); _at=str(_r["away_team"]).upper()
+                        _sn2=int(_r["season"]); _wk2=int(_r["week"])
+                        _opp_map[(_ht,_sn2,_wk2)]=_at; _opp_map[(_at,_sn2,_wk2)]=_ht
+                    except Exception: pass
+                _tw["_off_opp"]=_tw.apply(lambda _r:_opp_map.get((_r["_dteam"],int(_r["_sn"]),int(_r["_wk"])),""),axis=1)
+                _al=_tw[_tw["_off_opp"]!=""].groupby("_off_opp",as_index=False).agg(Allowed=("dst_pts","mean"),N=("dst_pts","size"))
+                _lg=float(_tw["dst_pts"].mean())
+                for _,_r in _al.iterrows():
+                    _b=max(_lg,1.0); _n=float(_r["N"])
+                    _raw=float(_r["Allowed"])/_b-1.0; _sh=_n/(_n+24.0)
+                    dst_matchup[(str(_r["_off_opp"]),"DST")]=float(np.clip(_raw*_sh,-0.10,0.10))
+        except Exception:
+            dst_matchup={}
+        for c in ["DSTHist","DSTGames","DSTCur","DSTVol"]:
+            if c in out.columns: out[c]=pd.to_numeric(out[c],errors="coerce").fillna(0.0)
 
         # Opponent-vs-position fantasy allowance: three prior seasons + current season, shrunk toward neutral.
         matchup={}
@@ -486,33 +636,51 @@ def dfs_lab_projection_engine(dk):
 
         dkavg=pd.to_numeric(out["AvgPointsPerGame"],errors="coerce").fillna(0.0)
         sal=pd.to_numeric(out["FlexSalary"],errors="coerce").fillna(0.0); pos=out["Position"].astype(str).str.upper()
-        vals=[]; reasons=[]; madjs=[]
+        vals=[]; reasons=[]; madjs=[]; sigs=[]
+        _pos_default_vol={"QB":0.26,"RB":0.42,"WR":0.50,"TE":0.48,"DST":0.62}
+        import math as _math
         for _,r in out.iterrows():
-            hist=float(r.get("HistProj",0)); games=int(r.get("HistoryGames",0)); curg=int(r.get("CurrentGames",0)); prior=float(r.get("AvgPointsPerGame",0) or 0)
+            pos_u=str(r["Position"]).upper()
+            is_dst=(pos_u=="DST")
+            if is_dst and float(r.get("DSTHist",0))>0:
+                hist=float(r.get("DSTHist",0)); games=int(r.get("DSTGames",0)); curg=int(r.get("DSTCur",0)); prior=float(r.get("AvgPointsPerGame",0) or 0)
+                emp_vol=float(r.get("DSTVol",0)); why_src="DST history"
+            else:
+                hist=float(r.get("HistProj",0)); games=int(r.get("HistoryGames",0)); curg=int(r.get("CurrentGames",0)); prior=float(r.get("AvgPointsPerGame",0) or 0)
+                emp_vol=float(r.get("Vol",0)); why_src="4-year history"
             # Historical evidence dominates established players; DK average is a weak stabilizer/fallback.
             evidence=min(0.88, games/(games+8.0))
             base=(evidence*hist + (1-evidence)*prior) if hist>0 else prior
             # Role signal is used only as a modest stabilizer, not converted directly to fantasy points.
             role=float(r.get("RoleSignal",0)); role_adj=0.0
-            if role>0 and base>0:
+            if role>0 and base>0 and not is_dst:
                 # Keeps TD spikes from dominating while rewarding sustained opportunity.
                 role_adj=float(np.clip((role/12.0)-0.5,-0.04,0.05))
             opp=""
             try:
                 teams=[t for t in out["Team"].dropna().unique().tolist() if t]
                 if len(teams)==2: opp=teams[1] if r["Team"]==teams[0] else teams[0]
+                else: opp=_opp_from_gameinfo(r.get("Game Info",""),r["Team"])
             except Exception: pass
-            m=float(matchup.get((str(opp),str(r["Position"]).upper()),0.0)); madjs.append(m*100)
+            _mtable=dst_matchup if is_dst else matchup
+            m=float(_mtable.get((str(opp),pos_u),0.0)); madjs.append(m*100)
             # Matchup and role are bounded; they refine the baseline rather than rewrite it.
             model=max(0.0,base*(1.0+role_adj+m))
             # Salary prior only for thin-history skill players.
-            if games<5 and str(r["Position"]).upper() in ["QB","RB","WR","TE"]:
+            if games<5 and pos_u in ["QB","RB","WR","TE"]:
                 sp=max(0.3,float(r["FlexSalary"])/1000.0*1.55)
                 model=0.90*model+0.10*sp
             vals.append(round(model,3))
-            reasons.append(f"4-year history {hist:.2f} over {games} games; current season {curg} game(s) is sample-shrunk; DK prior {prior:.2f}; role {role_adj*100:+.1f}%; {opp or 'opponent'} matchup {m*100:+.1f}%")
+            reasons.append(f"{why_src} {hist:.2f} over {games} games; current season {curg} game(s) is sample-shrunk; DK prior {prior:.2f}; role {role_adj*100:+.1f}%; {opp or 'opponent'} matchup {m*100:+.1f}%")
+            # Per-player volatility: empirical weekly std shrunk toward the position prior.
+            _sig=0.45
+            if emp_vol>0 and base>0:
+                _cv=emp_vol/max(base,1.5)
+                _sig=float(min(0.9,max(0.15,_math.sqrt(_math.log1p(_cv*_cv)))))
+            sigs.append(round(0.5*_sig+0.5*_pos_default_vol.get(pos_u,0.45),3))
         out["DFS Lab Base Proj"]=vals; out["History Games"]=out["HistoryGames"].astype(int); out["Current Games"]=out["CurrentGames"].astype(int)
         out["Role Signal"]=out["RoleSignal"].round(2); out["Matchup Adj %"]=np.round(madjs,1); out["Projection Why"]=reasons
+        out["Sim Vol"]=sigs
         out["DFS Lab Data"]="2023-2026 history + role + matchup"
     except Exception as e:
         out.attrs["projection_warning"]=f"Live nflverse evidence could not load ({e}). DFS Lab used the DK slate prior for this run."

@@ -60,7 +60,7 @@ def render_main(settings):
 
     _has_cached_slate=bool(st.session_state.get("dfs_lab_dk_bytes"))
     with st.expander("✓ SLATE LOADED · Change files" if _has_cached_slate else "＋ LOAD SLATE FILES", expanded=not _has_cached_slate):
-        st.markdown('<div class="card-sub">DraftKings is required. SaberSim is optional and used as a comparison source.</div>',unsafe_allow_html=True)
+        st.markdown('<div class="card-sub">DraftKings is required. Without a SaberSim file, DFS Lab builds its own projections and estimated ownership.</div>',unsafe_allow_html=True)
         u1,u2=st.columns(2)
         with u1: dk_file=st.file_uploader("DraftKings salaries/template · required",type=["csv"],key="dfs_lab_dk_upload")
         with u2: ss_file=st.file_uploader("SaberSim · optional comparison",type=["csv"],key="dfs_lab_ss_upload")
@@ -81,13 +81,12 @@ def render_main(settings):
     if dk_file is None:
         st.info("Upload the DraftKings slate to open DFS LAB.")
         st.stop()
-    if mode=="Classic" and not ss_file:
-        st.info("DFS Lab-only projections are enabled for Showdown first. Classic still needs the projection file in this V6 test build.")
-        st.stop()
 
     if mode=="Classic":
         try:
             df=prepare_player_pool(dk_file,ss_file); teams=sorted(df["Team"].dropna().unique().tolist())
+            if bool(df.get("Own Estimated",pd.Series([False])).any()):
+                st.info("Using DFS Lab projections — no SaberSim file uploaded. Ownership shown is DFS Lab's estimate, built from projection, salary value and position baselines.")
             st.session_state.setdefault("strategy_master",{}); st.session_state.setdefault("team_strategy_master",{})
             st.session_state.setdefault("classic_projection_overrides",{})
             df["Base Proj"]=pd.to_numeric(df["My Proj"],errors="coerce").fillna(0.0)
@@ -132,10 +131,11 @@ def render_main(settings):
 
             intel=classic_context_evidence(df[["Name","Position","Team","Opponent","Game Info","My Proj"]].copy())
             intel_map=intel.set_index("Name") if not intel.empty else pd.DataFrame()
-            sim_input=df[["Name","Position","Team","Opponent","Matchup","My Proj"]].copy()
+            sim_input=df[["Name","Position","Team","Opponent","Matchup","My Proj"]+ (["Sim Vol"] if "Sim Vol" in df.columns else [])].copy()
             sim_input["DVP Adj %"]=sim_input["Name"].map(intel_map["DVP Adj %"] if not intel.empty else {}).fillna(0.0)
             sim_input["Sim Proj"]=pd.to_numeric(sim_input["My Proj"],errors="coerce").fillna(0.0)*(1+0.50*pd.to_numeric(sim_input["DVP Adj %"],errors="coerce").fillna(0.0)/100.0)
-            sim_table=classic_simulate_slate(sim_input[["Name","Position","Team","Matchup","Sim Proj"]],5000,seed)
+            _sim_cols=["Name","Position","Team","Matchup","Sim Proj"]+([ "Sim Vol"] if "Sim Vol" in sim_input.columns else [])
+            sim_table=classic_simulate_slate(sim_input[_sim_cols],5000,seed)
             thesis_table,thesis_state=classic_strategy_theses(df,intel,sim_table,field_size,payout_style,entry_format)
             classic_qb_ids,qb_plan_table,qb_plan=classic_qb_concentration_plan(df,thesis_table,entry_format)
             classic_qb_ids,qb_plan_table,qb_plan=classic_apply_qb_cap(classic_qb_ids,qb_plan_table,qb_plan,st.session_state.get("classic_qb_cap",0))

@@ -716,10 +716,17 @@ def classic_simulate_slate(sim_df, sims=5000, seed=42):
     tshock={t:rng.normal(0,1,sims) for t in d["Team"].dropna().astype(str).unique().tolist()}
     totals={g:np.zeros(sims) for g in games}
     pos_vol={"QB":0.26,"RB":0.42,"WR":0.50,"TE":0.48,"DST":0.62}
+    has_vol="Sim Vol" in d.columns
     for _,r in d.iterrows():
         g=str(r["Matchup"]); t=str(r["Team"])
         if g not in totals: continue
-        mu=max(float(r["Sim Proj"]),0.05); vol=pos_vol.get(str(r["Position"]).upper(),0.45)
+        mu=max(float(r["Sim Proj"]),0.05)
+        vol=pos_vol.get(str(r["Position"]).upper(),0.45)
+        if has_vol:
+            try:
+                _v=float(r["Sim Vol"])
+                if _v>0: vol=float(min(0.95,max(0.12,_v)))
+            except Exception: pass
         eps=rng.normal(0,1,sims)
         shock=0.13*gshock[g]+0.09*tshock.get(t,0)+vol*eps
         vals=np.maximum(0.0,mu*np.exp(shock-0.5*(vol**2+0.13**2+0.09**2)))
