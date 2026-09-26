@@ -17,7 +17,7 @@ from scipy.sparse import lil_matrix
 
 
 from dfs_lab import styles
-from dfs_lab.config import APP_BUILD, PRIORITY_OPTIONS, ROSTER_SLOTS
+from dfs_lab.config import APP_BUILD, PRIORITY_OPTIONS, ROSTER_SLOTS, git_build_stamp
 from dfs_lab.ui.results import render_results_command_center, postbuild_lineups_context
 from dfs_lab.data import prepare_player_pool, prepare_showdown_pool, apply_projection_overrides, apply_post_edit_availability_gate
 from dfs_lab.classic import (generate_lineups, classic_apply_qb_cap,
@@ -1606,7 +1606,7 @@ def render_main(settings):
 
     st.markdown(styles.MAIN_V634_SHELL_CSS, unsafe_allow_html=True)
 
-    st.caption("DFS LAB · Build the story. Test the lineup. Challenge the field.")
+    st.caption(f"DFS LAB · Build the story. Test the lineup. Challenge the field. · build {git_build_stamp()}")
 
 
     st.markdown(styles.MAIN_DYNAMIC_SHELL_CSS, unsafe_allow_html=True)
