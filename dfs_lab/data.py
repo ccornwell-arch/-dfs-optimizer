@@ -90,29 +90,71 @@ def apply_football_reality_guard(df, salary_col, projection_col, active_col="Act
     out.loc[proj<=0.01,"Role Confidence"]="Inactive / no usable projection"
     out.loc[(proj>0.01)&(sal>0),"Role Confidence"]="Active pool"
 
+    # A player with no usable projection is out before the build. The label and
+    # the flag must agree, so deactivate here instead of labeling only.
+    _no_proj=proj<=0.01
+    out.loc[_no_proj,active_col]=False
+    _no_proj_unexplained=_no_proj&(out["Auto Excluded Reason"].astype(str)=="")
+    out.loc[_no_proj_unexplained,"Auto Excluded Reason"]="No usable projection — auto-excluded before the build"
+
     for team in teams:
         qidx=out.index[out["Team"].astype(str).eq(team)&qb_mask].tolist()
         if not qidx:
             continue
-        # Salary is the strongest slate-specific market signal available in the DK file.
-        # Projection/APG only break ties; this avoids relying on stale historical scoring.
+        # A QB with no usable projection can never be the primary: an injured
+        # "starter" must not keep the primary slot over a healthy backup.
+        # Among QBs with usable projections, salary remains the strongest
+        # slate-specific market signal; projection/APG only break ties.
         primary=max(
             qidx,
             key=lambda i:(
+                1.0 if float(pd.to_numeric(pd.Series([out.loc[i,projection_col]]),errors="coerce").fillna(0).iloc[0])>0.01 else 0.0,
                 float(pd.to_numeric(pd.Series([out.loc[i,salary_col]]),errors="coerce").fillna(0).iloc[0]),
                 float(pd.to_numeric(pd.Series([out.loc[i,projection_col]]),errors="coerce").fillna(0).iloc[0]),
                 float(pd.to_numeric(pd.Series([out.loc[i,"AvgPointsPerGame"] if "AvgPointsPerGame" in out.columns else 0]),errors="coerce").fillna(0).iloc[0])
             )
         )
-        out.loc[primary,"Primary QB"]=True
-        out.loc[primary,"Role Confidence"]="Primary QB"
+        if bool(out.loc[primary,active_col]):
+            out.loc[primary,"Primary QB"]=True
+            out.loc[primary,"Role Confidence"]="Primary QB"
         for i in qidx:
             if i==primary:
+                continue
+            if not bool(out.loc[i,active_col]):
+                # Already out (e.g. no usable projection) — keep that reason
+                # instead of mislabeling an unavailable QB as a healthy backup.
                 continue
             out.loc[i,active_col]=False
             out.loc[i,"Role Confidence"]="Backup QB"
             out.loc[i,"Auto Excluded Reason"]="Backup QB — DFS LAB keeps only the primary QB active by default"
 
+    # Anything already inactive without an explanation (e.g. a pool pre-filter
+    # band) gets one, so the pre-build auto-excluded list is complete.
+    _unexplained=(~out[active_col].astype(bool))&(out["Auto Excluded Reason"].astype(str)=="")
+    out.loc[_unexplained,"Auto Excluded Reason"]="Excluded before the build — projection or salary below the usable minimum"
+
+    return out
+
+def apply_post_edit_availability_gate(df, projection_col="My Proj", active_col="ActiveForBuild", threshold=0.05):
+    """Final safety gate for projection edits made AFTER pool creation.
+
+    User projection overrides (Classic Players tab) and scenario tilts change
+    numbers without rebuilding the pool, so a projection edited to zero must
+    take the player out of the build here. Without this, ActiveForBuild stays
+    True from the original upload and a zeroed player can still be selected.
+    """
+    out=df.copy()
+    if active_col not in out.columns:
+        out[active_col]=True
+    for _col, _default in (("Auto Excluded Reason",""),("Role Confidence","")):
+        if _col not in out.columns:
+            out[_col]=_default
+    proj=pd.to_numeric(out.get(projection_col,0),errors="coerce").fillna(0.0)
+    zeroed=(proj<=threshold)&out[active_col].astype(bool)
+    out.loc[zeroed,active_col]=False
+    out.loc[zeroed,"Role Confidence"]="Unavailable — zero final projection"
+    _unexplained=zeroed&(out["Auto Excluded Reason"].astype(str)=="")
+    out.loc[_unexplained,"Auto Excluded Reason"]="Projection edited to 0 after pool creation — auto-excluded before the build"
     return out
 
 @st.cache_data(ttl=1800, show_spinner=False)

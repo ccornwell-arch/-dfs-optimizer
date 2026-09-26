@@ -18,7 +18,7 @@ from scipy.sparse import lil_matrix
 
 from dfs_lab import styles
 from dfs_lab.config import APP_BUILD, PRIORITY_OPTIONS, ROSTER_SLOTS
-from dfs_lab.data import prepare_player_pool, prepare_showdown_pool, apply_projection_overrides
+from dfs_lab.data import prepare_player_pool, prepare_showdown_pool, apply_projection_overrides, apply_post_edit_availability_gate
 from dfs_lab.classic import (generate_lineups, classic_apply_qb_cap,
     classic_contest_recommendations, classic_context_evidence,
     classic_portfolio_intelligence, classic_postbuild_answer, classic_postbuild_report,
@@ -96,6 +96,10 @@ def render_main(settings):
                     _pid=str(_r["ID"])
                     if _pid in st.session_state["classic_projection_overrides"]:
                         df.at[_i,"My Proj"]=float(st.session_state["classic_projection_overrides"][_pid])
+            # Final safety gate (mirrors the Showdown path): a projection edited
+            # to zero AFTER pool creation must take the player out of the build.
+            # Without this, ActiveForBuild stays True from the original upload.
+            df=apply_post_edit_availability_gate(df,"My Proj","ActiveForBuild",0.05)
             st.session_state.setdefault("classic_ai_chat",[])
             st.session_state.setdefault("classic_ai_model","")
             st.session_state.setdefault("classic_ai_error","")
@@ -317,6 +321,27 @@ def render_main(settings):
                 if int(st.session_state.get("classic_qb_cap",0) or 0)>0:
                     st.info("User QB cap · no more than "+str(int(st.session_state["classic_qb_cap"]))+" quarterbacks · applies to the next build")
                 st.info("Current rule set · QB + "+str(st.session_state["classic_qb_stack"])+" pass catcher(s) · Bring-back "+str(st.session_state["classic_bringback"])+" · Min salary $"+f"{int(st.session_state['classic_min_salary']):,}"+" · Max "+str(st.session_state["classic_max_game"])+" from one game")
+                # "How can we know this beforehand": who DFS LAB auto-excluded and
+                # why, shown BEFORE the Generate button. Reuses the guard's own
+                # Auto Excluded Reason column — no new plumbing.
+                _auto=df[~df["ActiveForBuild"].astype(bool)].copy()
+                _auto=_auto[_auto["Auto Excluded Reason"].astype(str).str.strip().ne("")]
+                with st.expander(f"Auto-excluded by DFS LAB ({len(_auto)}) — who's out before you build",expanded=False):
+                    if _auto.empty:
+                        st.caption("Nothing auto-excluded. The full player pool is available for this build.")
+                    else:
+                        st.dataframe(
+                            _auto[["Name","Position","Team","Salary","Auto Excluded Reason"]].rename(columns={"Auto Excluded Reason":"Why"}),
+                            hide_index=True,use_container_width=True,
+                            column_config={
+                                "Name":st.column_config.TextColumn("Player",width=170),
+                                "Position":st.column_config.TextColumn("Pos",width=55),
+                                "Team":st.column_config.TextColumn("Team",width=65),
+                                "Salary":st.column_config.NumberColumn("Salary",format="$%d",width=80),
+                                "Why":st.column_config.TextColumn("Why auto-excluded",width=420),
+                            },
+                        )
+                    st.caption("Backup QBs, players with no usable projection, and live OUT/inactive statuses are removed before the build — no manual exclusion needed.")
                 build_btn=st.button(f"⚡ GENERATE {lineup_count} RATED LINEUPS",type="primary",use_container_width=True,key="v4_classic_build")
 
             with tabs[2]:
