@@ -1344,136 +1344,7 @@ def classic_postbuild_report(packet):
 
     return findings[:6]
 
-def classic_postbuild_answer(question, packet, history=None):
-    """Reliable evidence-backed Q&A about the portfolio that was actually built."""
-    q=str(question or "").strip()
-    ql=q.lower()
-    p=packet.get("portfolio",{}) or {}
-    contest=packet.get("contest",{}) or {}
-    players=packet.get("context_players",[]) or []
-    if not p.get("built"):
-        return "Build lineups first. Post-Build Coach only answers from the portfolio DFS LAB actually created."
-
-    entry=str(contest.get("entry_format","this contest"))
-    field=int(contest.get("field_size",0) or 0)
-    payout=str(contest.get("payout",""))
-    n=int(p.get("lineups",0) or 0)
-
-    # Resolve player by full name or unique last name.
-    player=None
-    norm=re.sub(r"[^a-z0-9 ]+"," ",ql)
-    for x in players:
-        nm=str(x.get("Name","")).strip()
-        if nm and re.sub(r"[^a-z0-9 ]+"," ",nm.lower()) in norm:
-            player=x; break
-    if player is None:
-        words=set(norm.split()); hits=[]
-        for x in players:
-            nm=str(x.get("Name","")).strip()
-            parts=[z for z in re.sub(r"[^a-z0-9 ]+"," ",nm.lower()).split() if len(z)>=3]
-            if parts and parts[-1] in words: hits.append(x)
-        if len(hits)==1: player=hits[0]
-
-    if player is not None:
-        nm=str(player.get("Name",""))
-        exp=next((x for x in p.get("top_exposures",[]) if str(x.get("player",""))==nm),None)
-        if exp is None:
-            # Search full overweight/underweight lists too.
-            exp=next((x for x in (p.get("most_overweight",[])+p.get("most_underweight",[])) if str(x.get("player",""))==nm),None)
-        field_own=float(player.get("My Own",0) or 0)
-        proj=float(player.get("My Proj",0) or 0)
-        sal=int(player.get("Salary",0) or 0)
-        if exp:
-            my=float(exp.get("exposure_pct",0) or 0); lev=float(exp.get("leverage_pct",my-field_own) or 0)
-            return (f"**{nm} is in {my:.0f}% of this portfolio versus {field_own:.1f}% projected field ownership** ({lev:+.1f} pts of leverage). "
-                    f"DFS LAB is getting there from a {proj:.1f}-point projection at ${sal:,}, plus the lineup combinations he fits. "
-                    "The key question is whether that exposure is supported by ceiling/correlation or is simply being repeated because he fits salary. "
-                    "If you ask 'too much?' I would judge that against the repeated cores and game stories he appears in.")
-        return (f"**{nm}** is projected for {proj:.1f} points at ${sal:,} with {field_own:.1f}% projected ownership, "
-                "but he is not among the portfolio's highest exposures. That means DFS LAB is not leaning heavily on him in the current build.")
-
-    # Winner-take-all / how different.
-    if any(x in ql for x in ["winner take all","winner-take-all","how different","different do i","unique do i","first place"]):
-        pairs=p.get("repeated_pairs",[]) or []
-        top_pair=pairs[0] if pairs else None
-        core=(f" Your most repeated two-player core is **{' + '.join(top_pair['players'])} at {top_pair['portfolio_pct']:.0f}%**." if top_pair else "")
-        return (f"For **{entry} in a {field:,}-entry {payout} contest**, you do **not** need nine low-owned players. "
-                "You need one lineup with a credible first-place ceiling and at least one meaningful way it differs from the common field shell. "
-                "That difference can come from the exact stack combination, WR/RB/TE FLEX construction, direct leverage against chalk, or a lower-owned ceiling play."
-                +core+
-                " Strong chalk is fine if the rest of the lineup tells a different story. Random contrarianism is not the goal.")
-
-    if "qb" in ql or "quarterback" in ql:
-        qbs=p.get("qb_usage",[]) or []
-        txt=", ".join(f"{x['qb']} {x['exposure_pct']:.0f}%" for x in qbs[:8]) or "none"
-        return (f"This {n}-lineup candidate portfolio uses **{p.get('unique_qbs',0)} QBs**: {txt}. "
-                f"For {entry}, that spread is useful for exploring alternatives, but your final entry should express one QB/game thesis. "
-                "The reason to keep a QB should be his ceiling plus the quality and ownership of his exact stack—not QB ownership by itself.")
-
-    if "stack" in ql or "pass catcher" in ql:
-        sm=p.get("stack_mix",{}) or {}
-        return (f"Current QB-stack mix is **{sm}**. The number is descriptive, not automatically optimal. "
-                "QB+2 should be favored when the passing offense is condensed or when the second receiver increases your chance of capturing the slate-breaking pass catcher. "
-                "QB+1 is preferable when the second teammate is weak and forcing him costs a materially better one-off.")
-
-    if "bring" in ql or "run back" in ql or "runback" in ql:
-        bm=p.get("bringback_mix",{}) or {}
-        return (f"Current bring-back mix is **{bm}**. A bring-back should exist because that opponent helps the stack keep scoring, not because a rule says every stack needs one. "
-                "On soft-pricing slates, DFS LAB should be willing to omit a weak opponent piece when a much stronger one-off preserves more ceiling.")
-
-    if "flex" in ql or "construction" in ql:
-        fm=p.get("flex_mix_pct",{}) or {}
-        return (f"Your current FLEX construction is **{fm}**. This is one of the cleanest places to look for leverage because roster shape can be different even when individual players are not. "
-                "DFS LAB should compare median projection with ceiling here; a WR can trail an RB in median while still offering the better tournament-separating outcome.")
-
-    if any(x in ql for x in ["chalk","chalky","ownership","leverage","different"]):
-        ow=p.get("most_overweight",[])[:4]; uw=p.get("most_underweight",[])[:4]
-        owtxt=", ".join(f"{x['player']} {x['exposure_pct']:.0f}% vs {x['field_own_pct']:.0f}%" for x in ow) or "none"
-        uwtxt=", ".join(f"{x['player']} {x['exposure_pct']:.0f}% vs {x['field_own_pct']:.0f}%" for x in uw) or "none"
-        return (f"Your biggest current overweights are **{owtxt}**. Biggest underweights are **{uwtxt}**. "
-                "Those differences only matter if the overweight players have real ceiling or direct leverage. I would not lower exposure just to make the lineup look contrarian.")
-
-    if any(x in ql for x in ["core","repeat","same","concentrated","spread"]):
-        pairs=p.get("repeated_pairs",[])[:4]
-        txt="; ".join(f"{' + '.join(x['players'])} {x['portfolio_pct']:.0f}%" for x in pairs) or "none"
-        return (f"The most repeated two-player cores are **{txt}**. Repetition is fine when it represents conviction, but if several lineups share the same core *and* the same game thesis, "
-                "they are less diversified than their unique-player count suggests.")
-
-    if any(x in ql for x in ["salary","left over","leftover"]):
-        sl=p.get("salary_left",{}) or {}
-        return (f"Average salary left is **${float(sl.get('mean') or 0):,.0f}** with a median of **${float(sl.get('median') or 0):,.0f}**. "
-                "On Classic slates, unused salary is not leverage by itself. It only matters if leaving salary produces a stronger, less common construction without sacrificing too much ceiling.")
-
-    if any(x in ql for x in ["critique","change","wrong","risk","like","dislike","good"]):
-        findings=classic_postbuild_report(packet)
-        if findings:
-            return "\n\n".join(f"**{title}:** {body}" for title,body in findings[:5])
-
-    findings=classic_postbuild_report(packet)
-    return ("Here is what I can defend from the current build:\n\n"+
-            "\n\n".join(f"**{title}:** {body}" for title,body in findings[:4])+
-            "\n\nAsk me **why** about a player, QB concentration, stack mix, bring-backs, FLEX construction, ownership/leverage, repeated cores, or winner-take-all strategy.")
-
-def classic_ai_slate_answer(question, packet, history=None):
-    """Contest-aware DFS LAB assistant.
-
-    Prefer the OpenAI model when available. If the API is unavailable, the local fallback
-    still answers the user's ACTUAL question from Slate Intel instead of repeating a canned
-    recommendation block.
-    """
-    q=str(question or "").strip()
-    ql=q.lower()
-    try:
-        from openai import OpenAI
-        try: api_key=st.secrets.get("OPENAI_API_KEY",None)
-        except Exception: api_key=os.getenv("OPENAI_API_KEY")
-        if api_key:
-            instructions="""You are DFS LAB Classic Slate Intel, an NFL DraftKings strategy assistant.
-Answer the user's exact question first. Do not dump generic recommendations unless they are relevant.
-Use the supplied slate packet and contest context. Be willing to disagree with DFS LAB's default settings
-when the evidence supports it. Explain tradeoffs rather than pretending there is one correct DFS answer.
-
-DFS PRO PLAYBOOK:
+_DFS_PRO_PLAYBOOK = """DFS PRO PLAYBOOK:
 - Contest size changes strategy. A 200-person Single Entry should not be built like a 150,000-entry GPP.
 - Low-entry contests should take stands when evidence separates. Large portfolios can spread more.
 - In 20-Max, do not scatter across 10-12+ quarterbacks just because they are viable. Concentrate enough
@@ -1776,7 +1647,223 @@ DFS PRO PLAYBOOK:
 - Late swap matters when live results are available: lineups doing well can move toward safer/chalkier paths;
   lineups behind can pivot toward lower-owned ceiling outcomes.
 
-For Single Entry and 3-Max, discuss concentration and taking stands when evidence separates. For 20-Max
+"""
+
+
+def classic_postbuild_llm_answer(question, packet, lineups_ctx, history=None):
+    """Conversational post-build coach backed by the OpenAI model.
+
+    Returns the model's answer, or None when no API key is configured or the
+    call fails. The caller falls back to the local template responder on None,
+    so this function never leaves the user without an answer.
+    """
+    q = str(question or "").strip()
+    if not q:
+        return None
+    try:
+        from openai import OpenAI
+        try:
+            api_key = st.secrets.get("OPENAI_API_KEY", None)
+        except Exception:
+            api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            return None
+        instructions = (
+            "You are DFS LAB's post-build coach, an NFL DraftKings tournament strategy assistant. "
+            "The build step is done: you are reviewing a portfolio of lineups DFS LAB actually built. "
+            "Answer the user's EXACT question first, in direct conversational language. "
+            "Ground EVERY claim in the supplied PORTFOLIO DATA (lineup ranks, rosters, projections, ceilings, "
+            "game-script stories, grades, game worlds, exposures). Never invent a lineup, player, number, or game. "
+            "Refer to lineups by their rank (#1, #2, ...). When asked 'which lineup', name the rank and explain why "
+            "using its stack, game story, ceiling sources, and leverage. "
+            "Be willing to critique the build when the data supports it — do not cheerlead. "
+            "Keep answers tight: a few short paragraphs max. Use specific names and numbers, not generic advice.\n\n"
+            + _DFS_PRO_PLAYBOOK
+        )
+        recent_history = (history or [])[-8:]
+        history_text = "\n".join(
+            f"USER: {x[0]}\nDFS LAB: {x[1]}"
+            for x in recent_history if isinstance(x, (list, tuple)) and len(x) >= 2
+        )
+        p = packet or {}
+        portfolio = p.get("portfolio", {}) or {}
+        contest = p.get("contest", {}) or {}
+        slim = {
+            "contest": contest,
+            "portfolio": {k: portfolio.get(k) for k in (
+                "lineups", "unique_qbs", "qb_usage", "stack_mix", "bringback_mix",
+                "flex_mix_pct", "salary_left", "avg_player_ownership",
+            )},
+            "top_exposures": (portfolio.get("top_exposures", []) or [])[:15],
+            "most_overweight": (portfolio.get("most_overweight", []) or [])[:8],
+            "most_underweight": (portfolio.get("most_underweight", []) or [])[:8],
+            "repeated_pairs": (portfolio.get("repeated_pairs", []) or [])[:5],
+        }
+        ctx = (lineups_ctx or "").strip() or "(No detailed lineup data supplied; answer from the portfolio packet.)"
+        prompt = (
+            f"{instructions}\n\nPORTFOLIO DATA (built lineups):\n{ctx}\n\n"
+            f"GAME WORLDS / EXPOSURES / CONTEST:\n{json.dumps(slim, default=str)}\n\n"
+            f"RECENT CONVERSATION:\n{history_text}\n\nUSER QUESTION:\n{q}"
+        )
+        try:
+            model_name = st.secrets.get("OPENAI_MODEL", None)
+        except Exception:
+            model_name = None
+        model_name = model_name or os.getenv("OPENAI_MODEL") or "gpt-5.6-sol"
+        resp = OpenAI(api_key=api_key).responses.create(
+            model=model_name, reasoning={"effort": "medium"}, input=prompt, max_output_tokens=1200)
+        st.session_state["classic_ai_model"] = model_name
+        if resp.output_text:
+            st.session_state.pop("classic_ai_error", None)
+            return resp.output_text
+    except Exception as e:
+        try:
+            st.session_state["classic_ai_error"] = f"{type(e).__name__}: {str(e)[:500]}"
+        except Exception:
+            pass
+    return None
+
+
+def classic_postbuild_answer(question, packet, history=None, lineups_ctx=None):
+    """Reliable evidence-backed Q&A about the portfolio that was actually built."""
+    q=str(question or "").strip()
+    ql=q.lower()
+    p=packet.get("portfolio",{}) or {}
+    contest=packet.get("contest",{}) or {}
+    players=packet.get("context_players",[]) or []
+    if not p.get("built"):
+        return "Build lineups first. Post-Build Coach only answers from the portfolio DFS LAB actually created."
+
+    # Conversational LLM coach first when an API key is configured; the local
+    # evidence-backed templates below are the fallback.
+    if q:
+        try:
+            llm = classic_postbuild_llm_answer(q, packet, lineups_ctx, history)
+        except Exception:
+            llm = None
+        if llm:
+            return llm
+
+    entry=str(contest.get("entry_format","this contest"))
+    field=int(contest.get("field_size",0) or 0)
+    payout=str(contest.get("payout",""))
+    n=int(p.get("lineups",0) or 0)
+
+    # Resolve player by full name or unique last name.
+    player=None
+    norm=re.sub(r"[^a-z0-9 ]+"," ",ql)
+    for x in players:
+        nm=str(x.get("Name","")).strip()
+        if nm and re.sub(r"[^a-z0-9 ]+"," ",nm.lower()) in norm:
+            player=x; break
+    if player is None:
+        words=set(norm.split()); hits=[]
+        for x in players:
+            nm=str(x.get("Name","")).strip()
+            parts=[z for z in re.sub(r"[^a-z0-9 ]+"," ",nm.lower()).split() if len(z)>=3]
+            if parts and parts[-1] in words: hits.append(x)
+        if len(hits)==1: player=hits[0]
+
+    if player is not None:
+        nm=str(player.get("Name",""))
+        exp=next((x for x in p.get("top_exposures",[]) if str(x.get("player",""))==nm),None)
+        if exp is None:
+            # Search full overweight/underweight lists too.
+            exp=next((x for x in (p.get("most_overweight",[])+p.get("most_underweight",[])) if str(x.get("player",""))==nm),None)
+        field_own=float(player.get("My Own",0) or 0)
+        proj=float(player.get("My Proj",0) or 0)
+        sal=int(player.get("Salary",0) or 0)
+        if exp:
+            my=float(exp.get("exposure_pct",0) or 0); lev=float(exp.get("leverage_pct",my-field_own) or 0)
+            return (f"**{nm} is in {my:.0f}% of this portfolio versus {field_own:.1f}% projected field ownership** ({lev:+.1f} pts of leverage). "
+                    f"DFS LAB is getting there from a {proj:.1f}-point projection at ${sal:,}, plus the lineup combinations he fits. "
+                    "The key question is whether that exposure is supported by ceiling/correlation or is simply being repeated because he fits salary. "
+                    "If you ask 'too much?' I would judge that against the repeated cores and game stories he appears in.")
+        return (f"**{nm}** is projected for {proj:.1f} points at ${sal:,} with {field_own:.1f}% projected ownership, "
+                "but he is not among the portfolio's highest exposures. That means DFS LAB is not leaning heavily on him in the current build.")
+
+    # Winner-take-all / how different.
+    if any(x in ql for x in ["winner take all","winner-take-all","how different","different do i","unique do i","first place"]):
+        pairs=p.get("repeated_pairs",[]) or []
+        top_pair=pairs[0] if pairs else None
+        core=(f" Your most repeated two-player core is **{' + '.join(top_pair['players'])} at {top_pair['portfolio_pct']:.0f}%**." if top_pair else "")
+        return (f"For **{entry} in a {field:,}-entry {payout} contest**, you do **not** need nine low-owned players. "
+                "You need one lineup with a credible first-place ceiling and at least one meaningful way it differs from the common field shell. "
+                "That difference can come from the exact stack combination, WR/RB/TE FLEX construction, direct leverage against chalk, or a lower-owned ceiling play."
+                +core+
+                " Strong chalk is fine if the rest of the lineup tells a different story. Random contrarianism is not the goal.")
+
+    if "qb" in ql or "quarterback" in ql:
+        qbs=p.get("qb_usage",[]) or []
+        txt=", ".join(f"{x['qb']} {x['exposure_pct']:.0f}%" for x in qbs[:8]) or "none"
+        return (f"This {n}-lineup candidate portfolio uses **{p.get('unique_qbs',0)} QBs**: {txt}. "
+                f"For {entry}, that spread is useful for exploring alternatives, but your final entry should express one QB/game thesis. "
+                "The reason to keep a QB should be his ceiling plus the quality and ownership of his exact stack—not QB ownership by itself.")
+
+    if "stack" in ql or "pass catcher" in ql:
+        sm=p.get("stack_mix",{}) or {}
+        return (f"Current QB-stack mix is **{sm}**. The number is descriptive, not automatically optimal. "
+                "QB+2 should be favored when the passing offense is condensed or when the second receiver increases your chance of capturing the slate-breaking pass catcher. "
+                "QB+1 is preferable when the second teammate is weak and forcing him costs a materially better one-off.")
+
+    if "bring" in ql or "run back" in ql or "runback" in ql:
+        bm=p.get("bringback_mix",{}) or {}
+        return (f"Current bring-back mix is **{bm}**. A bring-back should exist because that opponent helps the stack keep scoring, not because a rule says every stack needs one. "
+                "On soft-pricing slates, DFS LAB should be willing to omit a weak opponent piece when a much stronger one-off preserves more ceiling.")
+
+    if "flex" in ql or "construction" in ql:
+        fm=p.get("flex_mix_pct",{}) or {}
+        return (f"Your current FLEX construction is **{fm}**. This is one of the cleanest places to look for leverage because roster shape can be different even when individual players are not. "
+                "DFS LAB should compare median projection with ceiling here; a WR can trail an RB in median while still offering the better tournament-separating outcome.")
+
+    if any(x in ql for x in ["chalk","chalky","ownership","leverage","different"]):
+        ow=p.get("most_overweight",[])[:4]; uw=p.get("most_underweight",[])[:4]
+        owtxt=", ".join(f"{x['player']} {x['exposure_pct']:.0f}% vs {x['field_own_pct']:.0f}%" for x in ow) or "none"
+        uwtxt=", ".join(f"{x['player']} {x['exposure_pct']:.0f}% vs {x['field_own_pct']:.0f}%" for x in uw) or "none"
+        return (f"Your biggest current overweights are **{owtxt}**. Biggest underweights are **{uwtxt}**. "
+                "Those differences only matter if the overweight players have real ceiling or direct leverage. I would not lower exposure just to make the lineup look contrarian.")
+
+    if any(x in ql for x in ["core","repeat","same","concentrated","spread"]):
+        pairs=p.get("repeated_pairs",[])[:4]
+        txt="; ".join(f"{' + '.join(x['players'])} {x['portfolio_pct']:.0f}%" for x in pairs) or "none"
+        return (f"The most repeated two-player cores are **{txt}**. Repetition is fine when it represents conviction, but if several lineups share the same core *and* the same game thesis, "
+                "they are less diversified than their unique-player count suggests.")
+
+    if any(x in ql for x in ["salary","left over","leftover"]):
+        sl=p.get("salary_left",{}) or {}
+        return (f"Average salary left is **${float(sl.get('mean') or 0):,.0f}** with a median of **${float(sl.get('median') or 0):,.0f}**. "
+                "On Classic slates, unused salary is not leverage by itself. It only matters if leaving salary produces a stronger, less common construction without sacrificing too much ceiling.")
+
+    if any(x in ql for x in ["critique","change","wrong","risk","like","dislike","good"]):
+        findings=classic_postbuild_report(packet)
+        if findings:
+            return "\n\n".join(f"**{title}:** {body}" for title,body in findings[:5])
+
+    findings=classic_postbuild_report(packet)
+    return ("Here is what I can defend from the current build:\n\n"+
+            "\n\n".join(f"**{title}:** {body}" for title,body in findings[:4])+
+            "\n\nAsk me **why** about a player, QB concentration, stack mix, bring-backs, FLEX construction, ownership/leverage, repeated cores, or winner-take-all strategy.")
+
+def classic_ai_slate_answer(question, packet, history=None):
+    """Contest-aware DFS LAB assistant.
+
+    Prefer the OpenAI model when available. If the API is unavailable, the local fallback
+    still answers the user's ACTUAL question from Slate Intel instead of repeating a canned
+    recommendation block.
+    """
+    q=str(question or "").strip()
+    ql=q.lower()
+    try:
+        from openai import OpenAI
+        try: api_key=st.secrets.get("OPENAI_API_KEY",None)
+        except Exception: api_key=os.getenv("OPENAI_API_KEY")
+        if api_key:
+            instructions=("""You are DFS LAB Classic Slate Intel, an NFL DraftKings strategy assistant.
+Answer the user's exact question first. Do not dump generic recommendations unless they are relevant.
+Use the supplied slate packet and contest context. Be willing to disagree with DFS LAB's default settings
+when the evidence supports it. Explain tradeoffs rather than pretending there is one correct DFS answer.
+
+""" + _DFS_PRO_PLAYBOOK + """For Single Entry and 3-Max, discuss concentration and taking stands when evidence separates. For 20-Max
 and 150-Max, discuss portfolio coverage and diversification. A thesis may originate from a QB, receiver,
 RB, or game environment. Distinguish field ownership from user exposure. Never invent injuries, Vegas,
 weather, travel, or facts missing from the packet. When the user challenges a number (for example, '24 QBs
@@ -1784,7 +1871,7 @@ is too many'), directly evaluate that number using the QB concentration evidence
 program should change or what evidence would justify keeping it. When evaluating lineups, think in terms
 of the STORY the lineup tells, whether that story is coherent, whether ownership is concentrated in the
 same obvious places as the field, and whether the portfolio gives enough combinations to its strongest
-theses."""
+theses.""")
             recent_history=(history or [])[-8:]
             history_text="\n".join([f"USER: {x[0]}\nDFS LAB: {x[1]}" for x in recent_history if isinstance(x,(list,tuple)) and len(x)>=2])
             prompt=f"{instructions}\n\nSLATE + PORTFOLIO PACKET:\n{json.dumps(packet,default=str)}\n\nRECENT CONVERSATION:\n{history_text}\n\nUSER QUESTION:\n{q}"
