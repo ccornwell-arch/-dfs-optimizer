@@ -22,7 +22,7 @@ from dfs_lab.data import prepare_player_pool, prepare_showdown_pool, apply_proje
 from dfs_lab.classic import (generate_lineups, classic_apply_qb_cap,
     classic_contest_recommendations, classic_context_evidence,
     classic_portfolio_intelligence, classic_postbuild_answer, classic_postbuild_report,
-    classic_qb_concentration_plan, topdown_simulate_slate, lineup_sim_equity, classic_strategy_theses,
+    classic_qb_concentration_plan, topdown_simulate_slate, lineup_sim_equity, classic_strategy_theses, bringback_worthy_teams,
     calculate_exposure_table)
 from dfs_lab.showdown import (apply_context_engine, apply_showdown_scenario,
     generate_showdown_lineups, infer_score_script, script_build_adjustments,
@@ -135,6 +135,9 @@ def render_main(settings):
             sim_table=sim_result["game_table"]
             player_sim=sim_result["player_stats"]
             sim_worlds=sim_result["worlds"]
+            bb_worthy=bringback_worthy_teams(df)
+            _slate_teams=sorted(set(df["Team"].astype(str).str.upper().tolist()))
+            _bb_weak=[t for t in _slate_teams if t not in bb_worthy]
             thesis_table,thesis_state=classic_strategy_theses(df,intel,sim_table,field_size,payout_style,entry_format)
             classic_qb_ids,qb_plan_table,qb_plan=classic_qb_concentration_plan(df,thesis_table,entry_format)
             classic_qb_ids,qb_plan_table,qb_plan=classic_apply_qb_cap(classic_qb_ids,qb_plan_table,qb_plan,st.session_state.get("classic_qb_cap",0))
@@ -410,7 +413,9 @@ def render_main(settings):
                 with r1:
                     min_salary=st.slider("Minimum salary",44000,50000,int(st.session_state["classic_min_salary"]),100,key="classic_min_salary")
                     qb_stack=st.selectbox("QB pass catchers",[1,2,3],key="classic_qb_stack",help="Minimum same-team WR/TE players paired with the QB.")
-                    bringback_mode=st.selectbox("Bring-back",["Optional","Required","None"],key="classic_bringback",help="Required forces at least one opposing RB/WR/TE with the QB stack.")
+                    bringback_mode=st.selectbox("Bring-back",["Optional","Required","None"],key="classic_bringback",help="Required forces at least one opposing RB/WR/TE with the QB stack — but only from offenses good enough to shoot out (league-average scoring or better).")
+                    if _bb_weak:
+                        st.caption(f"No forced bring-backs from weak offenses: {', '.join(_bb_weak)}. A bring-back only pays when the other side can score.")
                 with r2:
                     max_players_team=st.selectbox("Max players from one team",[4,5,6,7,8,9],key="classic_max_team")
                     max_players_game=st.selectbox("Max players from one game",[4,5,6,7,8,9],key="classic_max_game")
@@ -458,7 +463,8 @@ def render_main(settings):
                     flex_mix=({"RB":int(st.session_state["classic_flex_rb"]),"WR":int(st.session_state["classic_flex_wr"]),"TE":int(st.session_state["classic_flex_te"])}
                               if bool(st.session_state.get("classic_flex_control",False))
                               and int(st.session_state["classic_flex_rb"])+int(st.session_state["classic_flex_wr"])+int(st.session_state["classic_flex_te"])==100
-                              else None)
+                              else None),
+                    bringback_worthy=bb_worthy
                 )
                 st.session_state["classic_result_v4"]=res
                 # Slate Intel / Post-Build Coach renders earlier in the script than the Build tab.
@@ -537,7 +543,8 @@ def render_main(settings):
                                         flex_mix=({"RB":int(st.session_state["classic_flex_rb"]),"WR":int(st.session_state["classic_flex_wr"]),"TE":int(st.session_state["classic_flex_te"])}
                                                   if bool(st.session_state.get("classic_flex_control",False))
                                                   and int(st.session_state["classic_flex_rb"])+int(st.session_state["classic_flex_wr"])+int(st.session_state["classic_flex_te"])==100
-                                                  else None)
+                                                  else None),
+                                        bringback_worthy=bb_worthy
                                     )
                                 st.session_state["classic_result_v4"]=new_res
                                 st.rerun()
@@ -596,7 +603,8 @@ def render_main(settings):
                                     max_players_game=int(st.session_state["classic_max_game"]),
                                     max_te=int(st.session_state["classic_max_te"]),
                                     allow_qb_with_rb=bool(st.session_state["classic_allow_qb_rb"]),
-                                    allowed_qb_ids=classic_qb_ids
+                                    allowed_qb_ids=classic_qb_ids,
+                                    bringback_worthy=bb_worthy
                                 )
                             st.session_state["classic_result_v4"]=new_res
                             st.success("Exposure changes applied and the portfolio was rebuilt.")
