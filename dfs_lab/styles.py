@@ -1238,5 +1238,85 @@ table.rcc-roster tr:last-child td{border-bottom:0;}
 [data-testid="stNumberInputStepDown"]:hover,[data-testid="stNumberInputStepUp"]:hover{
   background:var(--rcc-accent-dim)!important;
 }
+/* ============================================================
+   Readability + sticky-tabs hardening.
+   These selectors beat the legacy light-theme layers on specificity
+   (via #root), so the dark command-center look holds regardless of
+   injection order. Injected last in render_main.
+   ============================================================ */
+/* ---------- sticky primary tab bar: always reachable ---------- */
+html body [data-testid="stTabs"]:not(.st-key-sd_results_hub) [role="tablist"],
+html body [data-testid="stTabs"]:not(.st-key-sd_results_hub) [data-baseweb="tab-list"]{
+  position:sticky!important;top:0!important;z-index:999999!important;
+  background:#101418!important;
+  backdrop-filter:none!important;-webkit-backdrop-filter:none!important;
+  overflow-x:auto!important;flex-wrap:nowrap!important;
+}
+/* the showdown results-hub tabs stay in normal flow (explicitly non-sticky) */
+html body .st-key-sd_results_hub [role="tablist"],
+html body .st-key-sd_results_hub [data-baseweb="tab-list"]{
+  position:relative!important;top:auto!important;
+}
+/* ---------- expanders: definitive dark ---------- */
+html body #root [data-testid="stAppViewContainer"] [data-testid="stExpander"],
+html body #root [data-testid="stAppViewContainer"] [data-testid="stExpander"]>details,
+html body #root [data-testid="stAppViewContainer"] [data-testid="stExpander"]>details>div{
+  background:var(--rcc-panel)!important;border-color:var(--rcc-line)!important;
+}
+html body #root [data-testid="stAppViewContainer"] [data-testid="stExpander"] summary,
+html body #root [data-testid="stAppViewContainer"] [data-testid="stExpander"] summary:hover,
+html body #root [data-testid="stAppViewContainer"] details summary,
+html body #root [data-testid="stAppViewContainer"] details summary:hover{
+  background:#1a2430!important;background-image:none!important;
+  border-bottom:1px solid var(--rcc-line)!important;border-radius:12px!important;
+  color:#eef4fa!important;-webkit-text-fill-color:#eef4fa!important;
+}
+html body #root [data-testid="stAppViewContainer"] [data-testid="stExpander"] summary *,
+html body #root [data-testid="stAppViewContainer"] details summary *{
+  color:#eef4fa!important;-webkit-text-fill-color:#eef4fa!important;opacity:1!important;
+}
+html body #root [data-testid="stAppViewContainer"] [data-testid="stExpander"]>details>div{
+  padding-top:14px!important;
+}
+/* ---------- selects: definitive dark ---------- */
+html body #root [data-testid="stSelectbox"] [data-baseweb="select"]>div,
+html body #root [data-testid="stAppViewContainer"] [data-baseweb="select"]>div{
+  background:#131a23!important;border:1px solid var(--rcc-line2)!important;
+  color:var(--rcc-text)!important;-webkit-text-fill-color:var(--rcc-text)!important;
+}
+html body #root [data-testid="stSelectbox"] [data-baseweb="select"] span,
+html body #root [data-testid="stSelectbox"] [data-baseweb="select"] svg{
+  color:var(--rcc-text)!important;-webkit-text-fill-color:var(--rcc-text)!important;
+  fill:var(--rcc-text)!important;
+}
+/* ---------- download buttons: unmissable ---------- */
+html body #root [data-testid="stDownloadButton"]>button{
+  background:linear-gradient(100deg,#1d4ed8,#2563eb)!important;
+  border:1px solid #60a5fa!important;min-height:52px!important;font-size:1rem!important;
+}
+html body #root [data-testid="stDownloadButton"]>button,
+html body #root [data-testid="stDownloadButton"]>button *{
+  color:#ffffff!important;-webkit-text-fill-color:#ffffff!important;opacity:1!important;
+}
+/* ---------- results data grids: bright, larger headers ---------- */
+.rcc-scroll-x{overflow-x:auto!important;-webkit-overflow-scrolling:touch!important;}
+table.rcc-grid{width:100%;border-collapse:collapse;font-size:.88rem;min-width:640px;}
+table.rcc-grid th{text-align:left;font-size:.78rem;font-weight:800;letter-spacing:.05em;
+  color:#e6eef8;padding:10px;border-bottom:2px solid var(--rcc-line2);
+  background:#1a2430;white-space:nowrap;}
+table.rcc-grid th.num,table.rcc-grid td.num{text-align:right;font-variant-numeric:tabular-nums;}
+table.rcc-grid td{padding:9px 10px;border-bottom:1px solid var(--rcc-line);
+  color:#eef3f8;white-space:nowrap;}
+table.rcc-grid td.wrap{white-space:normal;min-width:220px;}
+table.rcc-grid td b{color:#fff;}
+table.rcc-grid tr:last-child td{border-bottom:0;}
+.rcc-cur-player{background:var(--rcc-panel2);border:1px solid var(--rcc-line2);border-radius:12px;
+  padding:14px 16px;font-size:.95rem;color:var(--rcc-text);line-height:1.4;}
+.rcc-cur-player b{color:#fff;font-size:1.05rem;}
+.rcc-swap-head{margin:28px 0 12px;font-size:1rem;}
+/* lineup-count pill: keep the trailing span bright on the dark pill */
+html body #root .lineup-count-readout{color:var(--rcc-text)!important;-webkit-text-fill-color:var(--rcc-text)!important;}
+html body #root .lineup-count-readout span{color:var(--rcc-text)!important;-webkit-text-fill-color:var(--rcc-text)!important;}
+html body #root .lineup-count-readout b{color:var(--rcc-accent2)!important;-webkit-text-fill-color:var(--rcc-accent2)!important;}
 </style>
 """
