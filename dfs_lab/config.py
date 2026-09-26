@@ -1,6 +1,27 @@
 """Moved verbatim from streamlit_app.py (refactor/modularize). No logic changes."""
 
+import subprocess
+from functools import lru_cache
+
 APP_BUILD = "2026.09.24 · Lineup Why Drawer"
+
+
+@lru_cache(maxsize=1)
+def git_build_stamp():
+    """Short git commit hash of the deployed checkout, for the app footer.
+
+    Lets the user confirm which build is live. Never raises; returns
+    "unknown" when git is unavailable (e.g. non-git installs).
+    """
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, timeout=5,
+        )
+        h = (out.stdout or "").strip()
+        return h if h else "unknown"
+    except Exception:
+        return "unknown"
 ROSTER_SLOTS = ["QB", "RB1", "RB2", "WR1", "WR2", "WR3", "TE", "FLEX", "DST"]
 PRIORITY_OPTIONS = ["Core", "Like", "Neutral", "Fade", "Exclude"]
 PRIORITY_BONUS = {"Core": 2.8, "Like": 1.35, "Neutral": 0.0, "Fade": -1.5, "Exclude": -100.0}
