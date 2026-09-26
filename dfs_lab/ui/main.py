@@ -18,11 +18,12 @@ from scipy.sparse import lil_matrix
 
 from dfs_lab import styles
 from dfs_lab.config import APP_BUILD, PRIORITY_OPTIONS, ROSTER_SLOTS
+from dfs_lab.ui.results import render_results_command_center
 from dfs_lab.data import prepare_player_pool, prepare_showdown_pool, apply_projection_overrides, apply_post_edit_availability_gate
 from dfs_lab.classic import (generate_lineups, classic_apply_qb_cap,
     classic_contest_recommendations, classic_context_evidence,
     classic_portfolio_intelligence, classic_postbuild_answer, classic_postbuild_report,
-    classic_qb_concentration_plan, topdown_simulate_slate, lineup_sim_equity, classic_strategy_theses, bringback_worthy_teams,
+    classic_qb_concentration_plan, topdown_simulate_slate, classic_strategy_theses, bringback_worthy_teams,
     calculate_exposure_table)
 from dfs_lab.showdown import (apply_context_engine, apply_showdown_scenario,
     generate_showdown_lineups, infer_score_script, script_build_adjustments,
@@ -143,6 +144,38 @@ def render_main(settings):
             classic_qb_ids,qb_plan_table,qb_plan=classic_apply_qb_cap(classic_qb_ids,qb_plan_table,qb_plan,st.session_state.get("classic_qb_cap",0))
             rec=classic_contest_recommendations(field_size,payout_style,entry_format,sim_table)
 
+
+            # Post-build packet (hoisted): the Slate Intel coach and the Results
+            # Command Center's Lab+Agent tab both answer from this same packet.
+
+            _portfolio_result=st.session_state.get("classic_result_v4")
+            portfolio=classic_portfolio_intelligence(df,_portfolio_result)
+            packet={
+                "contest":{"entry_format":entry_format,"field_size":int(field_size),"payout":payout_style,"requested_lineups":int(lineup_count)},
+                "recommendations":rec,
+                "active_rules":{"qb_pass_catchers":int(st.session_state["classic_qb_stack"]),"bringback":st.session_state["classic_bringback"],
+                                "min_salary":int(st.session_state["classic_min_salary"]),"max_team":int(st.session_state["classic_max_team"]),
+                                "max_game":int(st.session_state["classic_max_game"]),"max_te":int(st.session_state["classic_max_te"]),
+                                "no_dst_from_qb_game":bool(st.session_state["classic_no_dst"]),"no_offense_vs_dst":bool(st.session_state["classic_no_off"]),
+                                "allow_qb_rb":bool(st.session_state["classic_allow_qb_rb"])},
+                "thesis_state":thesis_state,
+                "qb_concentration":qb_plan,
+                "qb_candidates":qb_plan_table.head(20).to_dict(orient="records") if qb_plan_table is not None and not qb_plan_table.empty else [],
+                "theses":thesis_table.head(15).to_dict(orient="records") if thesis_table is not None and not thesis_table.empty else [],
+                "simulations":sim_table.head(12).to_dict(orient="records") if sim_table is not None and not sim_table.empty else [],
+                "context_players":[
+                    {
+                        "ID":str(_r["ID"]),"Name":str(_r["Name"]),"Position":str(_r["Position"]),"Team":str(_r["Team"]),
+                        "Opponent":str(_r.get("Opponent","")),"Matchup":str(_r.get("Matchup","")),"Salary":int(_r["Salary"]),
+                        "My Proj":round(float(_r["My Proj"]),2),"My Own":round(float(_r["My Own"]),2),
+                        "Hist FPPG":round(float(intel_map.loc[_r["Name"],"Hist FPPG"]),2) if (not intel.empty and _r["Name"] in intel_map.index) else 0.0,
+                        "Recent 6":round(float(intel_map.loc[_r["Name"],"Recent 6"]),2) if (not intel.empty and _r["Name"] in intel_map.index) else 0.0,
+                        "DVP Adj %":round(float(intel_map.loc[_r["Name"],"DVP Adj %"]),2) if (not intel.empty and _r["Name"] in intel_map.index) else 0.0
+                    } for _,_r in df.sort_values("My Proj",ascending=False).head(120).iterrows()
+                ],
+                "portfolio":portfolio,
+                "limitations":["No injury/news feed in this Classic build","No weather/travel feed in this Classic build","Day/night history is not inferred when unavailable"]
+            }
             tabs=st.tabs(["🧠 Slate Intel","⚡ Build","👤 Players","⚙ Rules","📋 Lineups","📊 Exposure"])
 
             with tabs[0]:
@@ -237,34 +270,6 @@ def render_main(settings):
                     st.session_state["classic_allow_qb_rb"]=bool(rec["allow_qb_rb"])
                     st.success("DFS LAB recommendations staged in Rules. Review them before building.")
 
-                _portfolio_result=st.session_state.get("classic_result_v4")
-                portfolio=classic_portfolio_intelligence(df,_portfolio_result)
-                packet={
-                    "contest":{"entry_format":entry_format,"field_size":int(field_size),"payout":payout_style,"requested_lineups":int(lineup_count)},
-                    "recommendations":rec,
-                    "active_rules":{"qb_pass_catchers":int(st.session_state["classic_qb_stack"]),"bringback":st.session_state["classic_bringback"],
-                                    "min_salary":int(st.session_state["classic_min_salary"]),"max_team":int(st.session_state["classic_max_team"]),
-                                    "max_game":int(st.session_state["classic_max_game"]),"max_te":int(st.session_state["classic_max_te"]),
-                                    "no_dst_from_qb_game":bool(st.session_state["classic_no_dst"]),"no_offense_vs_dst":bool(st.session_state["classic_no_off"]),
-                                    "allow_qb_rb":bool(st.session_state["classic_allow_qb_rb"])},
-                    "thesis_state":thesis_state,
-                    "qb_concentration":qb_plan,
-                    "qb_candidates":qb_plan_table.head(20).to_dict(orient="records") if qb_plan_table is not None and not qb_plan_table.empty else [],
-                    "theses":thesis_table.head(15).to_dict(orient="records") if thesis_table is not None and not thesis_table.empty else [],
-                    "simulations":sim_table.head(12).to_dict(orient="records") if sim_table is not None and not sim_table.empty else [],
-                    "context_players":[
-                        {
-                            "ID":str(_r["ID"]),"Name":str(_r["Name"]),"Position":str(_r["Position"]),"Team":str(_r["Team"]),
-                            "Opponent":str(_r.get("Opponent","")),"Matchup":str(_r.get("Matchup","")),"Salary":int(_r["Salary"]),
-                            "My Proj":round(float(_r["My Proj"]),2),"My Own":round(float(_r["My Own"]),2),
-                            "Hist FPPG":round(float(intel_map.loc[_r["Name"],"Hist FPPG"]),2) if (not intel.empty and _r["Name"] in intel_map.index) else 0.0,
-                            "Recent 6":round(float(intel_map.loc[_r["Name"],"Recent 6"]),2) if (not intel.empty and _r["Name"] in intel_map.index) else 0.0,
-                            "DVP Adj %":round(float(intel_map.loc[_r["Name"],"DVP Adj %"]),2) if (not intel.empty and _r["Name"] in intel_map.index) else 0.0
-                        } for _,_r in df.sort_values("My Proj",ascending=False).head(120).iterrows()
-                    ],
-                    "portfolio":portfolio,
-                    "limitations":["No injury/news feed in this Classic build","No weather/travel feed in this Classic build","Day/night history is not inferred when unavailable"]
-                }
 
                 if portfolio.get("built"):
                     st.markdown("#### Portfolio intelligence")
@@ -388,24 +393,39 @@ def render_main(settings):
                         },key="v4_classic_players")
                     pc1,pc2=st.columns(2)
                     with pc1:
-                        apply_classic_players=st.form_submit_button("APPLY PLAYER CHANGES",type="primary",use_container_width=True)
+                        apply_classic_players=st.form_submit_button("APPLY PLAYER EDITS",type="primary",use_container_width=True)
                     with pc2:
                         reset_classic_proj=st.form_submit_button("RESET VISIBLE PROJECTIONS",use_container_width=True)
+                st.caption("⚠️ Applying edits clears the built lineups below — rebuild afterwards. If nothing changed, your lineups are kept.")
                 if reset_classic_proj:
                     for _,r in edited.iterrows():
                         st.session_state["classic_projection_overrides"].pop(str(r["ID"]),None)
                     st.rerun()
                 if apply_classic_players:
+                    # The old "APPLY PLAYER CHANGES" silently wiped built lineups even
+                    # when nothing was edited. Now: only clear the portfolio when an
+                    # edit actually changed something.
+                    changed=False
                     for _,r in edited.iterrows():
                         pid=str(r["ID"]); ex=bool(r["Exclude"])
-                        st.session_state["strategy_master"][pid]={"Lock":bool(r["Lock"]) and not ex,"Exclude":ex,"Priority":"Exclude" if ex else str(r["Priority"]),"Min Exposure":float(r["Min Exposure"]),"Max Exposure":float(r["Max Exposure"])}
+                        new_entry={"Lock":bool(r["Lock"]) and not ex,"Exclude":ex,"Priority":"Exclude" if ex else str(r["Priority"]),"Min Exposure":float(r["Min Exposure"]),"Max Exposure":float(r["Max Exposure"])}
+                        if st.session_state["strategy_master"].get(pid,{}) != new_entry:
+                            changed=True
+                        st.session_state["strategy_master"][pid]=new_entry
                         base=float(r["Base Proj"]); newp=float(r["Proj"])
                         if abs(newp-base)>=0.005:
+                            if st.session_state["classic_projection_overrides"].get(pid) != newp:
+                                changed=True
                             st.session_state["classic_projection_overrides"][pid]=newp
                         else:
+                            if pid in st.session_state["classic_projection_overrides"]:
+                                changed=True
                             st.session_state["classic_projection_overrides"].pop(pid,None)
-                    st.session_state.pop("classic_result_v4",None)
-                    st.rerun()
+                    if changed:
+                        st.session_state.pop("classic_result_v4",None)
+                        st.rerun()
+                    else:
+                        st.info("No edits detected — your built lineups are untouched.")
 
             with tabs[3]:
                 st.markdown('<div class="card-title">Classic Rules</div><div class="card-sub">Contest-aware structure controls. Slate Intel can recommend these, but you decide what gets enforced.</div>',unsafe_allow_html=True)
@@ -476,22 +496,7 @@ def render_main(settings):
                 if res is None or res.empty:
                     st.info("Generate lineups from Build.")
                 else:
-                    show_cols=["Rank","Rating","Rating Score","Projection","Base Projection","Scenario Delta","Salary","Salary Left","Avg Own","Stack Summary"]+ROSTER_SLOTS
-                    disp=res[[x for x in show_cols if x in res.columns]].copy()
-                    try:
-                        eq=lineup_sim_equity(res, sim_worlds, df["Name"].astype(str).tolist())
-                        if not eq.empty and len(eq)==len(disp):
-                            disp["Ceiling P90"]=eq["Ceiling P90"].to_numpy()
-                            disp["Break Slate %"]=eq["Break Slate %"].to_numpy()
-                    except Exception:
-                        pass
-                    st.caption("Ceiling P90 is the lineup's 90th-percentile total across 10,000 correlated game worlds. Break Slate % is how often it posts a slate-breaking score.")
-                    st.dataframe(disp,hide_index=True,use_container_width=True,height=590,
-                        column_config={
-                            "Rank":st.column_config.NumberColumn("Rank",width=60,pinned=True),
-                            "QB":st.column_config.TextColumn("QB",width=150,pinned=True),
-                        })
-                    st.download_button("Download lineup analysis CSV",res.to_csv(index=False),"classic_lineups_v5.csv","text/csv",use_container_width=True)
+                    render_results_command_center(res, df, sim_table, sim_worlds, packet)
             with tabs[5]:
                 if res is None or res.empty:
                     st.info("Generate lineups first.")
@@ -1617,3 +1622,7 @@ def render_main(settings):
 
     # Lineup WHY drawer: restore the explanation layer without widening the lineup table.
     st.markdown(styles.MAIN_WHY_STRIP_CSS, unsafe_allow_html=True)
+
+    # Results Command Center dark theme lock: final cascade. Dark gray surfaces,
+    # light text on dark bars (contrast fix), tabular numerals, RCC components.
+    st.markdown(styles.RCC_DARK_CSS, unsafe_allow_html=True)

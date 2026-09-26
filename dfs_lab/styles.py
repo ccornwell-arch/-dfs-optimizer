@@ -1001,3 +1001,220 @@ MAIN_WHY_STRIP_CSS = """<style>
 .why-watch{display:flex;gap:9px;align-items:flex-start;padding:10px 12px;border-radius:10px;background:#e8f1fb;border-left:3px solid #4d8fcd}.why-watch b{color:#245a8b!important;-webkit-text-fill-color:#245a8b!important;white-space:nowrap}.why-watch span{color:#496176!important;-webkit-text-fill-color:#496176!important;font-size:.79rem;line-height:1.4}
 @media(max-width:900px){.why-grid{grid-template-columns:1fr 1fr}.why-drawer{padding:15px 16px}.why-watch{display:block}.why-watch b{display:block;margin-bottom:4px}}
 </style>"""
+
+# DFS LAB Results Command Center — dark theme lock (final cascade).
+# Dark gray surfaces (~#121212, elevated panels slightly lighter), off-white
+# primary text, muted secondary text, desaturated accents, tabular numerals.
+# Injected last in render_main so it wins over the older light layers, and it
+# fixes the unreadable dark-bar text contrast (dark bars always get light text).
+RCC_DARK_CSS = r"""
+<style>
+:root{
+  --rcc-bg:#101418; --rcc-bg2:#0b0f13;
+  --rcc-panel:#151b23; --rcc-panel2:#1b232e; --rcc-panel3:#222c39;
+  --rcc-line:#2b3644; --rcc-line2:#354252;
+  --rcc-text:#eef3f8; --rcc-muted:#94a5b8; --rcc-faint:#6b7c8f;
+  --rcc-accent:#5b9dff; --rcc-accent2:#7fb3ff; --rcc-accent-dim:#274b73;
+  --rcc-green:#43b581; --rcc-amber:#c99a4b; --rcc-red:#c97070;
+}
+/* ---------- page ---------- */
+html,body,.stApp,[data-testid="stApp"],[data-testid="stAppViewContainer"],[data-testid="stMain"]{
+  background:radial-gradient(circle at 70% -10%,#16202b 0%,#0e1319 42%,#0a0e12 100%)!important;
+  color:var(--rcc-text)!important;
+}
+[data-testid="stHeader"]{background:rgba(11,15,19,.9)!important;border-bottom:1px solid var(--rcc-line)!important;}
+[data-testid="stMain"]>div,[data-testid="stMainBlockContainer"],.block-container{background:transparent!important;}
+.block-container{max-width:1500px!important;padding-top:1rem!important;}
+html body [data-testid="stAppViewContainer"] h1,html body [data-testid="stAppViewContainer"] h2,
+html body [data-testid="stAppViewContainer"] h3,html body [data-testid="stAppViewContainer"] h4,
+html body [data-testid="stAppViewContainer"] h5,
+html body [data-testid="stAppViewContainer"] [data-testid="stMarkdownContainer"] p,
+html body [data-testid="stAppViewContainer"] [data-testid="stMarkdownContainer"] li,
+html body [data-testid="stAppViewContainer"] label,
+html body [data-testid="stAppViewContainer"] [data-testid="stWidgetLabel"] p{
+  color:var(--rcc-text)!important;-webkit-text-fill-color:var(--rcc-text)!important;
+}
+html body [data-testid="stAppViewContainer"] .card-sub,
+html body [data-testid="stAppViewContainer"] [data-testid="stCaptionContainer"],
+html body [data-testid="stAppViewContainer"] [data-testid="stCaptionContainer"] p,
+html body [data-testid="stAppViewContainer"] small,.stCaption{color:var(--rcc-muted)!important;-webkit-text-fill-color:var(--rcc-muted)!important;}
+html body [data-testid="stAppViewContainer"] a{color:var(--rcc-accent2)!important;}
+html body hr{border-color:var(--rcc-line)!important;}
+/* tabular numerals for money / projections / percentages */
+html body [data-testid="stMetricValue"],html body [data-testid="stDataFrame"],
+html body .rcc-hero,html body .rcc-world-count,html body .rcc-roster td.num{
+  font-variant-numeric:tabular-nums!important;
+}
+/* ---------- metrics / tiles ---------- */
+html body [data-testid="stMetric"]{
+  background:linear-gradient(150deg,var(--rcc-panel),var(--rcc-panel2))!important;
+  border:1px solid var(--rcc-line)!important;border-radius:16px!important;
+  box-shadow:0 10px 26px rgba(0,0,0,.28)!important;
+}
+html body [data-testid="stMetricLabel"] p{color:var(--rcc-muted)!important;-webkit-text-fill-color:var(--rcc-muted)!important;font-weight:700!important;}
+html body [data-testid="stMetricValue"]{color:#fff!important;-webkit-text-fill-color:#fff!important;font-weight:850!important;}
+/* ---------- dataframes ---------- */
+html body [data-testid="stDataFrame"]{background:var(--rcc-panel)!important;border:1px solid var(--rcc-line)!important;border-radius:14px!important;box-shadow:0 10px 26px rgba(0,0,0,.25)!important;}
+/* ---------- expanders: dark bars, always light text (contrast fix) ---------- */
+html body [data-testid="stExpander"]{background:var(--rcc-panel)!important;border:1px solid var(--rcc-line)!important;border-radius:14px!important;box-shadow:0 10px 26px rgba(0,0,0,.25)!important;}
+html body [data-testid="stExpander"] summary,
+html body [data-testid="stExpander"] summary:hover,
+html body [data-testid="stAppViewContainer"] details summary,
+html body [data-testid="stAppViewContainer"] details summary:hover{
+  background:linear-gradient(100deg,#182230,#1e2a38)!important;background-image:none!important;
+  border-bottom:1px solid var(--rcc-line)!important;
+  color:#eef4fa!important;-webkit-text-fill-color:#eef4fa!important;opacity:1!important;
+}
+html body [data-testid="stExpander"] summary *,
+html body [data-testid="stExpander"] summary p,
+html body [data-testid="stExpander"] summary span,
+html body [data-testid="stExpander"] summary div,
+html body [data-testid="stAppViewContainer"] details summary *{
+  color:#eef4fa!important;-webkit-text-fill-color:#eef4fa!important;opacity:1!important;text-shadow:none!important;
+}
+html body [data-testid="stExpander"] summary svg,
+html body [data-testid="stAppViewContainer"] details summary svg{color:var(--rcc-accent2)!important;fill:var(--rcc-accent2)!important;opacity:1!important;}
+html body [data-testid="stExpander"]>details>div,
+html body [data-testid="stAppViewContainer"] [data-testid="stExpander"],
+html body [data-testid="stAppViewContainer"] [data-testid="stExpander"]>details>div{
+  background:var(--rcc-panel)!important;border-color:var(--rcc-line)!important;color:var(--rcc-text)!important;
+}
+html body [data-testid="stExpander"]>details>div p,
+html body [data-testid="stExpander"]>details>div label,
+html body [data-testid="stExpander"]>details>div span{color:var(--rcc-text)!important;-webkit-text-fill-color:var(--rcc-text)!important;}
+/* ---------- tabs: dark command strip ---------- */
+html body [data-testid="stTabs"] [role="tablist"],html body [data-testid="stTabs"] [data-baseweb="tab-list"]{
+  background:#131a22!important;border:1px solid var(--rcc-line)!important;border-radius:14px!important;
+  padding:6px!important;box-shadow:0 10px 26px rgba(0,0,0,.30)!important;gap:6px!important;
+}
+html body [data-testid="stTabs"] [role="tab"],html body [data-testid="stTabs"] button[data-baseweb="tab"]{
+  border-radius:10px!important;min-height:46px!important;opacity:1!important;visibility:visible!important;
+}
+html body [data-testid="stTabs"] [role="tab"] p,html body [data-testid="stTabs"] [role="tab"] span,
+html body [data-testid="stTabs"] button[data-baseweb="tab"] p{
+  color:var(--rcc-muted)!important;-webkit-text-fill-color:var(--rcc-muted)!important;font-weight:800!important;opacity:1!important;
+}
+html body [data-testid="stTabs"] [role="tab"][aria-selected="true"],
+html body [data-testid="stTabs"] button[data-baseweb="tab"][aria-selected="true"]{
+  background:linear-gradient(100deg,#2f6fd0,#4d94f2)!important;border-color:#6aa8ff!important;
+  box-shadow:0 6px 18px rgba(70,140,240,.28)!important;
+}
+html body [data-testid="stTabs"] [role="tab"][aria-selected="true"] p,
+html body [data-testid="stTabs"] [role="tab"][aria-selected="true"] span,
+html body [data-testid="stTabs"] button[data-baseweb="tab"][aria-selected="true"] p{
+  color:#fff!important;-webkit-text-fill-color:#fff!important;
+}
+/* ---------- segmented control: dark bar, bright selected pill ---------- */
+html body [data-testid="stSegmentedControl"] [role="radiogroup"]{background:#131a22!important;border:1px solid var(--rcc-line)!important;border-radius:14px!important;padding:5px!important;}
+html body [data-testid="stSegmentedControl"] button,
+html body [data-testid="stSegmentedControl"] button *{
+  color:var(--rcc-muted)!important;-webkit-text-fill-color:var(--rcc-muted)!important;opacity:1!important;font-weight:750!important;
+}
+html body [data-testid="stSegmentedControl"] button[aria-checked="true"],
+html body [data-testid="stSegmentedControl"] button[aria-pressed="true"]{background:#8fc0ff!important;border-color:#8fc0ff!important;}
+html body [data-testid="stSegmentedControl"] button[aria-checked="true"] *,
+html body [data-testid="stSegmentedControl"] button[aria-pressed="true"] *{
+  color:#0d1a2b!important;-webkit-text-fill-color:#0d1a2b!important;font-weight:850!important;opacity:1!important;
+}
+/* ---------- inputs ---------- */
+html body [data-baseweb="select"]>div,html body [data-baseweb="input"]>div,
+html body [data-testid="stTextInput"] input,html body [data-testid="stTextArea"] textarea,
+html body [data-testid="stNumberInput"] input,html body [data-testid="stFileUploaderDropzone"]{
+  background:#131a23!important;border:1px solid var(--rcc-line2)!important;color:var(--rcc-text)!important;
+  -webkit-text-fill-color:var(--rcc-text)!important;border-radius:12px!important;
+}
+html body [data-baseweb="select"] span,html body [data-baseweb="select"] svg,
+html body input::placeholder,html body textarea::placeholder{color:var(--rcc-faint)!important;-webkit-text-fill-color:var(--rcc-faint)!important;}
+html body [data-baseweb="popover"],html body [role="listbox"]{background:#141c26!important;color:var(--rcc-text)!important;}
+html body [role="option"]{color:var(--rcc-text)!important;}
+html body [data-testid="stSelectbox"]>div>div{min-height:50px!important;}
+/* ---------- buttons ---------- */
+html body .stButton>button{background:var(--rcc-panel2)!important;color:var(--rcc-text)!important;
+  -webkit-text-fill-color:var(--rcc-text)!important;border:1px solid var(--rcc-line2)!important;border-radius:12px!important;box-shadow:none!important;}
+html body .stButton>button *,html body .stButton>button p{color:var(--rcc-text)!important;-webkit-text-fill-color:var(--rcc-text)!important;}
+html body .stButton>button:hover{background:var(--rcc-panel3)!important;border-color:var(--rcc-accent-dim)!important;}
+html body .stButton>button[kind="primary"],html body [data-testid="stFormSubmitButton"] button,
+html body [data-testid="stDownloadButton"]>button{
+  background:linear-gradient(100deg,#2f6fd0,#4d94f2)!important;color:#fff!important;
+  -webkit-text-fill-color:#fff!important;border:1px solid #6aa8ff!important;
+  box-shadow:0 8px 22px rgba(70,140,240,.25)!important;font-weight:800!important;
+}
+html body .stButton>button[kind="primary"] *,html body [data-testid="stFormSubmitButton"] button *,
+html body [data-testid="stDownloadButton"]>button *{color:#fff!important;-webkit-text-fill-color:#fff!important;}
+/* ---------- alerts ---------- */
+html body [data-testid="stAlert"]{background:var(--rcc-panel2)!important;border:1px solid var(--rcc-line2)!important;border-radius:14px!important;}
+html body [data-testid="stAlert"] *{color:var(--rcc-text)!important;-webkit-text-fill-color:var(--rcc-text)!important;}
+/* ---------- bordered containers ---------- */
+html body [data-testid="stVerticalBlockBorderWrapper"]>div{
+  background:rgba(21,27,35,.85)!important;border:1px solid var(--rcc-line)!important;
+  border-radius:16px!important;box-shadow:0 10px 26px rgba(0,0,0,.25)!important;
+}
+/* ---------- command strip / readouts ---------- */
+html body .command-strip{background:linear-gradient(100deg,#141d27,#182635)!important;border:1px solid var(--rcc-line2)!important;color:var(--rcc-text)!important;box-shadow:0 10px 26px rgba(0,0,0,.25)!important;}
+html body .command-live,html body .command-arrow{color:var(--rcc-accent2)!important;}
+html body .command-copy{color:var(--rcc-muted)!important;}
+html body .lineup-count-readout{background:#14202c!important;border:1px solid var(--rcc-line2)!important;color:var(--rcc-muted)!important;box-shadow:none!important;}
+html body .lineup-count-readout b{color:var(--rcc-accent2)!important;-webkit-text-fill-color:var(--rcc-accent2)!important;}
+/* legacy light cards forced dark */
+html body .intel-card{background:linear-gradient(150deg,var(--rcc-panel),var(--rcc-panel2))!important;border:1px solid var(--rcc-line)!important;box-shadow:0 10px 26px rgba(0,0,0,.25)!important;}
+html body .intel-kicker{color:var(--rcc-accent2)!important;}
+html body .intel-big{color:var(--rcc-text)!important;}
+html body .intel-copy{color:var(--rcc-muted)!important;}
+html body .section-card{background:var(--rcc-panel)!important;border:1px solid var(--rcc-line)!important;}
+html body .muted{color:var(--rcc-muted)!important;}
+html body .badge-a{background:rgba(67,181,129,.16);color:#7fd6a8;}
+html body .badge-b{background:rgba(91,157,255,.16);color:#9cc2ff;}
+html body .badge-c{background:rgba(201,154,75,.16);color:#e3bd7d;}
+html body .badge-x{background:rgba(201,112,112,.16);color:#e59a9a;}
+html body .dfs-chat-user,html body .chat-user{background:#173a5e!important;border-color:#2b5a86!important;color:#eef4fa!important;}
+html body .dfs-chat-ai,html body .chat-agent,html body .agent-status{background:var(--rcc-panel2)!important;border-color:var(--rcc-line2)!important;color:#c9d6e2!important;}
+/* ============================================================
+   Results Command Center components
+   ============================================================ */
+.rcc-kicker{font-size:.7rem;font-weight:850;letter-spacing:.14em;color:var(--rcc-accent2);}
+.rcc-hero{background:linear-gradient(115deg,#12233a 0%,#14324f 55%,#123f6e 100%);border:1px solid #2c5b8f;
+  border-radius:20px;padding:20px 24px;margin:6px 0 14px;box-shadow:0 16px 40px rgba(0,0,0,.35);}
+.rcc-hero-row{display:flex;align-items:center;gap:18px;margin-top:10px;}
+.rcc-grade{display:inline-flex;align-items:center;justify-content:center;min-width:74px;height:74px;border-radius:18px;
+  font-size:2rem;font-weight:950;color:#fff;}
+.rcc-grade-a{background:linear-gradient(140deg,#1f7a4d,#2fa36b);box-shadow:0 8px 22px rgba(47,163,107,.35);}
+.rcc-grade-b{background:linear-gradient(140deg,#2b5f9e,#4d94f2);box-shadow:0 8px 22px rgba(77,148,242,.30);}
+.rcc-grade-c{background:linear-gradient(140deg,#8a6420,#c99a4b);box-shadow:0 8px 22px rgba(201,154,75,.30);}
+.rcc-hero-title{font-size:1.35rem;font-weight:900;color:#fff;letter-spacing:-.01em;}
+.rcc-hero-sub{font-size:.9rem;color:#a9c0d6;margin-top:3px;}
+.rcc-section-title{font-size:1.15rem;font-weight:900;color:var(--rcc-text);margin:20px 0 2px;}
+.rcc-section-sub{font-size:.88rem;color:var(--rcc-muted);margin-bottom:12px;}
+.rcc-story{font-size:1.02rem;font-weight:800;color:#cfe3f7;background:#16283c;border:1px solid #2c5378;
+  border-radius:12px;padding:10px 14px;margin:2px 0 14px;}
+.rcc-chips{display:flex;flex-wrap:wrap;gap:7px;margin:12px 0 4px;}
+.rcc-chips span{padding:6px 10px;border-radius:999px;background:#182637;border:1px solid #2c4a68;
+  color:#a9c4dc;font-size:.72rem;font-weight:800;letter-spacing:.02em;}
+table.rcc-roster{width:100%;border-collapse:collapse;margin:6px 0 4px;font-size:.88rem;}
+table.rcc-roster th{text-align:left;font-size:.68rem;letter-spacing:.08em;color:var(--rcc-faint);
+  padding:7px 9px;border-bottom:1px solid var(--rcc-line2);text-transform:uppercase;}
+table.rcc-roster th.num,table.rcc-roster td.num{text-align:right;}
+table.rcc-roster td{padding:8px 9px;border-bottom:1px solid var(--rcc-line);color:var(--rcc-text);}
+table.rcc-roster td b{color:#fff;}
+table.rcc-roster tr:last-child td{border-bottom:0;}
+.rcc-world-board{background:var(--rcc-panel);border:1px solid var(--rcc-line);border-radius:16px;
+  padding:16px 18px;box-shadow:0 10px 26px rgba(0,0,0,.25);}
+.rcc-world-row{display:grid;grid-template-columns:minmax(170px,1.2fr) minmax(160px,3fr) 76px;gap:14px;
+  align-items:center;padding:10px 0;border-bottom:1px solid var(--rcc-line);}
+.rcc-world-row:last-child{border-bottom:0;}
+.rcc-world-label{color:#dbe6f2;font-size:.9rem;font-weight:750;}
+.rcc-world-label span{display:block;font-size:.74rem;font-weight:600;color:var(--rcc-muted);}
+.rcc-world-track{height:12px;border-radius:999px;background:#0d141c;overflow:hidden;border:1px solid var(--rcc-line);}
+.rcc-world-fill{height:100%;border-radius:999px;background:linear-gradient(90deg,#2f6fd0,#6aa8ff);}
+.rcc-world-count{text-align:right;color:#fff;font-weight:850;font-size:.95rem;}
+.rcc-chat-user{margin:10px 0 6px auto;padding:12px 14px;max-width:82%;background:#173a5e;border:1px solid #2b5a86;
+  border-radius:16px 16px 4px 16px;color:#eef4fa;}
+.rcc-chat-ai{margin:6px auto 14px 0;padding:14px 16px;max-width:94%;background:var(--rcc-panel2);
+  border:1px solid var(--rcc-line2);border-radius:16px 16px 16px 4px;color:#cfdae6;line-height:1.55;}
+@media(max-width:900px){
+  .rcc-hero-row{gap:12px;}
+  .rcc-grade{min-width:60px;height:60px;font-size:1.6rem;}
+  .rcc-world-row{grid-template-columns:1.2fr 1.6fr 62px;gap:8px;}
+}
+@media(prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important;transition:none!important}}
+</style>
+"""
