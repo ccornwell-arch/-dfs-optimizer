@@ -312,7 +312,8 @@ def render_main(settings):
                 preferred_stack_teams=st.multiselect("Preferred QB stack teams",teams,key="classic_pref_stack",
                     help="Hard control: if you select teams here, the optimizer must use a QB from one of them. Strategy Theses no longer populate this automatically.")
                 team_df=pd.DataFrame({"Team":teams,"Priority":[st.session_state["team_strategy_master"].get(t,"Neutral") for t in teams]})
-                team_edit=st.data_editor(team_df,hide_index=True,use_container_width=True,disabled=["Team"],column_config={"Priority":st.column_config.SelectboxColumn("Lean",options=["Core","Like","Neutral","Fade","Exclude"])},key="v4_classic_team")
+                st.caption("Your inputs, not the sim's verdict — tell DFS LAB which teams you want more or less of. The sim's own reads live in Slate Intel → Strategy Theses.")
+                team_edit=st.data_editor(team_df,hide_index=True,use_container_width=True,disabled=["Team"],column_config={"Priority":st.column_config.SelectboxColumn("Your lean",options=["Core","Like","Neutral","Fade","Exclude"])},key="v4_classic_team")
                 for _,r in team_edit.iterrows(): st.session_state["team_strategy_master"][r["Team"]]=r["Priority"]
                 if st.session_state.get("classic_thesis_applied"):
                     st.markdown("**Build thesis:** "+str(st.session_state["classic_thesis_applied"]))
@@ -466,7 +467,11 @@ def render_main(settings):
                     st.info("Generate lineups from Build.")
                 else:
                     show_cols=["Rank","Rating","Rating Score","Projection","Base Projection","Scenario Delta","Salary","Salary Left","Avg Own","Stack Summary"]+ROSTER_SLOTS
-                    st.dataframe(res[[x for x in show_cols if x in res.columns]],hide_index=True,use_container_width=True,height=590)
+                    st.dataframe(res[[x for x in show_cols if x in res.columns]],hide_index=True,use_container_width=True,height=590,
+                        column_config={
+                            "Rank":st.column_config.NumberColumn("Rank",width=60,pinned=True),
+                            "QB":st.column_config.TextColumn("QB",width=150,pinned=True),
+                        })
                     st.download_button("Download lineup analysis CSV",res.to_csv(index=False),"classic_lineups_v5.csv","text/csv",use_container_width=True)
             with tabs[5]:
                 if res is None or res.empty:
