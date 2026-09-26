@@ -475,6 +475,25 @@ html, body, [data-testid="stAppViewContainer"] {
   -webkit-text-fill-color:#ffffff !important;
   opacity:1 !important;
 }
+/* Selected segment must be unmistakable at a glance: bright pill, dark bold text.
+   (Unselected stays dark navy with white text, so the two states can't be confused.) */
+[data-testid="stSegmentedControl"] button[aria-pressed="true"],
+[data-testid="stSegmentedControl"] button[aria-checked="true"],
+[data-testid="stSegmentedControl"] label:has(input:checked),
+[data-testid="stSegmentedControl"] [role="radio"][aria-checked="true"] {
+  background:#9adcff !important;
+  border-color:#9adcff !important;
+  box-shadow:0 0 0 2px rgba(154,220,255,.45) !important;
+}
+[data-testid="stSegmentedControl"] button[aria-pressed="true"] *,
+[data-testid="stSegmentedControl"] button[aria-checked="true"] *,
+[data-testid="stSegmentedControl"] label:has(input:checked) *,
+[data-testid="stSegmentedControl"] [role="radio"][aria-checked="true"] * {
+  color:#0b1a2e !important;
+  -webkit-text-fill-color:#0b1a2e !important;
+  font-weight:800 !important;
+  opacity:1 !important;
+}
 </style>"""
 
 # moved verbatim from streamlit_app.py line 4043
