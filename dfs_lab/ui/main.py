@@ -127,8 +127,14 @@ def render_main(settings):
 
             st.markdown(styles.MAIN_TABS_CSS, unsafe_allow_html=True)
 
-            q1,q2,q3,q4=st.columns(4)
-            q1.metric("Players",len(df)); q2.metric("Teams",len(teams)); q3.metric("Field",f"{int(field_size):,}"); q4.metric("Pool",lineup_count)
+            # Pool summary cards live above the tabs only pre-build. Post-build the
+            # Lineups tab leads with the results banner, so these cards would just
+            # push lineups down the page for no reason.
+            _built_now = st.session_state.get("classic_result_v4")
+            _built_now = _built_now is not None and not getattr(_built_now, "empty", True)
+            if not _built_now:
+                q1,q2,q3,q4=st.columns(4)
+                q1.metric("Players",len(df)); q2.metric("Teams",len(teams)); q3.metric("Field",f"{int(field_size):,}"); q4.metric("Pool",lineup_count)
 
             intel=classic_context_evidence(df[["Name","Position","Team","Opponent","Game Info","My Proj"]].copy())
             intel_map=intel.set_index("Name") if not intel.empty else pd.DataFrame()

@@ -364,54 +364,144 @@ def _equity(res, sim_worlds, df):
     return disp
 
 
-def render_results_shell(res, eq_disp):
-    """Hero metric (best lineup's DFS LAB Grade) + three supporting tiles."""
-    hs = hero_stats(eq_disp, eq_disp)
-    grade = hs.get("grade", "–")
-    gcls = "a" if grade.startswith("A") else ("b" if grade.startswith("B") else "c")
-    st.markdown(
-        f"<div class='rcc-hero'><div class='rcc-kicker'>RESULTS COMMAND CENTER · BUILD COMPLETE</div>"
-        f"<div class='rcc-hero-row'><div class='rcc-grade rcc-grade-{gcls}'>{grade}</div>"
-        f"<div><div class='rcc-hero-title'>Best lineup grades {grade}</div>"
-        f"<div class='rcc-hero-sub'>#{hs.get('best_rank', 1)} · {hs.get('best_title', '')} · "
-        f"{hs.get('lineups', 0)} lineups built</div></div></div></div>",
-        unsafe_allow_html=True,
+def _headshot_map(df):
+    """Player name -> headshot URL from the pool's 'Headshot URL' column.
+
+    That column is populated from nflverse roster data by
+    apply_live_availability_guard (dfs_lab/data.py). Pure; never raises;
+    returns {} when the column is absent.
+    """
+    m = {}
+    try:
+        if df is not None and "Headshot URL" in getattr(df, "columns", []):
+            for _, r in df.iterrows():
+                u = str(r.get("Headshot URL", "") or "").strip()
+                if u and u.lower() not in ("nan", "none"):
+                    m[str(r.get("Name", ""))] = u
+    except Exception:
+        pass
+    return m
+
+
+def _avatar_html(name, url):
+    """Showdown-style avatar: photo <img> when a URL exists, initials otherwise.
+
+    Never invents a URL — empty/missing input always yields the initials
+    fallback, exactly like the Showdown lineup cards. Pure.
+    """
+    safe = _esc(name)
+    initials = "".join(x[:1] for x in str(name).replace(".", " ").split()[:2]).upper() or "NFL"
+    u = str(url or "").strip()
+    if u and u.lower() not in ("nan", "none"):
+        return (f"<span class='player-avatar rcc-avatar'><img src='{_esc(u)}' "
+                f"alt='{safe}' loading='lazy'></span>")
+    return f"<span class='player-avatar rcc-avatar avatar-fallback'>{_esc(initials)}</span>"
+
+
+def _grade_cls(grade):
+    g = str(grade or "")
+    if g.startswith("A"):
+        return "a"
+    if g.startswith("B"):
+        return "b"
+    return "c"
+
+
+def slim_banner_html(disp):
+    """One-line build summary bar. Pure.
+
+    e.g. '20 lineups built · Best: #1 Patrick Mahomes (KC +1) · Grade A+ ·
+          Top proj 149.1 · Best ceiling P90 188.4'. Returns "" with no data.
+    """
+    hs = hero_stats(disp, disp)
+    if not hs:
+        return ""
+    return (
+        f"<div class='rcc-banner'><span>✅</span>"
+        f"<span><b>{hs.get('lineups', 0)} lineups built</b> · Best: "
+        f"<b>#{hs.get('best_rank', 1)} {_esc(hs.get('best_title', ''))}</b> · "
+        f"Grade <b>{_esc(hs.get('grade', '–'))}</b> · "
+        f"Top proj {hs.get('top_projection', 0):.1f} · "
+        f"Best ceiling P90 {hs.get('best_ceiling', 0):.1f}</span></div>"
     )
-    t1, t2, t3 = st.columns(3)
-    t1.metric("Top projection", f"{hs.get('top_projection', 0):.1f}")
-    t2.metric("Best ceiling P90", f"{hs.get('best_ceiling', 0):.1f}")
-    t3.metric("Avg break-slate %", f"{hs.get('avg_break', 0):.2f}%")
-    st.caption("Ceiling P90 is the lineup's 90th-percentile total across 10,000 correlated game worlds. "
-               "Break Slate % is how often it posts a slate-breaking score.")
+
+
+def _lineup_card_html(row, df, shots):
+    """One lineup as a card: header, story, FULL roster table with avatars, chips.
+
+    The roster is visible, not collapsed — lineups come first. Pure; never raises.
+    """
+    try:
+        rank = int(row.get("Rank", 0) or 0)
+        grade = str(row.get("Rating", "–"))
+        title = lineup_title(row)
+        proj = float(row.get("Projection", 0) or 0)
+        p90 = float(row.get("Ceiling P90", 0) or 0)
+        brk = float(row.get("Break Slate %", 0) or 0)
+        left = float(row.get("Salary Left", 0) or 0)
+        story = short_story(row)
+        pt = player_table_for_lineup(row, df)
+        cells = "".join(
+            f"<tr><td class='av'>{_avatar_html(r['Player'], shots.get(str(r['Player']), ''))}</td>"
+            f"<td>{_esc(r['Slot'])}</td><td><b>{_esc(r['Player'])}</b></td>"
+            f"<td>{_esc(r['Pos'])}</td><td>{_esc(r['Team'])}</td>"
+            f"<td class='num'>${int(r['Salary']):,}</td>"
+            f"<td class='num'>{float(r['Proj']):.2f}</td>"
+            f"<td class='num'>{float(r['Own %']):.1f}%</td></tr>"
+            for _, r in pt.iterrows()
+        )
+        notes = str(row.get("Strategy Notes", "") or "")
+        coh = row.get("Coherence Score", "")
+        chips = []
+        if notes and notes != "Neutral build":
+            chips.append(f"<span>{_esc(notes)}</span>")
+        if coh != "":
+            chips.append(f"<span>Coherence {_esc(coh)}</span>")
+        chips.append(f"<span>QB stack +{int(row.get('QB Stack', 0) or 0)}</span>")
+        chips.append(f"<span>Bring-backs {int(row.get('Bring-backs', 0) or 0)}</span>")
+        chips.append(f"<span>Avg own {float(row.get('Avg Own', 0) or 0):.1f}%</span>")
+        full_story = str(row.get("Lineup Story", "") or "")
+        foot = f"<div class='rcc-card-foot'>{_esc(full_story)}</div>" if full_story else ""
+        return (
+            f"<div class='rcc-card'><div class='rcc-card-head'>"
+            f"<span class='rcc-rank'>#{rank}</span>"
+            f"<span class='rcc-grade rcc-grade-{_grade_cls(grade)} rcc-grade-sm'>{_esc(grade)}</span>"
+            f"<div class='rcc-card-titlewrap'><div class='rcc-card-title'>{_esc(title)}</div>"
+            f"<div class='rcc-card-meta'>Proj {proj:.1f} · P90 {p90:.1f} · "
+            f"Break {brk:.2f}% · ${left:,.0f} left</div></div></div>"
+            f"<div class='rcc-story'>📖 {_esc(story)}</div>"
+            f"<div class='rcc-scroll-x'><table class='rcc-roster'><thead><tr><th></th>"
+            f"<th>Slot</th><th>Player</th><th>Pos</th><th>Team</th>"
+            f"<th class='num'>Salary</th><th class='num'>Proj</th><th class='num'>Own</th>"
+            f"</tr></thead><tbody>{cells}</tbody></table></div>"
+            f"<div class='rcc-chips'>{''.join(chips)}</div>{foot}</div>"
+        )
+    except Exception:
+        return ""
+
+
+def render_slim_banner(disp):
+    """Compact single-bar build summary, replacing the hero + tiles."""
+    out = slim_banner_html(disp)
+    if out:
+        st.markdown(out, unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------------------------
 # Render: Lineups view
 # ---------------------------------------------------------------------------
 
-def _roster_html(lineup_row, df):
-    pt = player_table_for_lineup(lineup_row, df)
-    cells = "".join(
-        f"<tr><td>{r['Slot']}</td><td><b>{_esc(r['Player'])}</b></td><td>{_esc(r['Pos'])}</td>"
-        f"<td>{_esc(r['Team'])}</td><td class='num'>${r['Salary']:,}</td>"
-        f"<td class='num'>{r['Proj']:.2f}</td><td class='num'>{r['Own %']:.1f}%</td></tr>"
-        for _, r in pt.iterrows()
-    )
-    return (
-        "<table class='rcc-roster'><thead><tr><th>Slot</th><th>Player</th><th>Pos</th>"
-        "<th>Team</th><th class='num'>Salary</th><th class='num'>Proj</th><th class='num'>Own</th>"
-        "</tr></thead><tbody>" + cells + "</tbody></table>"
-    )
-
-
-def _player_grid_html(pt):
+def _player_grid_html(pt, shots=None):
     """Player-by-player roster grid as accessible HTML. Pure.
 
     Used instead of st.dataframe in the Explorer so header size/contrast is
     fully controlled (canvas dataframe headers render tiny and dim).
+    shots is an optional name->headshot-URL map for avatars.
     """
+    shots = shots or {}
     cells = "".join(
-        f"<tr><td><b>{_esc(r['Player'])}</b></td><td>{_esc(r['Slot'])}</td>"
+        f"<tr><td class='av'>{_avatar_html(r['Player'], shots.get(str(r['Player']), ''))}</td>"
+        f"<td><b>{_esc(r['Player'])}</b></td><td>{_esc(r['Slot'])}</td>"
         f"<td>{_esc(r['Pos'])}</td><td>{_esc(r['Team'])}</td>"
         f"<td class='num'>${int(r['Salary']):,}</td>"
         f"<td class='num'>{float(r['Proj']):.2f}</td>"
@@ -421,10 +511,10 @@ def _player_grid_html(pt):
         for _, r in pt.iterrows()
     )
     if not cells:
-        cells = "<tr><td colspan='9'>No players match.</td></tr>"
+        cells = "<tr><td colspan='10'>No players match.</td></tr>"
     return (
         "<div class='rcc-scroll-x'><table class='rcc-grid'><thead><tr>"
-        "<th>Player</th><th>Slot</th><th>Pos</th><th>Team</th>"
+        "<th></th><th>Player</th><th>Slot</th><th>Pos</th><th>Team</th>"
         "<th class='num'>Salary</th><th class='num'>Proj</th><th class='num'>Own %</th>"
         "<th class='num'>Pts / $1k</th><th>Leverage</th>"
         "</tr></thead><tbody>" + cells + "</tbody></table></div>"
@@ -456,24 +546,16 @@ def _swap_grid_html(alts):
     )
 
 
-def _lineup_label(row):
-    parts = parse_stack_summary(row.get("Stack Summary", ""))
-    story = short_story(row)
-    proj = float(row.get("Projection", 0) or 0)
-    p90 = float(row.get("Ceiling P90", 0) or 0)
-    brk = float(row.get("Break Slate %", 0) or 0)
-    left = float(row.get("Salary Left", 0) or 0)
-    bits = [f"**#{int(row.get('Rank', 0))}**", f"Grade **{row.get('Rating', '–')}**",
-            lineup_title(row), f"Proj {proj:.1f}"]
-    if p90:
-        bits.append(f"P90 {p90:.1f}")
-    bits.append(f"Break {brk:.2f}%")
-    bits.append(f"${left:,.0f} left")
-    bits.append(f"_{story}_")
-    return " · ".join(bits)
+def render_lineup_cards(disp, df):
+    """Every lineup as a card with its full roster visible — no collapsed rows.
 
-
-def render_lineups_view(disp, df):
+    Lineups come first; nothing is hidden behind a 'show all' gate. The sort
+    control reorders the cards.
+    """
+    st.markdown("<div class='rcc-section-title'>📋 Your lineups</div>"
+                "<div class='rcc-section-sub'>Full rosters, visible — no digging. "
+                "A new user should see lineups here, not a preamble.</div>",
+                unsafe_allow_html=True)
     sort_label = st.selectbox(
         "Sort lineups",
         list(SORT_OPTIONS.keys()),
@@ -482,32 +564,17 @@ def render_lineups_view(disp, df):
         help="Rank the portfolio by grade, projection, ceiling, break-slate rate, or salary left.",
     )
     ordered = sort_lineups(disp, sort_label)
+    shots = _headshot_map(df)
     for _, row in ordered.iterrows():
-        with st.expander(_lineup_label(row), expanded=False):
-            st.markdown(f"<div class='rcc-story'>📖 {_esc(short_story(row))}</div>", unsafe_allow_html=True)
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric("Projection", f"{float(row.get('Projection', 0) or 0):.1f}")
-            m2.metric("Ceiling P90", f"{float(row.get('Ceiling P90', 0) or 0):.1f}")
-            m3.metric("Break Slate %", f"{float(row.get('Break Slate %', 0) or 0):.2f}%")
-            m4.metric("Salary left", f"${float(row.get('Salary Left', 0) or 0):,.0f}")
-            st.markdown(_roster_html(row, df), unsafe_allow_html=True)
-            notes = str(row.get("Strategy Notes", "") or "")
-            coh = row.get("Coherence Score", "")
-            chips = []
-            if notes and notes != "Neutral build":
-                chips.append(f"<span>{notes}</span>")
-            if coh != "":
-                chips.append(f"<span>Coherence {coh}</span>")
-            chips.append(f"<span>QB stack +{int(row.get('QB Stack', 0) or 0)}</span>")
-            chips.append(f"<span>Bring-backs {int(row.get('Bring-backs', 0) or 0)}</span>")
-            chips.append(f"<span>Avg own {float(row.get('Avg Own', 0) or 0):.1f}%</span>")
-            st.markdown("<div class='rcc-chips'>" + "".join(chips) + "</div>", unsafe_allow_html=True)
-            story = str(row.get("Lineup Story", "") or "")
-            if story:
-                st.caption(story)
-    render_explorer(disp, df)
+        card = _lineup_card_html(row, df, shots)
+        if card:
+            st.markdown(card, unsafe_allow_html=True)
+
+
+def render_data_view(disp):
+    """Full optimizer table + CSV download. Dead last by design."""
     with st.expander("📊 Data view — full lineup table", expanded=False):
-        st.caption("The complete optimizer output. The ranked rows above are the default view.")
+        st.caption("The complete optimizer output, last resort. The lineup cards above are the default view.")
         show_cols = ["Rank", "Rating", "Rating Score", "Projection", "Base Projection", "Scenario Delta",
                      "Salary", "Salary Left", "Avg Own", "Stack Summary"] + ROSTER_SLOTS
         dv = disp[[x for x in show_cols if x in disp.columns]].copy()
@@ -543,7 +610,7 @@ def render_explorer(disp, df):
     pt = player_table_for_lineup(row, df)
     if q:
         pt = pt[pt["Player"].str.lower().str.contains(q, na=False)]
-    st.markdown(_player_grid_html(pt), unsafe_allow_html=True)
+    st.markdown(_player_grid_html(pt, _headshot_map(df)), unsafe_allow_html=True)
     st.caption("Value is projected points per $1,000 of salary. Leverage compares projection to field ownership within this pool.")
 
     st.markdown("<div class='rcc-swap-head'><b>Test a swap</b></div>", unsafe_allow_html=True)
@@ -661,18 +728,16 @@ def render_agent_view(packet, res, df=None, sim_table=None):
 # ---------------------------------------------------------------------------
 
 def render_results_command_center(res, df, sim_table, sim_worlds, packet):
-    """Build-step results: hero, then Lineups / Game Worlds / Lab+Agent views."""
+    """Build-step results, lineups first.
+
+    Stacked sections, no sub-tabs: slim banner, lineup cards (full rosters
+    visible), game worlds, Lab+Agent, explorer, data view last. The sticky
+    main tab bar handles navigation.
+    """
     disp = _equity(res, sim_worlds, df)
-    render_results_shell(res, disp)
-    view = st.segmented_control(
-        "Results view",
-        ["Lineups", "Game Worlds", "Lab+Agent"],
-        default="Lineups",
-        key="rcc_view",
-    )
-    if view == "Game Worlds":
-        render_worlds_view(sim_table)
-    elif view == "Lab+Agent":
-        render_agent_view(packet, disp, df, sim_table)
-    else:
-        render_lineups_view(disp, df)
+    render_slim_banner(disp)
+    render_lineup_cards(disp, df)
+    render_worlds_view(sim_table)
+    render_agent_view(packet, disp, df, sim_table)
+    render_explorer(disp, df)
+    render_data_view(disp)
