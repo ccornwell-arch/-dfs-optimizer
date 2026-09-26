@@ -1,0 +1,85 @@
+"""Moved verbatim from streamlit_app.py (refactor/modularize). No logic changes."""
+
+import csv
+import math
+import io
+import os
+import json
+import re
+import difflib
+from collections import defaultdict
+
+import numpy as np
+import pandas as pd
+import streamlit as st
+from scipy.optimize import Bounds, LinearConstraint, milp
+from scipy.sparse import lil_matrix
+
+
+from dfs_lab import styles
+
+
+def render_setup():
+    """Pre-upload setup page (moved verbatim from streamlit_app.py)."""
+    st.markdown(styles.SETUP_BASE_CSS, unsafe_allow_html=True)
+
+    st.markdown(styles.SETUP_V43_CSS, unsafe_allow_html=True)
+
+    st.markdown(styles.SETUP_V5_CSS, unsafe_allow_html=True)
+
+
+    st.markdown(styles.SETUP_LABEL_CSS, unsafe_allow_html=True)
+    st.markdown(styles.SETUP_V633_CSS, unsafe_allow_html=True)
+
+    st.markdown(styles.SETUP_V64_CSS, unsafe_allow_html=True)
+
+
+    st.markdown(styles.SETUP_NATIVE_CC_CSS, unsafe_allow_html=True)
+
+    st.markdown(styles.SETUP_COUNT_READOUT_CSS, unsafe_allow_html=True)
+    st.markdown(styles.SETUP_IPAD_SURFACE_CSS, unsafe_allow_html=True)
+
+    st.markdown(styles.SETUP_IPAD_CONTRAST_CSS, unsafe_allow_html=True)
+
+    st.markdown(styles.SETUP_PRIMARY_BUTTON_CSS, unsafe_allow_html=True)
+
+    st.markdown(styles.SETUP_DARK_CC_CSS, unsafe_allow_html=True)
+
+    st.markdown('''<div class="lab-appbar">
+  <div class="lab-brand"><span class="lab-flask">⚗</span><span>DFS</span><b>LAB</b></div>
+  <div class="lab-appbar-copy"><strong>NFL DFS COMMAND CENTER</strong><span>Build · Explore · Challenge</span></div>
+  <div class="lab-live"><i></i> LIVE SLATE</div>
+</div>''',unsafe_allow_html=True)
+
+    st.markdown("""<div class="command-strip"><div><span class="command-live">⚙</span><b> BUILD CONTROL CENTER</b><span class="command-copy"> Game type · Contest · Entries · Strategy</span></div><div class="command-arrow">SETUP ↓</div></div>""", unsafe_allow_html=True)
+    with st.expander("⚙  BUILD CONTROLS  ·  GAME TYPE & CONTEST", expanded=True):
+        st.caption("These controls live inside DFS LAB and stay available after the slate loads.")
+        cc1,cc2=st.columns(2)
+        with cc1:
+            mode=st.segmented_control("Game type",["Classic","Showdown"],default="Showdown")
+            preset=st.selectbox("Contest preset",["Large GPP","Small-field GPP","Single Entry","Winner Take All","Cash-ish"])
+        defaults={"Large GPP":(50000,"GPP / top-heavy","150-Max"),"Small-field GPP":(500,"GPP / top-heavy","3-Max"),"Single Entry":(300,"Flatter payouts","Single Entry"),"Winner Take All":(500,"Winner take all","Single Entry"),"Cash-ish":(100,"Flatter payouts","Single Entry")}
+        dfield,dpayout,dentry=defaults[preset]
+        with cc2:
+            field_size=st.number_input("Field size",min_value=2,value=int(dfield),step=1)
+            entry_format=st.selectbox("Entry format",["Single Entry","3-Max","20-Max","150-Max"],index=["Single Entry","3-Max","20-Max","150-Max"].index(dentry))
+        cc3,cc4=st.columns(2)
+        with cc3: payout_style=st.selectbox("Payout",["GPP / top-heavy","Winner take all","Flatter payouts"],index=["GPP / top-heavy","Winner take all","Flatter payouts"].index(dpayout))
+        with cc4:
+            lineup_choice=st.radio("Lineups to build",[20,50,100,150,"Custom"],index=2,horizontal=True,key="dfs_lineup_choice")
+            if lineup_choice=="Custom":
+                lineup_count=int(st.number_input("Custom lineup count",min_value=1,max_value=500,value=int(st.session_state.get("dfs_custom_lineups",100)),step=1,key="dfs_custom_lineups"))
+            else:
+                lineup_count=int(lineup_choice)
+            st.markdown(f"<div class='lineup-count-readout'><b>{lineup_count}</b><span> lineups selected</span></div>",unsafe_allow_html=True)
+        with st.expander("Advanced build settings"):
+            seed=st.number_input("Random seed",min_value=1,value=42,step=1)
+            st.caption("Change this only when you want a different randomized batch.")
+    return {
+        "mode": mode,
+        "field_size": field_size,
+        "entry_format": entry_format,
+        "payout_style": payout_style,
+        "lineup_count": lineup_count,
+        "seed": seed,
+    }

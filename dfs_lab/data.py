@@ -1,0 +1,538 @@
+"""Moved verbatim from streamlit_app.py (refactor/modularize). No logic changes."""
+
+import csv
+import math
+import io
+import os
+import json
+import re
+import difflib
+from collections import defaultdict
+
+import numpy as np
+import pandas as pd
+import streamlit as st
+from scipy.optimize import Bounds, LinearConstraint, milp
+from scipy.sparse import lil_matrix
+
+
+from dfs_lab.common import _first_existing
+from dfs_lab.showdown import configure_game_worlds
+
+def load_dk_template(uploaded_file):
+    raw = uploaded_file.getvalue().decode("utf-8-sig", errors="ignore").splitlines()
+    reader = csv.reader(raw)
+    header = None
+    rows = []
+    for row in reader:
+        if "Position" in row and "Name + ID" in row and "Salary" in row:
+            header = row
+            break
+    if header is None:
+        raise ValueError("Could not locate DraftKings player header.")
+
+    idx = {name: i for i, name in enumerate(header)}
+    for row in reader:
+        if not row or len(row) <= max(idx.values()):
+            continue
+        name = row[idx["Name"]].strip()
+        if not name:
+            continue
+        try:
+            salary = int(float(row[idx["Salary"]]))
+        except Exception:
+            continue
+        rows.append({
+            "Position": row[idx["Position"]].strip(),
+            "Name + ID": row[idx["Name + ID"]].strip(),
+            "Name": name,
+            "ID": str(row[idx["ID"]].strip()),
+            "Roster Position": row[idx["Roster Position"]].strip(),
+            "Salary": salary,
+            "Game Info": row[idx["Game Info"]].strip(),
+            "Team": row[idx["TeamAbbrev"]].strip(),
+            "AvgPointsPerGame": float(row[idx["AvgPointsPerGame"]] or 0),
+        })
+    return pd.DataFrame(rows)
+
+def parse_matchup(game_info):
+    matchup = str(game_info).split()[0].strip()
+    if "@" not in matchup:
+        return "", "", matchup
+    away, home = matchup.split("@", 1)
+    return away.strip(), home.strip(), matchup
+
+def apply_football_reality_guard(df, salary_col, projection_col, active_col="ActiveForBuild"):
+    """Shared NFL reality layer for Classic and Showdown.
+
+    The optimizer should not treat every technically eligible DK row as equally real.
+    For quarterbacks, keep only the most likely primary QB for each team active by
+    default. This prevents backup QBs from entering lineups solely because historical
+    production or salary relief gives them a mathematical score.
+
+    This is deliberately conservative: non-QBs are labeled for role confidence but are
+    not automatically removed without a stronger news/depth-chart source.
+    """
+    out=df.copy()
+    if active_col not in out.columns:
+        out[active_col]=True
+    out["Primary QB"]=False
+    out["Role Confidence"]="Rotation / uncertain"
+    out["Auto Excluded Reason"]=""
+
+    pos=out["Position"].astype(str).str.upper()
+    qb_mask=pos.eq("QB")
+    teams=[str(t) for t in out["Team"].dropna().unique().tolist() if str(t)]
+
+    # Basic confidence labels for explanation/UI. These are not injury/news claims.
+    proj=pd.to_numeric(out.get(projection_col,0),errors="coerce").fillna(0.0)
+    sal=pd.to_numeric(out.get(salary_col,0),errors="coerce").fillna(0.0)
+    out.loc[proj<=0.01,"Role Confidence"]="Inactive / no usable projection"
+    out.loc[(proj>0.01)&(sal>0),"Role Confidence"]="Active pool"
+
+    for team in teams:
+        qidx=out.index[out["Team"].astype(str).eq(team)&qb_mask].tolist()
+        if not qidx:
+            continue
+        # Salary is the strongest slate-specific market signal available in the DK file.
+        # Projection/APG only break ties; this avoids relying on stale historical scoring.
+        primary=max(
+            qidx,
+            key=lambda i:(
+                float(pd.to_numeric(pd.Series([out.loc[i,salary_col]]),errors="coerce").fillna(0).iloc[0]),
+                float(pd.to_numeric(pd.Series([out.loc[i,projection_col]]),errors="coerce").fillna(0).iloc[0]),
+                float(pd.to_numeric(pd.Series([out.loc[i,"AvgPointsPerGame"] if "AvgPointsPerGame" in out.columns else 0]),errors="coerce").fillna(0).iloc[0])
+            )
+        )
+        out.loc[primary,"Primary QB"]=True
+        out.loc[primary,"Role Confidence"]="Primary QB"
+        for i in qidx:
+            if i==primary:
+                continue
+            out.loc[i,active_col]=False
+            out.loc[i,"Role Confidence"]="Backup QB"
+            out.loc[i,"Auto Excluded Reason"]="Backup QB — DFS LAB keeps only the primary QB active by default"
+
+    return out
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def _load_live_nfl_availability(season=2026):
+    """Current roster + injury availability from nflverse.
+
+    Roster status catches non-injury absences (commissioner exempt, suspension,
+    reserve/PUP, practice squad, inactive). Injury reports add official OUT status.
+    Cached only 30 minutes because availability is time-sensitive on game day.
+    """
+    import nflreadpy as nfl
+    roster=nfl.load_rosters_weekly(int(season)).to_pandas()
+    injuries=nfl.load_injuries(int(season)).to_pandas()
+    return roster,injuries
+
+def _dfs_name_key(v):
+    import re, unicodedata
+    s=unicodedata.normalize("NFKD",str(v or "")).encode("ascii","ignore").decode("ascii").lower()
+    return re.sub(r"[^a-z0-9]","",s)
+
+def apply_live_availability_guard(df, active_col="ActiveForBuild", season=2026):
+    """Auto-remove players with reliable current evidence they cannot play.
+
+    This is fail-open: if live data cannot load or a player cannot be matched, DFS LAB
+    does not invent an inactive status. Questionable/doubtful players are surfaced but
+    not automatically removed; official OUT and non-active roster statuses are removed.
+    """
+    out=df.copy()
+    if active_col not in out.columns: out[active_col]=True
+    out["Live Status"]="Not verified"
+    out["Live Status Source"]=""
+    out["Headshot URL"]=""
+    try:
+        roster,inj=_load_live_nfl_availability(int(season))
+        # Latest weekly roster row per player/team.
+        if not roster.empty:
+            rn=_first_existing(roster.columns,["full_name","football_name","display_name"])
+            rt=_first_existing(roster.columns,["team","Team"])
+            rw=_first_existing(roster.columns,["week","Week"])
+            rs=_first_existing(roster.columns,["status","status_description_abbr"])
+            rh=_first_existing(roster.columns,["headshot_url","headshot","Headshot URL"])
+            if rn and rt and rs:
+                rr=roster.copy()
+                rr["_key"]=rr[rn].map(_dfs_name_key); rr["_team"]=rr[rt].astype(str)
+                rr["_week"]=pd.to_numeric(rr[rw],errors="coerce").fillna(0) if rw else 0
+                rr=rr.sort_values("_week").drop_duplicates(["_key","_team"],keep="last")
+                rmap={(r["_key"],r["_team"]):(str(r[rs]),int(r["_week"]),str(r[rh]) if rh and pd.notna(r[rh]) else "") for _,r in rr.iterrows()}
+                block_codes={"EXE","INA","PUP","RES","SUS","DEV","CUT","RET","UFA","NWT","RSN","RFA","TRC","TRD","TRT"}
+                for i,r in out.iterrows():
+                    hit=rmap.get((_dfs_name_key(r["Name"]),str(r["Team"])))
+                    if not hit: continue
+                    status,wk,headshot=hit; su=status.upper().strip()
+                    out.at[i,"Live Status"]=status
+                    out.at[i,"Live Status Source"]=f"nflverse roster W{wk}"
+                    if headshot and headshot.lower() not in ["nan","none",""]:
+                        out.at[i,"Headshot URL"]=headshot
+                    text=su.replace("."," ")
+                    blocked=(su in block_codes or any(x in text for x in [
+                        "EX/COMM","COMMISSIONER","PRACTICE SQUAD","R/INJURED","RESERVE",
+                        "SUSP","INACTIVE","WAIVER","RETIRED","R/PUP","PHYSICALLY UNABLE"
+                    ]))
+                    # Explicit Active/ACT is playable; unknown statuses are fail-open.
+                    if blocked:
+                        out.at[i,active_col]=False
+                        out.at[i,"Role Confidence"]="Unavailable — live roster"
+                        out.at[i,"Auto Excluded Reason"]=f"Live roster status: {status}"
+
+        # Latest official injury report. OUT is hard; doubtful/questionable are labels only.
+        if not inj.empty:
+            nn=_first_existing(inj.columns,["full_name","player_name","Name"])
+            nt=_first_existing(inj.columns,["team","Team"])
+            nw=_first_existing(inj.columns,["week","Week"])
+            ns=_first_existing(inj.columns,["report_status","game_status","Status"])
+            if nn and nt and ns:
+                ii=inj.copy(); ii["_key"]=ii[nn].map(_dfs_name_key); ii["_team"]=ii[nt].astype(str)
+                ii["_week"]=pd.to_numeric(ii[nw],errors="coerce").fillna(0) if nw else 0
+                ii=ii.sort_values("_week").drop_duplicates(["_key","_team"],keep="last")
+                imap={(r["_key"],r["_team"]):(str(r[ns]),int(r["_week"])) for _,r in ii.iterrows()}
+                for i,r in out.iterrows():
+                    hit=imap.get((_dfs_name_key(r["Name"]),str(r["Team"])))
+                    if not hit: continue
+                    status,wk=hit
+                    if status and status.lower() not in ["nan","none",""]:
+                        out.at[i,"Live Status"]=status
+                        out.at[i,"Live Status Source"]=f"nflverse injury W{wk}"
+                    if str(status).strip().upper()=="OUT":
+                        out.at[i,active_col]=False
+                        out.at[i,"Role Confidence"]="Unavailable — OUT"
+                        out.at[i,"Auto Excluded Reason"]="Official injury report: OUT"
+    except Exception as e:
+        out.attrs["availability_warning"]=f"Live availability could not be verified: {e}"
+    return out
+
+def _slate_season(df, fallback=2026):
+    import re
+    try:
+        m=re.search(r"(20\d{2})"," ".join(df.get("Game Info",pd.Series(dtype=str)).astype(str).tolist()))
+        return int(m.group(1)) if m else int(fallback)
+    except Exception:
+        return int(fallback)
+
+def prepare_player_pool(dk_file, ss_file):
+    dk = load_dk_template(dk_file)
+    ss = pd.read_csv(ss_file)
+
+    needed = {"Name", "My Proj", "My Own"}
+    missing = needed - set(ss.columns)
+    if missing:
+        raise ValueError(f"SaberSim file is missing columns: {sorted(missing)}")
+
+    ss = ss[["Name", "My Proj", "My Own"]].copy()
+    ss["My Proj"] = pd.to_numeric(ss["My Proj"], errors="coerce").fillna(0.0)
+    ss["My Own"] = pd.to_numeric(ss["My Own"], errors="coerce").fillna(0.0)
+
+    df = dk.merge(ss, on="Name", how="left")
+    df["My Proj"] = df["My Proj"].fillna(0.0)
+    df["My Own"] = df["My Own"].fillna(0.0)
+
+    away, home, matchup = [], [], []
+    for g in df["Game Info"]:
+        a, h, m = parse_matchup(g)
+        away.append(a); home.append(h); matchup.append(m)
+    df["Away"] = away
+    df["Home"] = home
+    df["Matchup"] = matchup
+    df["Opponent"] = np.where(df["Team"] == df["Away"], df["Home"], df["Away"])
+
+    df["ActiveForBuild"] = (df["My Proj"] > 0.05) & (df["Salary"] > 0)
+    df["is_QB"] = df["Roster Position"].str.contains(r"\bQB\b", regex=True)
+    df["is_RB"] = df["Roster Position"].str.contains(r"\bRB\b", regex=True)
+    df["is_WR"] = df["Roster Position"].str.contains(r"\bWR\b", regex=True)
+    df["is_TE"] = df["Roster Position"].str.contains(r"\bTE\b", regex=True)
+    df["is_DST"] = df["Position"].eq("DST")
+    df["is_FLEX"] = df["Roster Position"].str.contains(r"\bFLEX\b", regex=True)
+
+    # The same Football Reality layer used by Showdown also governs the Main Slate.
+    # A backup QB should never require a manual exclusion just because DK listed him.
+    df=apply_football_reality_guard(df,"Salary","My Proj","ActiveForBuild")
+    df=apply_live_availability_guard(df,"ActiveForBuild",_slate_season(df))
+
+    return df.reset_index(drop=True)
+
+def load_showdown_dk_template(uploaded_file):
+    """Load a DraftKings Showdown CSV/template and preserve CPT/FLEX identifiers when present."""
+    raw = uploaded_file.getvalue().decode("utf-8-sig", errors="ignore").splitlines()
+    reader = csv.reader(raw)
+    header = None
+    for row in reader:
+        if "Position" in row and "Name" in row and "Salary" in row:
+            header = row
+            break
+    if header is None:
+        raise ValueError("Could not locate the DraftKings player header.")
+
+    idx = {name: i for i, name in enumerate(header)}
+    required = ["Position", "Name", "Salary", "TeamAbbrev"]
+    for c in required:
+        if c not in idx:
+            raise ValueError(f"DraftKings file is missing {c}.")
+
+    rows = []
+    for row in reader:
+        if not row or len(row) <= max(idx.values()):
+            continue
+        name = row[idx["Name"]].strip()
+        if not name:
+            continue
+        try:
+            salary = int(float(row[idx["Salary"]]))
+        except Exception:
+            continue
+        rp = row[idx.get("Roster Position", idx["Position"])].strip() if ("Roster Position" in idx or "Position" in idx) else ""
+        pid = row[idx["ID"]].strip() if "ID" in idx else name
+        name_id = row[idx["Name + ID"]].strip() if "Name + ID" in idx else name
+        gi = row[idx["Game Info"]].strip() if "Game Info" in idx else ""
+        avg = 0.0
+        if "AvgPointsPerGame" in idx:
+            try:
+                avg = float(row[idx["AvgPointsPerGame"]] or 0)
+            except Exception:
+                avg = 0.0
+        rows.append({
+            "Position": row[idx["Position"]].strip(),
+            "Name": name,
+            "RawID": str(pid),
+            "Name + ID": name_id,
+            "Roster Position": rp,
+            "RawSalary": salary,
+            "Game Info": gi,
+            "Team": row[idx["TeamAbbrev"]].strip(),
+            "AvgPointsPerGame": avg,
+        })
+    raw_df = pd.DataFrame(rows)
+    if raw_df.empty:
+        raise ValueError("No Showdown players were found in the DraftKings file.")
+
+    # DK files vary: some expose CPT/FLEX as separate rows, others expose one row with CPT/FLEX eligibility.
+    # Collapse to one player while retaining the exact identifier for each roster position when possible.
+    collapsed = []
+    for (name, team), g in raw_df.groupby(["Name", "Team"], sort=False):
+        g = g.copy()
+        cpt_rows = g[g["Roster Position"].str.contains("CPT", case=False, na=False)]
+        flex_rows = g[g["Roster Position"].str.contains("FLEX", case=False, na=False)]
+
+        # If CPT-specific row has the larger salary, use it. FLEX base salary is the smallest observed salary.
+        flex_row = (flex_rows.sort_values("RawSalary").iloc[0] if not flex_rows.empty else g.sort_values("RawSalary").iloc[0])
+        cpt_row = (cpt_rows.sort_values("RawSalary", ascending=False).iloc[0] if not cpt_rows.empty else None)
+        flex_salary = int(g["RawSalary"].min())
+        cpt_salary = int(cpt_row["RawSalary"]) if cpt_row is not None and int(cpt_row["RawSalary"]) > flex_salary else int(round(flex_salary * 1.5))
+
+        collapsed.append({
+            "Position": str(flex_row["Position"]),
+            "Name": name,
+            "ID": str(flex_row["RawID"]),
+            "FLEX_ID": str(flex_row["RawID"]),
+            "FLEX_NameID": str(flex_row["Name + ID"]),
+            "CPT_ID": str(cpt_row["RawID"]) if cpt_row is not None else str(flex_row["RawID"]),
+            "CPT_NameID": str(cpt_row["Name + ID"]) if cpt_row is not None else str(flex_row["Name + ID"]),
+            "FlexSalary": flex_salary,
+            "CaptainSalary": cpt_salary,
+            "Game Info": str(flex_row["Game Info"]),
+            "Team": team,
+            "AvgPointsPerGame": float(flex_row["AvgPointsPerGame"]),
+        })
+    return pd.DataFrame(collapsed).reset_index(drop=True)
+
+def _dk_fantasy_points_from_stats(stats):
+    """DraftKings-style fantasy points from nflverse weekly player stats."""
+    def col(name):
+        return pd.to_numeric(stats[name], errors="coerce").fillna(0.0) if name in stats.columns else pd.Series(0.0, index=stats.index)
+    pts = (col("passing_yards") * 0.04 + col("passing_tds") * 4 - col("interceptions")
+           + col("rushing_yards") * 0.10 + col("rushing_tds") * 6
+           + col("receptions") * 1.0 + col("receiving_yards") * 0.10 + col("receiving_tds") * 6
+           - col("rushing_fumbles_lost") - col("receiving_fumbles_lost") - col("sack_fumbles_lost"))
+    # DK 300-yard passing and 100-yard rushing/receiving bonuses.
+    pts += (col("passing_yards") >= 300).astype(float) * 3
+    pts += (col("rushing_yards") >= 100).astype(float) * 3
+    pts += (col("receiving_yards") >= 100).astype(float) * 3
+    return pts
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def _load_nflverse_projection_inputs(season):
+    """Load a multi-year evidence window. Current season is included, but never allowed to dominate early."""
+    import nflreadpy as nfl
+    seasons=[int(season)-3,int(season)-2,int(season)-1,int(season)]
+    stats=nfl.load_player_stats(seasons, summary_level="week").to_pandas()
+    return stats
+
+def _name_col(df):
+    return _first_existing(df.columns,["player_display_name","player_name","Name"])
+
+def _opp_col(df):
+    return _first_existing(df.columns,["opponent_team","opponent","opp_team","Opp"])
+
+def _season_col(df):
+    return _first_existing(df.columns,["season","Season"])
+
+def _role_points_from_stats(x):
+    """Opportunity signal: volume moves faster than TD-driven fantasy scoring."""
+    def c(n):
+        return pd.to_numeric(x[n],errors="coerce").fillna(0.0) if n in x.columns else pd.Series(0.0,index=x.index)
+    return c("carries")*0.52 + c("targets")*0.78 + c("receptions")*0.18 + c("passing_attempts")*0.08
+
+def dfs_lab_projection_engine(dk):
+    """V6.1 independent projection baseline.
+
+    Uses four seasons of nflverse weekly evidence, sample-size shrinkage, opportunity/role,
+    and opponent-vs-position history when the source exposes opponent_team. DK AvgPointsPerGame
+    is only a weak fallback/prior. No SaberSim projection is used.
+    """
+    out=dk.copy(); season=2026
+    try:
+        import re
+        m=re.search(r"(20\d{2})", " ".join(out["Game Info"].astype(str).tolist()))
+        if m: season=int(m.group(1))
+    except Exception: pass
+    out["DFS Lab Data"]="DK prior fallback"
+    out["DFS Lab Base Proj"]=pd.to_numeric(out.get("AvgPointsPerGame",0),errors="coerce").fillna(0.0)
+    out["History Games"]=0; out["Current Games"]=0; out["Role Signal"]=0.0; out["Matchup Adj %"]=0.0
+    out["Projection Why"]="DK slate prior fallback"
+    try:
+        stx=_load_nflverse_projection_inputs(season).copy()
+        nc=_name_col(stx); sc=_season_col(stx); oc=_opp_col(stx)
+        if not nc or not sc: raise ValueError("nflverse player name/season columns unavailable")
+        stx["Name"]=stx[nc].astype(str).str.strip(); stx["Season"]=pd.to_numeric(stx[sc],errors="coerce")
+        stx["_fp"]=_dk_fantasy_points_from_stats(stx); stx["_role"]=_role_points_from_stats(stx)
+        # Ignore placeholder rows with no statistical activity.
+        activity=[]
+        for c in ["passing_attempts","carries","targets","receptions","field_goals_made","extra_points_made"]:
+            if c in stx.columns: activity.append(pd.to_numeric(stx[c],errors="coerce").fillna(0.0))
+        if activity:
+            active=sum(activity)>0
+            stx=stx[active | (stx["_fp"].abs()>0)].copy()
+
+        # Per-player per-season summaries. Four-year weights favor recency without letting one game take over.
+        ss=stx.groupby(["Name","Season"],as_index=False).agg(FPPG=("_fp","mean"),Role=("_role","mean"),Games=("_fp","size"))
+        season_weights={season:0.34,season-1:0.38,season-2:0.19,season-3:0.09}
+        rows=[]
+        for name,g in ss.groupby("Name"):
+            hist_num=hist_den=role_num=role_den=0.0; hist_games=cur_games=0
+            for _,r in g.iterrows():
+                yr=int(r["Season"]); games=int(r["Games"]); w=season_weights.get(yr,0.0)
+                if w<=0: continue
+                # Current-year reliability ramps from 20% after one game toward full weight after eight.
+                reliability=min(1.0,max(0.20,games/8.0)) if yr==season else min(1.0,games/8.0)
+                ew=w*reliability
+                hist_num += ew*float(r["FPPG"]); hist_den += ew
+                role_num += ew*float(r["Role"]); role_den += ew
+                hist_games += games
+                if yr==season: cur_games=games
+            rows.append({"Name":name,"HistProj":hist_num/hist_den if hist_den else 0.0,"RoleSignal":role_num/role_den if role_den else 0.0,"HistoryGames":hist_games,"CurrentGames":cur_games})
+        ps=pd.DataFrame(rows)
+        out=out.merge(ps,on="Name",how="left")
+        for c in ["HistProj","RoleSignal","HistoryGames","CurrentGames"]: out[c]=pd.to_numeric(out[c],errors="coerce").fillna(0.0)
+
+        # Opponent-vs-position fantasy allowance: three prior seasons + current season, shrunk toward neutral.
+        matchup={}
+        if oc:
+            stx["Opp"]=stx[oc].astype(str).str.strip()
+            posc=_first_existing(stx.columns,["position","position_group","Pos"])
+            if posc:
+                stx["Pos"]=stx[posc].astype(str).str.upper().replace({"HB":"RB","FB":"RB"})
+                allowed=stx[stx["Pos"].isin(["QB","RB","WR","TE"])].groupby(["Opp","Pos"],as_index=False).agg(Allowed=("_fp","mean"),N=("_fp","size"))
+                league=stx[stx["Pos"].isin(["QB","RB","WR","TE"])].groupby("Pos")["_fp"].mean().to_dict()
+                for _,r in allowed.iterrows():
+                    base=max(float(league.get(r["Pos"],0)),1.0); n=float(r["N"])
+                    raw=float(r["Allowed"])/base-1.0; shrink=n/(n+24.0)
+                    matchup[(str(r["Opp"]),str(r["Pos"]))]=float(np.clip(raw*shrink,-0.10,0.10))
+
+        dkavg=pd.to_numeric(out["AvgPointsPerGame"],errors="coerce").fillna(0.0)
+        sal=pd.to_numeric(out["FlexSalary"],errors="coerce").fillna(0.0); pos=out["Position"].astype(str).str.upper()
+        vals=[]; reasons=[]; madjs=[]
+        for _,r in out.iterrows():
+            hist=float(r.get("HistProj",0)); games=int(r.get("HistoryGames",0)); curg=int(r.get("CurrentGames",0)); prior=float(r.get("AvgPointsPerGame",0) or 0)
+            # Historical evidence dominates established players; DK average is a weak stabilizer/fallback.
+            evidence=min(0.88, games/(games+8.0))
+            base=(evidence*hist + (1-evidence)*prior) if hist>0 else prior
+            # Role signal is used only as a modest stabilizer, not converted directly to fantasy points.
+            role=float(r.get("RoleSignal",0)); role_adj=0.0
+            if role>0 and base>0:
+                # Keeps TD spikes from dominating while rewarding sustained opportunity.
+                role_adj=float(np.clip((role/12.0)-0.5,-0.04,0.05))
+            opp=""
+            try:
+                teams=[t for t in out["Team"].dropna().unique().tolist() if t]
+                if len(teams)==2: opp=teams[1] if r["Team"]==teams[0] else teams[0]
+            except Exception: pass
+            m=float(matchup.get((str(opp),str(r["Position"]).upper()),0.0)); madjs.append(m*100)
+            # Matchup and role are bounded; they refine the baseline rather than rewrite it.
+            model=max(0.0,base*(1.0+role_adj+m))
+            # Salary prior only for thin-history skill players.
+            if games<5 and str(r["Position"]).upper() in ["QB","RB","WR","TE"]:
+                sp=max(0.3,float(r["FlexSalary"])/1000.0*1.55)
+                model=0.90*model+0.10*sp
+            vals.append(round(model,3))
+            reasons.append(f"4-year history {hist:.2f} over {games} games; current season {curg} game(s) is sample-shrunk; DK prior {prior:.2f}; role {role_adj*100:+.1f}%; {opp or 'opponent'} matchup {m*100:+.1f}%")
+        out["DFS Lab Base Proj"]=vals; out["History Games"]=out["HistoryGames"].astype(int); out["Current Games"]=out["CurrentGames"].astype(int)
+        out["Role Signal"]=out["RoleSignal"].round(2); out["Matchup Adj %"]=np.round(madjs,1); out["Projection Why"]=reasons
+        out["DFS Lab Data"]="2023-2026 history + role + matchup"
+    except Exception as e:
+        out.attrs["projection_warning"]=f"Live nflverse evidence could not load ({e}). DFS Lab used the DK slate prior for this run."
+    return out
+
+def apply_projection_overrides(df, override_map=None):
+    out=df.copy(); override_map=override_map or {}
+    out["Model Proj"]=pd.to_numeric(out.get("DFS Lab Proj",out.get("My Proj",0)),errors="coerce").fillna(0.0)
+    finals=[]; flags=[]
+    for _,r in out.iterrows():
+        val=override_map.get(str(r["ID"]),None)
+        if val is None or float(val)<0: finals.append(float(r["Model Proj"])); flags.append(False)
+        else: finals.append(float(val)); flags.append(True)
+    out["DFS Lab Proj"]=np.array(finals).round(3); out["Projection Override"]=flags
+    return out
+
+def prepare_showdown_pool(dk_file, ss_file=None):
+    """Create the Showdown pool. DFS Lab projections work with DK alone; SaberSim is optional comparison data."""
+    dk=load_showdown_dk_template(dk_file)
+    dk=dk.drop_duplicates(subset=["ID"],keep="first").drop_duplicates(subset=["Name","Team"],keep="first")
+    df=dfs_lab_projection_engine(dk)
+    df["SaberSim Proj"]=np.nan; df["My Own"]=0.0; df["CPT Own"]=0.0; df["CPT Own Estimated"]=True
+    if ss_file is not None:
+        ss_raw=pd.read_csv(ss_file)
+        name_col=_first_existing(ss_raw.columns,["Name","Player","Player Name"]); proj_col=_first_existing(ss_raw.columns,["My Proj","Projection","Proj"])
+        own_col=_first_existing(ss_raw.columns,["My Own","Ownership","Own","Projected Ownership"])
+        roster_col=_first_existing(ss_raw.columns,["Roster Position","Roster Pos","Slot","Lineup Position","Position Type"])
+        if name_col and proj_col:
+            x=ss_raw.copy(); x["Name"]=x[name_col].astype(str).str.strip(); x["_proj"]=pd.to_numeric(x[proj_col],errors="coerce").fillna(0.0)
+            x["_own"]=pd.to_numeric(x[own_col],errors="coerce").fillna(0.0) if own_col else 0.0
+            rows=[]
+            for name,g in x.groupby("Name",sort=False):
+                g=g.copy()
+                flex=None; cpt=None
+                if roster_col:
+                    slot=g[roster_col].astype(str).str.upper(); fg=g[slot.str.contains("FLEX",na=False)]; cg=g[slot.str.contains("CPT|CAPTAIN",regex=True,na=False)]
+                    if not fg.empty:flex=fg.iloc[0]
+                    if not cg.empty:cpt=cg.iloc[0]
+                if flex is None: flex=g.sort_values("_proj",ascending=True).iloc[0]
+                if cpt is None and len(g)>1: cpt=g.sort_values("_proj",ascending=False).iloc[0]
+                rows.append({"Name":name,"SaberSim Proj":float(flex["_proj"]),"My Own":float(flex["_own"]),"CPT Own":float(cpt["_own"]) if cpt is not None else max(.1,float(flex["_own"])*.18),"CPT Own Estimated":cpt is None})
+            ss=pd.DataFrame(rows).drop_duplicates("Name")
+            base_cols=[c for c in df.columns if c not in ["SaberSim Proj","My Own","CPT Own","CPT Own Estimated"]]
+            df=df[base_cols].merge(ss,on="Name",how="left")
+            for c in ["SaberSim Proj","My Own","CPT Own"]: df[c]=pd.to_numeric(df[c],errors="coerce").fillna(0.0)
+            df["CPT Own Estimated"]=df["CPT Own Estimated"].fillna(True).astype(bool)
+    # Compatibility: My Proj is now DFS Lab's independent baseline, not SaberSim.
+    df["My Proj"]=pd.to_numeric(df["DFS Lab Base Proj"],errors="coerce").fillna(0.0)
+    away=[];home=[];matchup=[]
+    for g in df["Game Info"]:
+        a,h,m=parse_matchup(g);away.append(a);home.append(h);matchup.append(m)
+    df["Away"]=away;df["Home"]=home;df["Matchup"]=matchup
+    teams=[t for t in df["Team"].dropna().unique().tolist() if t]
+    if len(teams)==2:
+        opp={teams[0]:teams[1],teams[1]:teams[0]};df["Opponent"]=df["Team"].map(opp).fillna("")
+    else: df["Opponent"]=np.where(df["Team"]==df["Away"],df["Home"],df["Away"])
+    pos=df["Position"].astype(str).str.upper();df["is_QB"]=pos.eq("QB");df["is_RB"]=pos.eq("RB");df["is_WR"]=pos.eq("WR");df["is_TE"]=pos.eq("TE");df["is_DST"]=pos.isin(["DST","D/ST"]);df["is_K"]=pos.isin(["K","PK"]);df["is_passcatcher"]=df["is_WR"]|df["is_TE"]
+    df["ActiveForBuild"]=(df["My Proj"]>0.01)&(df["FlexSalary"]>0)
+
+    # Shared with Classic: apply the same football-reality gate before optimization.
+    df=apply_football_reality_guard(df,"FlexSalary","My Proj","ActiveForBuild")
+    df=apply_live_availability_guard(df,"ActiveForBuild",_slate_season(df))
+
+    configure_game_worlds(df)
+    return df.reset_index(drop=True)
