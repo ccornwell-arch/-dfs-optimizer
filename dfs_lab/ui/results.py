@@ -325,6 +325,58 @@ def _roster_html(lineup_row, df):
     )
 
 
+def _player_grid_html(pt):
+    """Player-by-player roster grid as accessible HTML. Pure.
+
+    Used instead of st.dataframe in the Explorer so header size/contrast is
+    fully controlled (canvas dataframe headers render tiny and dim).
+    """
+    cells = "".join(
+        f"<tr><td><b>{_esc(r['Player'])}</b></td><td>{_esc(r['Slot'])}</td>"
+        f"<td>{_esc(r['Pos'])}</td><td>{_esc(r['Team'])}</td>"
+        f"<td class='num'>${int(r['Salary']):,}</td>"
+        f"<td class='num'>{float(r['Proj']):.2f}</td>"
+        f"<td class='num'>{float(r['Own %']):.1f}%</td>"
+        f"<td class='num'>{float(r['Value']):.2f}</td>"
+        f"<td>{_esc(r['Leverage'])}</td></tr>"
+        for _, r in pt.iterrows()
+    )
+    if not cells:
+        cells = "<tr><td colspan='9'>No players match.</td></tr>"
+    return (
+        "<div class='rcc-scroll-x'><table class='rcc-grid'><thead><tr>"
+        "<th>Player</th><th>Slot</th><th>Pos</th><th>Team</th>"
+        "<th class='num'>Salary</th><th class='num'>Proj</th><th class='num'>Own %</th>"
+        "<th class='num'>Pts / $1k</th><th>Leverage</th>"
+        "</tr></thead><tbody>" + cells + "</tbody></table></div>"
+    )
+
+
+def _swap_grid_html(alts):
+    """Swap suggestions as accessible HTML. Pure.
+
+    Used instead of st.dataframe so headers are larger and high-contrast.
+    """
+    cells = "".join(
+        f"<tr><td><b>{_esc(a['Player'])}</b></td><td>{_esc(a['Team'])}</td>"
+        f"<td class='num'>${int(a['Salary']):,}</td>"
+        f"<td class='num'>{float(a['Proj']):.2f}</td>"
+        f"<td class='num'>{float(a['Own %']):.1f}%</td>"
+        f"<td class='num'>{float(a['dProj']):+.2f}</td>"
+        f"<td class='num'>{float(a['dOwn']):+.1f}</td>"
+        f"<td class='num'>{int(a['dSalary']):+d}</td>"
+        f"<td class='wrap'>{_esc(a['Tradeoff'])}</td></tr>"
+        for a in alts
+    )
+    return (
+        "<div class='rcc-scroll-x'><table class='rcc-grid'><thead><tr>"
+        "<th>Alternative</th><th>Team</th><th class='num'>Salary</th><th class='num'>Proj</th>"
+        "<th class='num'>Own %</th><th class='num'>Δ Proj</th><th class='num'>Δ Own</th>"
+        "<th class='num'>Δ Salary</th><th>Tradeoff</th>"
+        "</tr></thead><tbody>" + cells + "</tbody></table></div>"
+    )
+
+
 def _lineup_label(row):
     parts = parse_stack_summary(row.get("Stack Summary", ""))
     story = short_story(row)
@@ -412,44 +464,23 @@ def render_explorer(disp, df):
     pt = player_table_for_lineup(row, df)
     if q:
         pt = pt[pt["Player"].str.lower().str.contains(q, na=False)]
-    st.dataframe(
-        pt, hide_index=True, use_container_width=True, height=min(420, 70 + 35 * max(1, len(pt))),
-        column_config={
-            "Player": st.column_config.TextColumn("Player", width=180, pinned=True),
-            "Salary": st.column_config.NumberColumn("Salary", format="$%d"),
-            "Proj": st.column_config.NumberColumn("Proj", format="%.2f"),
-            "Own %": st.column_config.NumberColumn("Own %", format="%.1f%%"),
-            "Value": st.column_config.NumberColumn("Pts / $1k", format="%.2f"),
-        },
-    )
+    st.markdown(_player_grid_html(pt), unsafe_allow_html=True)
     st.caption("Value is projected points per $1,000 of salary. Leverage compares projection to field ownership within this pool.")
 
-    st.markdown("**Test a swap**")
+    st.markdown("<div class='rcc-swap-head'><b>Test a swap</b></div>", unsafe_allow_html=True)
     s1, s2 = st.columns([1, 2])
     with s1:
         slot_pick = st.selectbox("Roster slot", ROSTER_SLOTS, key="rcc_swap_slot")
     with s2:
         cur_name = str(row.get(slot_pick, "—"))
-        st.metric("Currently in", cur_name)
+        st.markdown(f"<div class='rcc-cur-player'>Currently in slot: <b>{_esc(cur_name)}</b></div>",
+                    unsafe_allow_html=True)
     min_salary = int(st.session_state.get("classic_min_salary", 48500))
     alts = swap_suggestions(df, row, slot_pick, min_salary)
     if not alts:
         st.info("No salary-legal swap found for that slot in the active pool.")
     else:
-        alt_df = pd.DataFrame(alts)
-        st.dataframe(
-            alt_df, hide_index=True, use_container_width=True,
-            column_config={
-                "Player": st.column_config.TextColumn("Alternative", width=170, pinned=True),
-                "Salary": st.column_config.NumberColumn("Salary", format="$%d"),
-                "Proj": st.column_config.NumberColumn("Proj", format="%.2f"),
-                "Own %": st.column_config.NumberColumn("Own %", format="%.1f%%"),
-                "dProj": st.column_config.NumberColumn("Δ Proj", format="%+.2f"),
-                "dOwn": st.column_config.NumberColumn("Δ Own", format="%+.1f"),
-                "dSalary": st.column_config.NumberColumn("Δ Salary", format="%+d"),
-                "Tradeoff": st.column_config.TextColumn("Tradeoff", width=320),
-            },
-        )
+        st.markdown(_swap_grid_html(alts), unsafe_allow_html=True)
         st.caption("Swaps are suggestions only — they are not applied to the portfolio. Change exposure or rebuild to act on one.")
 
 
