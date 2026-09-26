@@ -702,43 +702,240 @@ def classic_context_evidence(intel_df):
     return base
 
 @st.cache_data(show_spinner=False)
-def classic_simulate_slate(sim_df, sims=5000, seed=42):
-    """Projection-driven Monte Carlo for comparative Classic game environments."""
-    d=sim_df.copy()
-    d=d[pd.to_numeric(d["Sim Proj"],errors="coerce").fillna(0)>0.05].reset_index(drop=True)
-    if d.empty:
-        return pd.DataFrame()
-    rng=np.random.default_rng(int(seed)); sims=int(max(1000,sims))
-    games=[g for g in d["Matchup"].dropna().astype(str).unique().tolist() if g.strip()]
+def _nflverse_team_ratings(season):
+    """Offense (points scored) and defense (points allowed) ratings per team.
+
+    Four-season weighted means with the same recency/reliability treatment as
+    the projection engine. Returns (offense, defense, league_avg).
+    """
+    from dfs_lab.data import _load_nflverse_inputs
+    _, sched = _load_nflverse_inputs(season)
+    s = sched.copy()
+    tg = pd.concat([
+        pd.DataFrame({"team": s["home_team"].astype(str).str.upper(),
+                      "season": pd.to_numeric(s["season"], errors="coerce"),
+                      "scored": pd.to_numeric(s["home_score"], errors="coerce"),
+                      "allowed": pd.to_numeric(s["away_score"], errors="coerce")}),
+        pd.DataFrame({"team": s["away_team"].astype(str).str.upper(),
+                      "season": pd.to_numeric(s["season"], errors="coerce"),
+                      "scored": pd.to_numeric(s["away_score"], errors="coerce"),
+                      "allowed": pd.to_numeric(s["home_score"], errors="coerce")}),
+    ], ignore_index=True).dropna(subset=["scored", "allowed"])
+    w = {season: 0.34, season - 1: 0.38, season - 2: 0.19, season - 3: 0.09}
+    off, deff = {}, {}
+    for t, g in tg.groupby("team"):
+        on = od = dn = dd = 0.0
+        for yr, gg in g.groupby("season"):
+            wt = w.get(int(yr), 0.0)
+            if wt <= 0:
+                continue
+            n = len(gg)
+            rel = min(1.0, max(0.20, n / 8.0)) if int(yr) == season else min(1.0, n / 8.0)
+            ew = wt * rel
+            on += ew * gg["scored"].mean(); od += ew
+            dn += ew * gg["allowed"].mean(); dd += ew
+        if od:
+            off[t] = on / od
+        if dd:
+            deff[t] = dn / dd
+    return off, deff, float(tg["scored"].mean())
+
+def _team_fantasy_calibration(season):
+    """Empirical skill-position fantasy points per real point scored (team-week).
+
+    Returns (ratio, emp_team_fp): the league ratio and each team's historical
+    mean team-week skill fantasy, used to size usage-share coverage.
+    """
+    from dfs_lab.data import _load_nflverse_inputs, _dk_fantasy_points_from_stats
+    stats, sched = _load_nflverse_inputs(season)
+    stx = stats.copy()
+    stx["_fp"] = _dk_fantasy_points_from_stats(stx)
+    posc = _first_existing(stx.columns, ["position", "position_group", "Pos"])
+    stx["_pos"] = stx[posc].astype(str).str.upper().replace({"HB": "RB", "FB": "RB"}) if posc else ""
+    stx["_tm"] = stx["team"].astype(str).str.upper()
+    stx["_sn"] = pd.to_numeric(stx["season"], errors="coerce")
+    stx["_wk"] = pd.to_numeric(stx["week"], errors="coerce")
+    tw = stx[stx["_pos"].isin(["QB", "RB", "WR", "TE"])].groupby(
+        ["_tm", "_sn", "_wk"], as_index=False).agg(skill_fp=("_fp", "sum"))
+    s = sched.copy()
+    pts = pd.concat([
+        pd.DataFrame({"_tm": s["home_team"].astype(str).str.upper(),
+                      "_sn": pd.to_numeric(s["season"], errors="coerce"),
+                      "_wk": pd.to_numeric(s["week"], errors="coerce"),
+                      "pts": pd.to_numeric(s["home_score"], errors="coerce")}),
+        pd.DataFrame({"_tm": s["away_team"].astype(str).str.upper(),
+                      "_sn": pd.to_numeric(s["season"], errors="coerce"),
+                      "_wk": pd.to_numeric(s["week"], errors="coerce"),
+                      "pts": pd.to_numeric(s["away_score"], errors="coerce")}),
+    ], ignore_index=True)
+    m = tw.merge(pts, on=["_tm", "_sn", "_wk"], how="inner")
+    m = m[m["pts"] > 0]
+    ratio = float((m["skill_fp"] / m["pts"]).mean()) if len(m) else 3.2
+    emp = m.groupby("_tm")["skill_fp"].mean().to_dict()
+    return ratio, emp
+
+def topdown_simulate_slate(df, sims=10000, seed=42):
+    """Top-down game simulation: team scores -> team fantasy -> player shares.
+
+    Each game is simulated `sims` times from team offense/defense ratings
+    (nflverse, four-season weighted) with a home-field edge and
+    pace-correlated team noise. Team fantasy points are dealt to players by
+    projection-implied usage shares with individual lognormal noise, so stacks
+    and bring-backs emerge from correlated game scripts instead of ad-hoc
+    shock terms. Defenses move against their opponent's simulated score via
+    the points-allowed bracket.
+
+    Returns a dict with:
+      player_stats: Name, Position, Team, Sim Mean, Sim P50, Sim P75, Sim P90,
+                    Sim Std, P(3x) % (probability of 3x salary value)
+      game_table:   Game, Mean DFS env, P75, P90, Volatility, Slate ceiling %
+                    (same shape as the old bottom-up sim table)
+      worlds:       DataFrame (sims rows x players) of simulated fantasy
+                    points, columns are df integer positions.
+    """
+    from dfs_lab.data import _slate_season, _dst_points_allowed_fantasy
+    d = df.reset_index(drop=True).copy()
+    n = len(d)
+    empty = {"player_stats": pd.DataFrame(), "game_table": pd.DataFrame(), "worlds": pd.DataFrame()}
+    if n == 0:
+        return empty
+    season = _slate_season(d)
+    rng = np.random.default_rng(int(seed))
+    sims = int(max(1000, sims))
+
+    off, deff, lg = _nflverse_team_ratings(season)
+    ratio, emp_team_fp = _team_fantasy_calibration(season)
+    HFA, SCORE_SD, PACE_CORR = 1.8, 10.0, 0.2
+
+    proj = pd.to_numeric(d["My Proj"], errors="coerce").fillna(0.0).clip(lower=0.0).to_numpy()
+    pos = d["Position"].astype(str).str.upper().to_numpy()
+    teams = d["Team"].astype(str).str.upper().to_numpy()
+    is_dst = pos == "DST"
+
+    away = d["Away"].astype(str).str.upper() if "Away" in d.columns else pd.Series([""] * n)
+    home = d["Home"].astype(str).str.upper() if "Home" in d.columns else pd.Series([""] * n)
+    games, seen = [], set()
+    for a, h in zip(away, home):
+        if a and h and (a, h) not in seen:
+            seen.add((a, h)); games.append((a, h))
     if not games:
+        return empty
+
+    team_list = sorted(set(teams.tolist()) | {t for g in games for t in g})
+    tix = {t: i for i, t in enumerate(team_list)}
+    team_pts = np.zeros((sims, len(team_list)))
+    simmed = np.zeros(len(team_list), dtype=bool)
+    cov = [[SCORE_SD ** 2, PACE_CORR * SCORE_SD ** 2],
+           [PACE_CORR * SCORE_SD ** 2, SCORE_SD ** 2]]
+    for (a, h) in games:
+        ea = lg * (off.get(a, lg) / lg) * (deff.get(h, lg) / lg)
+        eh = lg * (off.get(h, lg) / lg) * (deff.get(a, lg) / lg) + HFA
+        draw = rng.multivariate_normal([ea, eh], cov, size=sims)
+        team_pts[:, tix[a]] = np.clip(draw[:, 0], 0, None)
+        team_pts[:, tix[h]] = np.clip(draw[:, 1], 0, None)
+        simmed[tix[a]] = simmed[tix[h]] = True
+    team_pts[:, ~simmed] = np.clip(rng.normal(lg, SCORE_SD, size=(sims, (~simmed).sum())), 0, None)
+    skill_fp = ratio * team_pts  # sims x teams
+
+    # Usage shares from projections, scaled by historical coverage so backups'
+    # fantasy is not dealt to pool players.
+    share = np.zeros(n)
+    for t in team_list:
+        m = (teams == t) & (~is_dst)
+        ps = proj[m].sum()
+        if ps <= 0:
+            continue
+        covr = min(1.0, max(0.05, ps / max(emp_team_fp.get(t, ps), 1.0)))
+        share[m] = proj[m] / ps * covr
+
+    # Individual noise: part of weekly variance is team-driven, the rest is the
+    # player's own. 0.65 keeps total variance near the player's Sim Vol.
+    if "Sim Vol" in d.columns:
+        pvol = pd.to_numeric(d["Sim Vol"], errors="coerce").fillna(0.45).to_numpy()
+    else:
+        pvol = np.array([{"QB": 0.26, "RB": 0.42, "WR": 0.50, "TE": 0.48, "DST": 0.62}.get(p, 0.45) for p in pos])
+    ind = 0.65 * np.clip(pvol, 0.12, 0.95)
+    noise = np.exp(rng.normal(0, 1, size=(sims, n)) * ind[None, :] - 0.5 * ind[None, :] ** 2)
+
+    team_col = np.array([tix[t] for t in teams])
+    worlds = np.zeros((sims, n))
+    sk = ~is_dst
+    worlds[:, sk] = skill_fp[:, team_col[sk]] * share[sk][None, :] * noise[:, sk]
+
+    # Defenses ride their projection, adjusted by the opponent's simulated
+    # score through the points-allowed bracket.
+    opp_of = {}
+    for (a, h) in games:
+        opp_of[a] = h; opp_of[h] = a
+    for j in np.where(is_dst)[0]:
+        t = teams[j]
+        opp = opp_of.get(t)
+        base = max(float(proj[j]), 0.5)
+        adj = (np.vectorize(_dst_points_allowed_fantasy)(team_pts[:, tix[opp]]) - 1.0) if opp else 0.0
+        dv = min(0.9, max(0.2, float(pvol[j])))
+        worlds[:, j] = np.clip(base + adj + rng.normal(0, dv * base, sims), 0, None)
+
+    sal = pd.to_numeric(d["Salary"], errors="coerce").fillna(0.0).to_numpy()
+    thr3x = 3.0 * sal / 1000.0
+    player_stats = pd.DataFrame({
+        "Name": d["Name"], "Position": d["Position"], "Team": d["Team"],
+        "Sim Mean": np.round(worlds.mean(axis=0), 2),
+        "Sim P50": np.round(np.median(worlds, axis=0), 2),
+        "Sim P75": np.round(np.percentile(worlds, 75, axis=0), 2),
+        "Sim P90": np.round(np.percentile(worlds, 90, axis=0), 2),
+        "Sim Std": np.round(worlds.std(axis=0), 2),
+        "P(3x) %": np.round(100 * (worlds > thr3x[None, :]).mean(axis=0), 1),
+    })
+
+    grows, gmats = [], []
+    for (a, h) in games:
+        gfp = skill_fp[:, tix[a]] + skill_fp[:, tix[h]]
+        for t in (a, h):
+            dm = np.where(is_dst & (teams == t))[0]
+            if len(dm):
+                gfp = gfp + worlds[:, dm].sum(axis=1)
+        gmats.append(gfp)
+        grows.append({"Game": f"{a}@{h}", "Mean DFS env": round(float(gfp.mean()), 1),
+                      "P75": round(float(np.percentile(gfp, 75)), 1),
+                      "P90": round(float(np.percentile(gfp, 90)), 1),
+                      "Volatility": round(float(gfp.std()), 1)})
+    game_table = pd.DataFrame(grows)
+    mat = np.vstack(gmats)
+    winners = np.argmax(mat, axis=0)
+    counts = np.bincount(winners, minlength=len(grows))
+    game_table["Slate ceiling %"] = np.round(100 * counts / sims, 1)
+    game_table = game_table.sort_values(["Slate ceiling %", "P90"], ascending=False).reset_index(drop=True)
+
+    worlds_df = pd.DataFrame(worlds, columns=d.index)
+    return {"player_stats": player_stats, "game_table": game_table, "worlds": worlds_df}
+
+def lineup_sim_equity(lineups, worlds_df, names):
+    """Per-lineup tournament equity from top-down worlds.
+
+    Ceiling P90 is the lineup's 90th-percentile total; Break Slate % is the
+    share of worlds where the lineup beats the 99.5th percentile of all
+    built-lineup totals (a slate-breaking score). Positional: row i of the
+    return matches row i of `lineups`. `names` is the player-name series in
+    the same order as the worlds columns.
+    """
+    if lineups is None or lineups.empty or worlds_df is None or worlds_df.empty:
         return pd.DataFrame()
-    gshock={g:rng.normal(0,1,sims) for g in games}
-    tshock={t:rng.normal(0,1,sims) for t in d["Team"].dropna().astype(str).unique().tolist()}
-    totals={g:np.zeros(sims) for g in games}
-    pos_vol={"QB":0.26,"RB":0.42,"WR":0.50,"TE":0.48,"DST":0.62}
-    has_vol="Sim Vol" in d.columns
-    for _,r in d.iterrows():
-        g=str(r["Matchup"]); t=str(r["Team"])
-        if g not in totals: continue
-        mu=max(float(r["Sim Proj"]),0.05)
-        vol=pos_vol.get(str(r["Position"]).upper(),0.45)
-        if has_vol:
-            try:
-                _v=float(r["Sim Vol"])
-                if _v>0: vol=float(min(0.95,max(0.12,_v)))
-            except Exception: pass
-        eps=rng.normal(0,1,sims)
-        shock=0.13*gshock[g]+0.09*tshock.get(t,0)+vol*eps
-        vals=np.maximum(0.0,mu*np.exp(shock-0.5*(vol**2+0.13**2+0.09**2)))
-        totals[g]+=vals
-    mat=np.vstack([totals[g] for g in games]); winners=np.argmax(mat,axis=0)
-    rows=[]
-    for gi,g in enumerate(games):
-        v=mat[gi]
-        rows.append({"Game":g,"Mean DFS env":round(float(np.mean(v)),1),"P75":round(float(np.quantile(v,.75)),1),
-                     "P90":round(float(np.quantile(v,.90)),1),"Volatility":round(float(np.std(v)),1),
-                     "Slate ceiling %":round(float(np.mean(winners==gi)*100),1)})
-    return pd.DataFrame(rows).sort_values(["Slate ceiling %","P90"],ascending=False).reset_index(drop=True)
+    name_to_col = {}
+    for c, nm in zip(worlds_df.columns, names):
+        name_to_col[str(nm)] = c
+    slot_cols = [c for c in ROSTER_SLOTS if c in lineups.columns]
+    totals = []
+    for _, r in lineups.iterrows():
+        cols = [name_to_col.get(str(r[c])) for c in slot_cols]
+        cols = [c for c in cols if c is not None]
+        totals.append(worlds_df[cols].to_numpy().sum(axis=1) if cols else np.zeros(len(worlds_df)))
+    totals = np.vstack(totals)
+    nut = float(np.percentile(totals, 99.5))
+    return pd.DataFrame({
+        "Sim Mean": np.round(totals.mean(axis=1), 1),
+        "Ceiling P90": np.round(np.percentile(totals, 90, axis=1), 1),
+        "Break Slate %": np.round(100 * (totals > nut).mean(axis=1), 2),
+    })
 
 def classic_strategy_theses(df, intel, sim_table, field_size, payout_style, entry_format):
     """Find evidence-backed ways to attack the slate. A thesis may start with a game, QB, receiver, or RB."""
