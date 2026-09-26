@@ -1268,17 +1268,23 @@ table.rcc-roster tr:last-child td{border-bottom:0;}
    (via #root), so the dark command-center look holds regardless of
    injection order. Injected last in render_main.
    ============================================================ */
-/* ---------- sticky primary tab bar: always reachable ----------
-   THE single sticky rule for the primary tab bar. All legacy sticky tab
+/* ---------- pinned primary tab bar: always visible ----------
+   THE single pinned rule for the primary tab bar. All legacy sticky tab
    declarations (MAIN_TABS_CSS, SHOWDOWN_SHELL_CSS) were neutralized so they
-   cannot fight this one. Solid background + no backdrop-filter: the old
-   translucent attempt broke position:sticky on iPad Safari. */
+   cannot fight this one. position:fixed (not sticky): the bar is permanently
+   pinned to the top of the viewport, always visible while scrolling, on
+   desktop and iPad Safari. Solid background + no backdrop-filter. */
 html body [data-testid="stTabs"]:not(.st-key-sd_results_hub) [role="tablist"],
 html body [data-testid="stTabs"]:not(.st-key-sd_results_hub) [data-baseweb="tab-list"]{
-  position:sticky!important;top:0!important;z-index:999999!important;
+  position:fixed!important;top:0!important;left:0!important;right:0!important;z-index:999999!important;
   background:#101418!important;
   backdrop-filter:none!important;-webkit-backdrop-filter:none!important;
   overflow-x:auto!important;flex-wrap:nowrap!important;
+  padding:.3rem 1rem 0!important;
+}
+/* reserve space in flow so the fixed bar never covers tab content */
+html body [data-testid="stTabs"]:not(.st-key-sd_results_hub){
+  padding-top:3.4rem!important;
 }
 /* the showdown results-hub tabs stay in normal flow (explicitly non-sticky) */
 html body .st-key-sd_results_hub [role="tablist"],

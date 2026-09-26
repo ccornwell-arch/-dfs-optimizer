@@ -91,18 +91,19 @@ def test_lineup_card(df=None, res=None, eq=None, sim=None):
 
 
 # ---------------------------------------------------------------------------
-# CSS: exactly one sticky tab rule
+# CSS: exactly one pinned tab rule
 # ---------------------------------------------------------------------------
 
 def test_single_sticky_tab_rule():
     src = open("dfs_lab/styles.py").read()
     # Split into rule blocks; find ones that pin tab bars.
     blocks = re.findall(r"[^{}]*\{[^{}]*\}", src)
-    sticky_tab = [b for b in blocks
-                  if "position:sticky" in b and ("tablist" in b or "tab-list" in b)]
-    _check("css: one sticky tab rule", len(sticky_tab) == 1, f"found {len(sticky_tab)}")
-    rule = sticky_tab[0]
-    _check("css: sticky top:0", "top:0!important" in rule)
+    pinned_tab = [b for b in blocks
+                  if ("position:fixed" in b or "position:sticky" in b)
+                  and ("tablist" in b or "tab-list" in b)]
+    _check("css: one pinned tab rule", len(pinned_tab) == 1, f"found {len(pinned_tab)}")
+    rule = pinned_tab[0]
+    _check("css: pinned top:0", "top:0!important" in rule)
     _check("css: solid dark background", "#101418!important" in rule)
     _check("css: no backdrop blur", "backdrop-filter:blur" not in rule)
     _check("css: hub exclusion kept", ":not(.st-key-sd_results_hub)" in rule)
