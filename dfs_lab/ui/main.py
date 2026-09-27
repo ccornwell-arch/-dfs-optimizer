@@ -17,6 +17,7 @@ from scipy.sparse import lil_matrix
 
 
 from dfs_lab import styles
+from dfs_lab.common import player_editor_widget_key
 from dfs_lab.config import APP_BUILD, PRIORITY_OPTIONS, ROSTER_SLOTS, git_build_stamp
 from dfs_lab.leverage import leverage_lane_pick, chalk_bust_beneficiaries
 from dfs_lab.ui.results import render_results_command_center, postbuild_lineups_context
@@ -438,6 +439,20 @@ def render_main(settings):
                 for x,r in ed.iterrows():
                     e=st.session_state["strategy_master"].get(str(r["ID"]),{})
                     for cc,k,dv in [("Lock","Lock",False),("Exclude","Exclude",False),("Priority","Priority","Neutral"),("Min Exposure","Min Exposure",0),("Max Exposure","Max Exposure",100)]: ed.at[x,cc]=e.get(k,dv)
+                # The editor's pending edits are row-positional. If the visible
+                # order changes (sort/filter) before APPLY is pressed, a fixed
+                # key would silently land the check on the wrong player — the
+                # reported "I marked him Out but he's in my lineups" bug. Scope
+                # the key to the exact visible order so pending edits reset
+                # instead of misapplying, and warn when that discard happens.
+                _ced_key=player_editor_widget_key("v4_classic_players",_qb_pool_fp,view["ID"].astype(str).tolist())
+                _ced_prev=st.session_state.get("v4_classic_players_key")
+                if _ced_prev and _ced_prev!=_ced_key:
+                    _ced_old=st.session_state.get(_ced_prev)
+                    if isinstance(_ced_old,dict) and _ced_old.get("edited_rows"):
+                        st.warning("Player list order changed before you pressed APPLY PLAYER EDITS — unapplied Out/Lock checks were discarded (not applied to the wrong players). Please re-check them and apply.")
+                    st.session_state.pop(_ced_prev,None)
+                st.session_state["v4_classic_players_key"]=_ced_key
                 with st.form("classic_player_editor_form",clear_on_submit=False):
                     edited=st.data_editor(ed,hide_index=True,use_container_width=True,height=620,
                         disabled=["ID","Name","Pos","Team","Opponent","Salary","Base Proj","Own"],
@@ -452,7 +467,7 @@ def render_main(settings):
                             "Priority":st.column_config.SelectboxColumn("Lean",options=PRIORITY_OPTIONS,width=95),"Lock":st.column_config.CheckboxColumn("Lock",width=65),
                             "Exclude":st.column_config.CheckboxColumn("Out",width=60),"Min Exposure":st.column_config.NumberColumn("Min %",min_value=0,max_value=100,step=5,width=75),
                             "Max Exposure":st.column_config.NumberColumn("Max %",min_value=0,max_value=100,step=5,width=75),
-                        },key="v4_classic_players")
+                        },key=_ced_key)
                     pc1,pc2=st.columns(2)
                     with pc1:
                         apply_classic_players=st.form_submit_button("APPLY PLAYER EDITS",type="primary",use_container_width=True)
@@ -485,6 +500,13 @@ def render_main(settings):
                             st.session_state["classic_projection_overrides"].pop(pid,None)
                     if changed:
                         st.session_state.pop("classic_result_v4",None)
+                        # Pending row-positional edits are now materialized in
+                        # strategy_master. Clear them from the widget state so a
+                        # later sort/filter change doesn't warn about "unapplied"
+                        # edits that were already applied.
+                        _ced_ws=st.session_state.get(_ced_key)
+                        if isinstance(_ced_ws,dict):
+                            _ced_ws["edited_rows"]={}
                         st.rerun()
                     else:
                         st.info("No edits detected — your built lineups are untouched.")
@@ -824,6 +846,20 @@ def render_main(settings):
                     e=st.session_state["showdown_strategy"].get(str(r["ID"]),{})
                     for c,k,d in [("Lock","Lock",False),("CPT Lock","CPT Lock",False),("Exclude","Exclude",False),("CPT Eligible","CPT Eligible",True),("Priority","Priority","Neutral"),("Min Exposure","Min Exposure",0),("Max Exposure","Max Exposure",100),("CPT Min","CPT Min",0),("CPT Max","CPT Max",100)]: ed.at[x,c]=e.get(k,d)
                 st.caption("Make all of your player/Captain changes, then tap Apply changes once. This prevents the screen from dimming after every checkbox.")
+                # Same row-positional hazard as the Classic editor: pending
+                # edits are positional, so scope the widget key to the exact
+                # visible order. A filter change before tapping Apply resets
+                # pending edits (with a warning) instead of excluding/locking
+                # the wrong player.
+                _sd_fp=f"{entry_format}|{int(field_size)}|{payout_style}|{getattr(dk_file,'name','slate')}"
+                _sed_key=player_editor_widget_key("v4_sdplayers",_sd_fp,view["ID"].astype(str).tolist())
+                _sed_prev=st.session_state.get("v4_sdplayers_key")
+                if _sed_prev and _sed_prev!=_sed_key:
+                    _sed_old=st.session_state.get(_sed_prev)
+                    if isinstance(_sed_old,dict) and _sed_old.get("edited_rows"):
+                        st.warning("Player list order changed before you tapped Apply changes — unapplied Out/Lock checks were discarded (not applied to the wrong players). Please re-check them and apply.")
+                    st.session_state.pop(_sed_prev,None)
+                st.session_state["v4_sdplayers_key"]=_sed_key
                 with st.form("showdown_player_editor_form", clear_on_submit=False):
                     edited=st.data_editor(
                         ed,
@@ -855,7 +891,7 @@ def render_main(settings):
                         "CPT Min":st.column_config.NumberColumn("CPT Min",min_value=0,max_value=100,step=5,width=74),
                         "CPT Max":st.column_config.NumberColumn("CPT Max",min_value=0,max_value=100,step=5,width=74),
                     },
-                        key="v4_sdplayers",
+                        key=_sed_key,
                     )
                     apply_player_changes=st.form_submit_button("Apply player changes",type="primary",use_container_width=True)
                 if apply_player_changes:
@@ -866,6 +902,9 @@ def render_main(settings):
                         else: st.session_state["projection_overrides"].pop(pid,None)
                         ex=bool(r["Exclude"]); cptlock=bool(r["CPT Lock"]) and not ex
                         st.session_state["showdown_strategy"][str(r["ID"]) ]={"Lock":bool(r["Lock"]) and not ex and not cptlock,"CPT Lock":cptlock,"Exclude":ex,"CPT Eligible":bool(r["CPT Eligible"]) and not ex,"Priority":"Exclude" if ex else str(r["Priority"]),"Min Exposure":float(r["Min Exposure"]),"Max Exposure":float(r["Max Exposure"]),"CPT Min":float(r["CPT Min"]),"CPT Max":float(r["CPT Max"])}
+                    _sed_ws=st.session_state.get(_sed_key)
+                    if isinstance(_sed_ws,dict):
+                        _sed_ws["edited_rows"]={}
                     st.success("Player settings applied.")
             with tabs[2]:
                 st.markdown('<div class="card-title">Relationships</div><div class="card-sub">Teach DFS Lab which players, positions and team roles belong together — or should never appear together.</div>',unsafe_allow_html=True)
