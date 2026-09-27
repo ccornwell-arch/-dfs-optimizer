@@ -28,12 +28,14 @@ PRIORITY_BONUS = {"Core": 2.8, "Like": 1.35, "Neutral": 0.0, "Fade": -1.5, "Excl
 TEAM_PRIORITY_BONUS = {"Core": 1.8, "Like": 0.9, "Neutral": 0.0, "Fade": -0.8, "Exclude": -100.0}
 # Soft bring-back incentive for bringback_mode="Optional": added to the
 # objective of active opposing skill players (RB/WR/TE) in the chosen QB's
-# game when the opposing offense is worthy of a shootout. Sized below the
-# hard-stack bonuses (+1.1 QB / +0.45 WR-TE) and on the order of a strong
-# leverage edge: enough to flip close FLEX/WR3 calls toward correlation,
-# never enough to force a bad play. GPP best practice is ~50% game-stack
-# rate (FantasyLabs, Fantasy Footballers) — a lever, not a mandate.
-BRINGBACK_NUDGE = 0.6
+# game when the opposing offense is worthy of a shootout. Calibrated (Sep
+# 2026) on a realistic-scale synthetic slate: 0.6 flipped only ~14% of
+# eligible lineups (bonus drowned by projection gaps); 1.2 lands ~55%
+# bring-back rate, the ~50% game-stack zone from GPP research (FantasyLabs,
+# Fantasy Footballers). Sized at "Like"-scale (1.35): weaker than an explicit
+# Core (2.8), so it leans toward correlation without overriding your opinions.
+# Never enough to force a bad play; Required/None are untouched.
+BRINGBACK_NUDGE = 1.2
 SHOWDOWN_SLOTS = ["CPT", "FLEX1", "FLEX2", "FLEX3", "FLEX4", "FLEX5"]
 GAME_WORLDS = {}
 CONTEXT_FACTOR_WEIGHTS = {
