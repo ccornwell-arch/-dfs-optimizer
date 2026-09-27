@@ -1273,19 +1273,32 @@ table.rcc-roster tr:last-child td{border-bottom:0;}
    THE single pinned rule for the primary tab bar. All legacy sticky tab
    declarations (MAIN_TABS_CSS, SHOWDOWN_SHELL_CSS) were neutralized so they
    cannot fight this one. position:fixed (not sticky): the bar is permanently
-   pinned to the top of the viewport, always visible while scrolling, on
-   desktop and iPad Safari. Solid background + no backdrop-filter. */
-html body [data-testid="stTabs"]:not(.st-key-sd_results_hub) [role="tablist"],
-html body [data-testid="stTabs"]:not(.st-key-sd_results_hub) [data-baseweb="tab-list"]{
-  position:fixed!important;top:0!important;left:0!important;right:0!important;z-index:999999!important;
+   App-owned sticky nav (Sep 2026): the primary workspace nav is now a
+   segmented control whose keyed element containers (.st-key-sd_nav /
+   .st-key-classic_nav) stick to the top of the viewport. Unlike the old
+   fixed-tablist CSS, this does not depend on Streamlit's internal tab DOM,
+   and the selected section is session state so post-build buttons can jump
+   the user to Players / Exposure. Solid background + no backdrop-filter
+   (backdrop-filter is what broke sticky on iPad Safari). */
+html body .st-key-sd_nav,
+html body .st-key-classic_nav{
+  position:sticky!important;top:0!important;z-index:900!important;
   background:#101418!important;
   backdrop-filter:none!important;-webkit-backdrop-filter:none!important;
-  overflow-x:auto!important;flex-wrap:nowrap!important;
-  padding:.3rem 1rem 0!important;
+  padding:.45rem .75rem!important;margin:0 -.75rem!important;
+  border-bottom:1px solid rgba(122,162,255,.18)!important;
 }
-/* reserve space in flow so the fixed bar never covers tab content */
-html body [data-testid="stTabs"]:not(.st-key-sd_results_hub){
-  padding-top:3.4rem!important;
+/* segmented-control pills: match the dark command-center tab look */
+html body .st-key-sd_nav [data-testid="stButtonGroup"] button,
+html body .st-key-classic_nav [data-testid="stButtonGroup"] button{
+  color:#cdd8ea!important;background:transparent!important;
+  border:1px solid transparent!important;border-radius:.5rem!important;
+  font-weight:600!important;white-space:nowrap!important;
+}
+html body .st-key-sd_nav [data-testid="stButtonGroup"] button[data-selected="true"],
+html body .st-key-classic_nav [data-testid="stButtonGroup"] button[data-selected="true"]{
+  color:#fff!important;background:rgba(90,140,255,.22)!important;
+  border-color:rgba(122,162,255,.45)!important;
 }
 /* the showdown results-hub tabs stay in normal flow (explicitly non-sticky) */
 html body .st-key-sd_results_hub [role="tablist"],
