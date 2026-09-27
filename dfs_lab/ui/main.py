@@ -530,12 +530,11 @@ def render_main(settings):
                     if changed:
                         st.session_state.pop("classic_result_v4",None)
                         # Pending row-positional edits are now materialized in
-                        # strategy_master. Clear them from the widget state so a
+                        # strategy_master. Drop the widget's pending-edit state so a
                         # later sort/filter change doesn't warn about "unapplied"
-                        # edits that were already applied.
-                        _ced_ws=st.session_state.get(_ced_key)
-                        if isinstance(_ced_ws,dict):
-                            _ced_ws["edited_rows"]={}
+                        # edits that were already applied. (Pop the key: mutating
+                        # nested widget state is forbidden by Streamlit.)
+                        st.session_state.pop(_ced_key,None)
                         st.rerun()
                     else:
                         st.info("No edits detected — your built lineups are untouched.")
@@ -919,7 +918,7 @@ def render_main(settings):
                 for x,r in ed.iterrows():
                     e=st.session_state["showdown_strategy"].get(str(r["ID"]),{})
                     for c,k,d in [("Lock","Lock",False),("CPT Lock","CPT Lock",False),("Exclude","Exclude",False),("CPT Eligible","CPT Eligible",True),("Priority","Priority","Neutral"),("Min Exposure","Min Exposure",0),("Max Exposure","Max Exposure",100),("CPT Min","CPT Min",0),("CPT Max","CPT Max",100)]: ed.at[x,c]=e.get(k,d)
-                st.caption("Make all of your player/Captain changes, then tap Apply changes once. This prevents the screen from dimming after every checkbox.")
+                st.caption("Make all of your player/Captain changes, then tap Apply changes once. This prevents the screen from dimming after every checkbox. The Your Proj column is editable — type your own projection and the build uses your number instead of the model.")
                 # Same row-positional hazard as the Classic editor: pending
                 # edits are positional, so scope the widget key to the exact
                 # visible order. A filter change before tapping Apply resets
@@ -976,10 +975,15 @@ def render_main(settings):
                         else: st.session_state["projection_overrides"].pop(pid,None)
                         ex=bool(r["Exclude"]); cptlock=bool(r["CPT Lock"]) and not ex
                         st.session_state["showdown_strategy"][str(r["ID"]) ]={"Lock":bool(r["Lock"]) and not ex and not cptlock,"CPT Lock":cptlock,"Exclude":ex,"CPT Eligible":bool(r["CPT Eligible"]) and not ex,"Priority":"Exclude" if ex else str(r["Priority"]),"Min Exposure":float(r["Min Exposure"]),"Max Exposure":float(r["Max Exposure"]),"CPT Min":float(r["CPT Min"]),"CPT Max":float(r["CPT Max"])}
-                    _sed_ws=st.session_state.get(_sed_key)
-                    if isinstance(_sed_ws,dict):
-                        _sed_ws["edited_rows"]={}
-                    st.success("Player settings applied.")
+                    # Drop the widget's pending-edit state (pop the key: mutating
+                    # nested widget state is forbidden by Streamlit) so a later
+                    # sort/filter change doesn't warn about "unapplied" edits that
+                    # were already applied. Rerun so the table immediately shows
+                    # the new Your Proj values.
+                    st.session_state.pop(_sed_key,None)
+                    _n_ov=len(st.session_state["projection_overrides"])
+                    st.success(f"Player settings applied.{f' {_n_ov} projection override(s) active — builds use your numbers.' if _n_ov else ''}")
+                    st.rerun()
                 st.button("📋 Back to Lineups",key="sd_players_back_to_lineups",use_container_width=True,on_click=_sd_nav_go,args=(_SD_TABS[5],))
             if sd_nav==_SD_TABS[2]:
                 st.markdown('<div class="card-title">Relationships</div><div class="card-sub">Teach DFS Lab which players, positions and team roles belong together — or should never appear together.</div>',unsafe_allow_html=True)
