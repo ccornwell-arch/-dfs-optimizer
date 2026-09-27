@@ -24,7 +24,8 @@ from dfs_lab import styles
 def _brand_logo_img():
     """DFS LAB brand mark as an inline <img>; falls back to the alembic glyph."""
     try:
-        p = Path(__file__).resolve().parent.parent / "assets" / "dfs-lab-logo.webp"
+        # setup.py is dfs_lab/ui/setup.py; the logo lives in repo-root assets/.
+        p = Path(__file__).resolve().parent.parent.parent / "assets" / "dfs-lab-logo.webp"
         b64 = base64.b64encode(p.read_bytes()).decode("ascii")
         return (f'<img class="lab-flask-img" alt="DFS LAB logo" '
                 f'src="data:image/webp;base64,{b64}"/>')
