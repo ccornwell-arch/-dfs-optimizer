@@ -13,7 +13,16 @@ sys.path.insert(0, ".")
 
 import pandas as pd
 
+import dfs_lab.data as _data_mod
 from dfs_lab.data import prepare_player_pool
+
+# These suites use synthetic players ("KC Quarterback", ...) with no nflverse
+# roster record. Stub live availability as unreachable so the guard takes its
+# documented fail-open path instead of excluding every synthetic player as
+# teamless. (Also covers test_lab_agent_llm and test_lineups_first, which
+# import build_pipeline from this module.)
+_EMPTY_DF = pd.DataFrame()
+_data_mod._load_live_nfl_availability = lambda season=2026: (_EMPTY_DF, _EMPTY_DF)
 from dfs_lab.classic import (
     generate_lineups, topdown_simulate_slate, lineup_sim_equity,
     bringback_worthy_teams,

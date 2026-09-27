@@ -178,9 +178,14 @@ def _dfs_name_key(v):
 def apply_live_availability_guard(df, active_col="ActiveForBuild", season=2026):
     """Auto-remove players with reliable current evidence they cannot play.
 
-    This is fail-open: if live data cannot load or a player cannot be matched, DFS LAB
-    does not invent an inactive status. Questionable/doubtful players are surfaced but
-    not automatically removed; official OUT and non-active roster statuses are removed.
+    Fail-open only when live data cannot load: if nflverse is unreachable,
+    nobody is excluded. But a player with no roster record on any team this
+    season is not on an NFL roster (e.g. a free agent the slate file still
+    lists) and cannot score fantasy points, so they are excluded with a clear
+    reason surfaced in the pre-build auto-excluded panel. Team defenses are
+    exempt (they are not in player roster data). Questionable/doubtful players
+    are surfaced but not automatically removed; official OUT and non-active
+    roster statuses are removed.
     """
     out=df.copy()
     if active_col not in out.columns: out[active_col]=True
@@ -189,7 +194,11 @@ def apply_live_availability_guard(df, active_col="ActiveForBuild", season=2026):
     out["Headshot URL"]=""
     try:
         roster,inj=_load_live_nfl_availability(int(season))
-        # Latest weekly roster row per player/team.
+        # Latest weekly roster row per player NAME (any team). A player with no
+        # roster row on any team this season is not on an NFL roster — e.g. a
+        # free agent the slate file still lists — and cannot score fantasy
+        # points, so they are excluded rather than failed open.
+        nmap = None
         if not roster.empty:
             rn=_first_existing(roster.columns,["full_name","football_name","display_name"])
             rt=_first_existing(roster.columns,["team","Team"])
@@ -200,27 +209,44 @@ def apply_live_availability_guard(df, active_col="ActiveForBuild", season=2026):
                 rr=roster.copy()
                 rr["_key"]=rr[rn].map(_dfs_name_key); rr["_team"]=rr[rt].astype(str)
                 rr["_week"]=pd.to_numeric(rr[rw],errors="coerce").fillna(0) if rw else 0
-                rr=rr.sort_values("_week").drop_duplicates(["_key","_team"],keep="last")
-                rmap={(r["_key"],r["_team"]):(str(r[rs]),int(r["_week"]),str(r[rh]) if rh and pd.notna(r[rh]) else "") for _,r in rr.iterrows()}
-                block_codes={"EXE","INA","PUP","RES","SUS","DEV","CUT","RET","UFA","NWT","RSN","RFA","TRC","TRD","TRT"}
-                for i,r in out.iterrows():
-                    hit=rmap.get((_dfs_name_key(r["Name"]),str(r["Team"])))
-                    if not hit: continue
-                    status,wk,headshot=hit; su=status.upper().strip()
-                    out.at[i,"Live Status"]=status
-                    out.at[i,"Live Status Source"]=f"nflverse roster W{wk}"
-                    if headshot and headshot.lower() not in ["nan","none",""]:
-                        out.at[i,"Headshot URL"]=headshot
-                    text=su.replace("."," ")
-                    blocked=(su in block_codes or any(x in text for x in [
-                        "EX/COMM","COMMISSIONER","PRACTICE SQUAD","R/INJURED","RESERVE",
-                        "SUSP","INACTIVE","WAIVER","RETIRED","R/PUP","PHYSICALLY UNABLE"
-                    ]))
-                    # Explicit Active/ACT is playable; unknown statuses are fail-open.
-                    if blocked:
-                        out.at[i,active_col]=False
-                        out.at[i,"Role Confidence"]="Unavailable — live roster"
-                        out.at[i,"Auto Excluded Reason"]=f"Live roster status: {status}"
+                rr=rr.sort_values("_week").drop_duplicates(["_key"],keep="last")
+                nmap={r["_key"]:(str(r[rs]),str(r["_team"]),int(r["_week"]),str(r[rh]) if rh and pd.notna(r[rh]) else "") for _,r in rr.iterrows()}
+        if nmap is not None:
+            block_codes={"EXE","INA","PUP","RES","SUS","DEV","CUT","RET","UFA","NWT","RSN","RFA","TRC","TRD","TRT"}
+            _pos=out["Position"].astype(str).str.upper() if "Position" in out.columns else pd.Series("",index=out.index)
+            _is_dst=_pos.isin(["DST","D/ST"])
+            for i,r in out.iterrows():
+                if bool(_is_dst.loc[i]):
+                    continue  # team defenses are not in player roster data
+                hit=nmap.get(_dfs_name_key(r["Name"]))
+                if not hit:
+                    out.at[i,active_col]=False
+                    out.at[i,"Role Confidence"]="Unavailable — not on a roster"
+                    out.at[i,"Auto Excluded Reason"]=f"No {int(season)} NFL roster record — player is not on a team"
+                    out.at[i,"Live Status"]="No roster record"
+                    out.at[i,"Live Status Source"]=f"nflverse roster {int(season)}"
+                    continue
+                status,team,wk,headshot=hit; su=status.upper().strip()
+                out.at[i,"Live Status"]=status
+                out.at[i,"Live Status Source"]=f"nflverse roster W{wk}"
+                if headshot and headshot.lower() not in ["nan","none",""]:
+                    out.at[i,"Headshot URL"]=headshot
+                if (not team) or (team.strip().upper() in ("","NAN","NONE","NULL")):
+                    out.at[i,active_col]=False
+                    out.at[i,"Role Confidence"]="Unavailable — not on a roster"
+                    out.at[i,"Auto Excluded Reason"]="Roster record has no team — player is not on a team"
+                    out.at[i,"Live Status"]="No team on roster record"
+                    continue
+                text=su.replace("."," ")
+                blocked=(su in block_codes or any(x in text for x in [
+                    "EX/COMM","COMMISSIONER","PRACTICE SQUAD","R/INJURED","RESERVE",
+                    "SUSP","INACTIVE","WAIVER","RETIRED","R/PUP","PHYSICALLY UNABLE"
+                ]))
+                # Explicit Active/ACT is playable; unknown statuses are fail-open.
+                if blocked:
+                    out.at[i,active_col]=False
+                    out.at[i,"Role Confidence"]="Unavailable — live roster"
+                    out.at[i,"Auto Excluded Reason"]=f"Live roster status: {status}"
 
         # Latest official injury report. OUT is hard; doubtful/questionable are labels only.
         if not inj.empty:

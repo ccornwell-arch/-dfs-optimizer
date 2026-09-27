@@ -18,7 +18,14 @@ sys.path.insert(0, ".")
 
 import pandas as pd
 
+import dfs_lab.data as _data_mod
 from dfs_lab.data import prepare_player_pool, apply_football_reality_guard
+
+# Synthetic players ("AAron Starter", ...) have no nflverse roster record. Stub
+# live availability as unreachable so the guard fails open (its documented
+# path) instead of excluding every synthetic player as teamless.
+_EMPTY_DF = pd.DataFrame()
+_data_mod._load_live_nfl_availability = lambda season=2026: (_EMPTY_DF, _EMPTY_DF)
 from dfs_lab.classic import generate_lineups, classic_lineup_coherence
 
 try:
