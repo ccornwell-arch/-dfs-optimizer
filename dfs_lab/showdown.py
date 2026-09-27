@@ -1013,3 +1013,60 @@ def showdown_upload_csv(result):
     for _,r in result.iterrows():
         rows.append([r.get(c+"_NameID",r[c]) for c in cols])
     return pd.DataFrame(rows,columns=["CPT","FLEX","FLEX","FLEX","FLEX","FLEX"]).to_csv(index=False)
+
+def audit_showdown_portfolio(result, strategy_map, id_to_name=None):
+    """Post-build hard-rule audit for a Showdown portfolio.
+
+    Verifies every built lineup against the user's hard player rules:
+      - nobody captains with CPT? unchecked (CPT Eligible=False)
+      - no excluded player appears in any slot
+      - every CPT-locked player is the Captain
+      - every locked player appears somewhere in the lineup
+
+    Returns a list of human-readable violation strings (empty when clean).
+    This is a safety net: the MILP already enforces these as hard bounds, so
+    any violation here means the strategy map and the built lineups disagree
+    (e.g. a UI edit landed on the wrong player) and the user must see it.
+    """
+    violations = []
+    if result is None or getattr(result, "empty", True):
+        return violations
+    id_to_name = id_to_name or {}
+    slot_id_cols = ["CPT_ID", "FLEX1_ID", "FLEX2_ID", "FLEX3_ID", "FLEX4_ID", "FLEX5_ID"]
+    slot_name_cols = ["CPT", "FLEX1", "FLEX2", "FLEX3", "FLEX4", "FLEX5"]
+
+    def _nm(pid):
+        return id_to_name.get(str(pid), str(pid))
+
+    for idx, row in result.iterrows():
+        label = f"Lineup {row.get('Rank', idx + 1)}"
+        lineup_ids = [str(row.get(c, "")) for c in slot_id_cols if str(row.get(c, ""))]
+        cap_id = str(row.get("CPT_ID", ""))
+        cap_name = str(row.get("CPT", _nm(cap_id)))
+        cap_strat = strategy_map.get(cap_id, {})
+        if cap_id and not bool(cap_strat.get("CPT Eligible", True)):
+            violations.append(
+                f"{label}: {cap_name} is Captain but CPT? is unchecked for them."
+            )
+        for c, ncol in zip(slot_id_cols, slot_name_cols):
+            pid = str(row.get(c, ""))
+            if not pid:
+                continue
+            st_ = strategy_map.get(pid, {})
+            if bool(st_.get("Exclude", False)) or st_.get("Priority") == "Exclude":
+                violations.append(
+                    f"{label}: {_nm(pid)} ({str(row.get(ncol, ''))}) is marked Out but is in the lineup."
+                )
+        for pid, st_ in strategy_map.items():
+            pid = str(pid)
+            if bool(st_.get("CPT Lock", False)) and not bool(st_.get("Exclude", False)):
+                if cap_id != pid:
+                    violations.append(
+                        f"{label}: {_nm(pid)} is captain-locked but is not the Captain."
+                    )
+            if bool(st_.get("Lock", False)) and not bool(st_.get("Exclude", False)):
+                if pid not in lineup_ids:
+                    violations.append(
+                        f"{label}: {_nm(pid)} is locked but is missing from the lineup."
+                    )
+    return violations

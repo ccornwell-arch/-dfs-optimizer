@@ -91,22 +91,32 @@ def test_lineup_card(df=None, res=None, eq=None, sim=None):
 
 
 # ---------------------------------------------------------------------------
-# CSS: exactly one pinned tab rule
+# CSS: the app-owned sticky nav
 # ---------------------------------------------------------------------------
 
 def test_single_sticky_tab_rule():
     src = open("dfs_lab/styles.py").read()
-    # Split into rule blocks; find ones that pin tab bars.
-    blocks = re.findall(r"[^{}]*\{[^{}]*\}", src)
-    pinned_tab = [b for b in blocks
-                  if ("position:fixed" in b or "position:sticky" in b)
-                  and ("tablist" in b or "tab-list" in b)]
-    _check("css: one pinned tab rule", len(pinned_tab) == 1, f"found {len(pinned_tab)}")
-    rule = pinned_tab[0]
+    # The primary workspace nav is a segmented control pinned via its keyed
+    # element containers. Find rule blocks whose SELECTOR targets those keys.
+    blocks = re.findall(r"([^{}]*)\{([^{}]*)\}", src)
+    nav_rules = [(sel, body) for sel, body in blocks
+                 if ".st-key-sd_nav" in sel or ".st-key-classic_nav" in sel]
+    sticky_nav = [(sel, body) for sel, body in nav_rules
+                  if "position:sticky" in body]
+    _check("css: one sticky nav rule", len(sticky_nav) == 1,
+           f"found {len(sticky_nav)}")
+    sel, rule = sticky_nav[0]
+    _check("css: nav covers both workspaces",
+           ".st-key-sd_nav" in sel and ".st-key-classic_nav" in sel)
     _check("css: pinned top:0", "top:0!important" in rule)
     _check("css: solid dark background", "#101418!important" in rule)
     _check("css: no backdrop blur", "backdrop-filter:blur" not in rule)
-    _check("css: hub exclusion kept", ":not(.st-key-sd_results_hub)" in rule)
+    # The showdown results-hub tabs must stay explicitly non-sticky.
+    hub_rules = [(sel, body) for sel, body in blocks
+                 if ".st-key-sd_results_hub" in sel and "tablist" in sel]
+    _check("css: hub rule exists", len(hub_rules) >= 1)
+    _check("css: hub pinned to relative",
+           any("position:relative!important" in body for _, body in hub_rules))
 
 
 def test_pool_cards_hidden_postbuild():

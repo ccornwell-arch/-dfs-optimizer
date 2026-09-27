@@ -37,16 +37,19 @@ def _check(name, cond):
 
 
 def test_sticky_tab_css():
-    _check("pinned: tablist position fixed", "position:fixed!important" in CSS)
-    _check("pinned: top 0", "top:0!important" in CSS)
-    _check("pinned: full viewport width", "left:0!important" in CSS and "right:0!important" in CSS)
-    _check("pinned: high z-index", "z-index:999999!important" in CSS)
-    _check("pinned: solid dark background", "background:#101418!important" in CSS)
-    _check("pinned: no backdrop-filter (iPad Safari)", "backdrop-filter:none!important" in CSS)
-    _check("pinned: flow space reserved for tab content", "padding-top:3.4rem!important" in CSS)
-    _check("pinned: scoped off the showdown results hub",
-           ":not(.st-key-sd_results_hub)" in CSS)
-    _check("pinned: showdown hub pinned to relative",
+    # App-owned sticky nav (Sep 2026): the primary workspace nav is a segmented
+    # control whose keyed element containers stick to the viewport. This no
+    # longer depends on Streamlit's internal tab DOM.
+    _check("nav: sd key selector present", ".st-key-sd_nav" in CSS)
+    _check("nav: classic key selector present", ".st-key-classic_nav" in CSS)
+    _check("nav: position sticky", "position:sticky!important" in CSS)
+    _check("nav: top 0", "top:0!important" in CSS)
+    _check("nav: high z-index", "z-index:900!important" in CSS)
+    _check("nav: solid dark background", "background:#101418!important" in CSS)
+    _check("nav: no backdrop-filter (iPad Safari)", "backdrop-filter:none!important" in CSS)
+    _check("nav: selected pill highlighted",
+           'button[data-selected="true"]' in CSS)
+    _check("nav: showdown hub pinned to relative",
            ".st-key-sd_results_hub [role=\"tablist\"]" in CSS
            and "position:relative!important" in CSS)
 
@@ -146,9 +149,10 @@ def test_headless_render():
     _check("apptest: no exception", len(at.exception) == 0)
     _check("apptest: six main tabs rendered", len(at.tabs) == 6)
     css_blobs = " ".join(m.value for m in at.markdown)
-    _check("apptest: pinned CSS emitted", "position:fixed!important" in css_blobs)
-    _check("apptest: pinned top:0 emitted", "top:0!important" in css_blobs)
-    _check("apptest: hub exclusion emitted", ":not(.st-key-sd_results_hub)" in css_blobs)
+    _check("apptest: sticky nav CSS emitted", "position:sticky!important" in css_blobs)
+    _check("apptest: nav top:0 emitted", "top:0!important" in css_blobs)
+    _check("apptest: nav key selectors emitted",
+           ".st-key-sd_nav" in css_blobs and ".st-key-classic_nav" in css_blobs)
     _check("apptest: dark expander rule emitted", "background:#1a2430!important" in css_blobs)
     _check("apptest: explorer player grid rendered", "rcc-grid" in css_blobs)
     _check("apptest: swap grid rendered", css_blobs.count("rcc-grid") >= 2)
