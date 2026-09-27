@@ -42,3 +42,17 @@ def percentile_label(x, series):
     if pct >= 0.45: return "Good"
     if pct >= 0.25: return "Average"
     return "Weak"
+
+def player_editor_widget_key(prefix, slate_fp, view_ids):
+    """Widget key for a player data_editor whose edits are row-positional.
+
+    st.data_editor reports edits as {row_position: changes}. When the editor
+    sits inside a form, edits stay pending until the user presses apply — and
+    if the visible row order changes in between (sort/filter), a fixed widget
+    key would silently apply the pending edit to the WRONG player (e.g. an
+    "Out" check landing on someone else while the intended player stays in
+    the build pool). Scoping the key to the exact visible row order forces
+    Streamlit to reset pending edits whenever the order changes, so a stale
+    positional edit can never exclude or lock the wrong player.
+    """
+    return f"{prefix}|{slate_fp}|" + ",".join(str(x) for x in view_ids)
