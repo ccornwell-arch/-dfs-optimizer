@@ -495,7 +495,7 @@ def render_main(settings):
                 with r1:
                     min_salary=st.slider("Minimum salary",44000,50000,int(st.session_state["classic_min_salary"]),100,key="classic_min_salary")
                     qb_stack=st.selectbox("QB pass catchers",[1,2,3],key="classic_qb_stack",help="Minimum same-team WR/TE players paired with the QB. Mobile QBs (rushing is the correlation) need one fewer; naked rushing-QB builds are allowed.")
-                    bringback_mode=st.selectbox("Bring-back",["Optional","Required","None"],key="classic_bringback",help="Required forces at least one opposing RB/WR/TE with the QB stack — but only from offenses good enough to shoot out (league-average scoring or better).")
+                    bringback_mode=st.selectbox("Bring-back",["Optional","Required","None"],key="classic_bringback",help="Optional nudges lineups toward one opposing skill player when the other offense is good enough to shoot out (league-average scoring or better) — a correlation lean, not a mandate. Required forces at least one opposing RB/WR/TE with the QB stack under the same worthiness gate. None forbids opposing skill players with the QB outright.")
                     _mob_names=df.loc[df["Mobile QB"].fillna(False).astype(bool),"Name"].astype(str).tolist() if "Mobile QB" in df.columns else []
                     if _mob_names:
                         st.caption("Mobile QBs need one fewer pass catcher: "+", ".join(_mob_names[:8])+(f" (+{len(_mob_names)-8} more)" if len(_mob_names)>8 else ""))
