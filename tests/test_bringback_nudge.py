@@ -91,8 +91,10 @@ def test_nudge_vector_rules():
 
 def test_nudge_constant_sane():
     _check("nudge positive", BRINGBACK_NUDGE > 0)
-    _check("nudge below hard stack bonuses", BRINGBACK_NUDGE < 1.1,
-           f"BRINGBACK_NUDGE={BRINGBACK_NUDGE}")
+    _check("nudge at Like-scale or below (never overrides a Core/Fade opinion)",
+           BRINGBACK_NUDGE <= 1.5, f"BRINGBACK_NUDGE={BRINGBACK_NUDGE}")
+    _check("nudge strong enough to flip realistic FLEX/WR3 gaps (>=1.0)",
+           BRINGBACK_NUDGE >= 1.0, f"BRINGBACK_NUDGE={BRINGBACK_NUDGE}")
 
 
 # (ID, Name, Position, Roster Position, Team, Salary, Proj, Own)
