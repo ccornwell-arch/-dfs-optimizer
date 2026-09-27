@@ -21,7 +21,7 @@ from dfs_lab.leverage import (CHALK_CUT_KICKER, chalk_cut_pairs, compute_mobile_
                               rb_chalk_threshold)
 from dfs_lab.data import (_name_col, _opp_col, _season_col,
                           _dk_fantasy_points_from_stats, _load_nflverse_projection_inputs)
-from dfs_lab.config import ROSTER_SLOTS, PRIORITY_BONUS, TEAM_PRIORITY_BONUS
+from dfs_lab.config import ROSTER_SLOTS, PRIORITY_BONUS, TEAM_PRIORITY_BONUS, BRINGBACK_NUDGE
 
 def letter_grade(score):
     if score >= 93: return "A+"
@@ -182,7 +182,8 @@ def solve_one(
 
     def vidx(i, j): return i * s + j
 
-    # Build variable bounds / objective.
+    # Build variable bounds. The objective vector is filled per solve pass
+    # below; bounds and constraints do not depend on it.
     for i in range(n):
         player_id = str(df.loc[i, "ID"])
         strat = strategy_map.get(player_id, {})
@@ -192,7 +193,6 @@ def solve_one(
             excluded = True
 
         for j, slot in enumerate(ROSTER_SLOTS):
-            c[vidx(i, j)] = -randomized[i]
             if (not active[i]) or excluded or (not elig[slot][i]):
                 ub[vidx(i, j)] = 0
             elif slot=="FLEX" and flex_position in {"RB","WR","TE"}:
@@ -392,23 +392,74 @@ def solve_one(
     for r, coeff in enumerate(rows):
         for col, val in coeff.items():
             A[r, col] = val
+    _cons = LinearConstraint(A.tocsr(), np.array(lows), np.array(highs))
 
-    result = milp(
-        c=c,
-        integrality=integrality,
-        bounds=Bounds(lb, ub),
-        constraints=LinearConstraint(A.tocsr(), np.array(lows), np.array(highs)),
-        options={"time_limit": 8.0},
-    )
-    if not result.success or result.x is None:
-        return None
+    def _run(obj_vec):
+        c = np.zeros(total_vars)
+        for i in range(n):
+            v = -obj_vec[i]
+            for j in range(s):
+                c[vidx(i, j)] = v
+        result = milp(
+            c=c,
+            integrality=integrality,
+            bounds=Bounds(lb, ub),
+            constraints=_cons,
+            options={"time_limit": 8.0},
+        )
+        if not result.success or result.x is None:
+            return None
+        chosen = []
+        for j, slot in enumerate(ROSTER_SLOTS):
+            vals = [(result.x[vidx(i, j)], i) for i in range(n)]
+            _, i = max(vals)
+            chosen.append((slot, int(i)))
+        return chosen
 
-    chosen = []
-    for j, slot in enumerate(ROSTER_SLOTS):
-        vals = [(result.x[vidx(i, j)], i) for i in range(n)]
-        _, i = max(vals)
-        chosen.append((slot, int(i)))
+    chosen = _run(randomized)
+
+    # Optional-mode bring-back nudge. The per-player objective has no
+    # correlation term, so without this "Optional" builds a bring-back only
+    # by accident. "None" still forbids bring-backs; "Required" still forces
+    # them by constraint.
+    nudged = bringback_nudge_vector(df, randomized, chosen, bringback_mode, bringback_worthy)
+    if nudged is not None:
+        second = _run(nudged)
+        if second:
+            chosen = second
     return chosen
+
+
+def bringback_nudge_vector(df, randomized, chosen, bringback_mode, bringback_worthy):
+    """Second-pass bring-back incentive for bringback_mode="Optional".
+
+    Returns a copy of the (already noise-drawn) objective vector with
+    BRINGBACK_NUDGE added to the chosen QB's active opposing skill players,
+    when the first-pass lineup rides a QB whose opposing offense is worthy
+    of a shootout but carries no bring-back. Returns None when no second
+    pass is warranted (wrong mode, unknown/unworthy opponent, or the lineup
+    already has a bring-back). The caller keeps the first-pass lineup if the
+    re-solve fails.
+    """
+    if not (chosen and bringback_mode == "Optional" and bringback_worthy):
+        return None
+    qb_idx = next((i for _, i in chosen if bool(df.loc[i, "is_QB"])), None)
+    if qb_idx is None:
+        return None
+    opp = str(df.loc[qb_idx, "Opponent"]).upper()
+    if opp not in bringback_worthy:
+        return None
+    if any(
+        str(df.loc[i, "Team"]).upper() == opp
+        and (bool(df.loc[i, "is_RB"]) or bool(df.loc[i, "is_WR"]) or bool(df.loc[i, "is_TE"]))
+        for _, i in chosen
+    ):
+        return None
+    nudged = randomized.copy()
+    team_up = df["Team"].astype(str).str.upper().to_numpy()
+    skill = (df["is_RB"] | df["is_WR"] | df["is_TE"]).to_numpy(bool)
+    nudged[df["ActiveForBuild"].to_numpy(bool) & (team_up == opp) & skill] += BRINGBACK_NUDGE
+    return nudged
 
 def classic_lineup_coherence(df, chosen):
     """Football-sense validator for DraftKings Classic lineups.
