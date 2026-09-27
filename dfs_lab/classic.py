@@ -1175,6 +1175,23 @@ def classic_qb_concentration_plan(df, thesis_table, entry_format):
             "projection, game environment and leverage—not a preset QB count.")
     return ids,tab,{"label":label,"reason":reason,"names":names,"relative_floor":rel_floor}
 
+def classic_apply_qb_exclusions(qb_ids, excluded_ids):
+    """Remove user-excluded QBs from the build pool.
+
+    qb_ids is rank-ordered (best evidence first). excluded_ids is a set of ID
+    strings from the Slate Intel QB checkboxes. Never returns an empty pool
+    when qb_ids is non-empty: if every QB is excluded, the top-ranked QB is
+    kept so the build stays feasible.
+    """
+    base=[x for x in (qb_ids or [])]
+    if not base:
+        return []
+    excl=set(str(x) for x in (excluded_ids or set()))
+    kept=[x for x in base if str(x) not in excl]
+    if kept:
+        return kept
+    return [base[0]]
+
 def classic_apply_qb_cap(qb_ids, qb_table, qb_plan, cap):
     """Apply a user-requested maximum QB pool size without inventing a fixed default."""
     try:
@@ -1327,6 +1344,7 @@ def classic_postbuild_report(packet):
     """Deterministic post-build coach: concise contest-aware findings from the actual portfolio."""
     p=packet.get("portfolio",{}) or {}
     contest=packet.get("contest",{}) or {}
+    rules=packet.get("active_rules",{}) or {}
     if not p.get("built"):
         return []
     entry=str(contest.get("entry_format",""))
@@ -1353,16 +1371,18 @@ def classic_postbuild_report(packet):
     if skinny_eligible:
         if doubles/skinny_eligible < .20:
             _mob_note=f" ({n_mobile} mobile-QB lineups run skinny by design and are excluded)" if n_mobile else ""
+            _dbl_txt=f"None of {skinny_eligible}" if doubles==0 else f"Only {doubles} of {skinny_eligible}"
             findings.append(("Stack structure",
-                f"Only {doubles} of {skinny_eligible} non-mobile-QB lineups are QB+2 builds{_mob_note}. That is not automatically wrong, but DFS LAB should verify that skinny stacks are being chosen because the second pass catcher is weak—not just because the optimizer prefers median projection."))
+                f"{_dbl_txt} non-mobile-QB lineups are QB+2 builds{_mob_note}. That is not automatically wrong, but DFS LAB should verify that skinny stacks are being chosen because the second pass catcher is weak—not just because the optimizer prefers median projection."))
         elif doubles/n > .70:
             findings.append(("Stack structure",
                 f"{doubles} of {n} lineups are QB+2 builds. That is a concentrated construction bet; make sure the slate actually has enough condensed passing offenses to justify it."))
 
-    # Bringbacks.
+    # Bringbacks. Skip the note entirely when the user turned bring-backs off —
+    # scolding the portfolio for following an explicit "None" setting is noise.
     bm={str(k):int(v) for k,v in (p.get("bringback_mix",{}) or {}).items()}
     no_bb=bm.get("0",0)
-    if n and no_bb/n>.65:
+    if str(rules.get("bringback",""))!="None" and n and no_bb/n>.65:
         findings.append(("Bring-backs",
             f"{no_bb} of {n} lineups have no bring-back. That can be correct on a soft-pricing slate, but DFS LAB should make sure those games can still reach their stack ceiling without being pushed."))
 

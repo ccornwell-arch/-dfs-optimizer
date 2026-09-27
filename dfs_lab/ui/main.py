@@ -21,7 +21,7 @@ from dfs_lab.config import APP_BUILD, PRIORITY_OPTIONS, ROSTER_SLOTS, git_build_
 from dfs_lab.leverage import leverage_lane_pick, chalk_bust_beneficiaries
 from dfs_lab.ui.results import render_results_command_center, postbuild_lineups_context
 from dfs_lab.data import prepare_player_pool, prepare_showdown_pool, apply_projection_overrides, apply_post_edit_availability_gate
-from dfs_lab.classic import (generate_lineups, classic_apply_qb_cap,
+from dfs_lab.classic import (generate_lineups, classic_apply_qb_cap, classic_apply_qb_exclusions,
     classic_contest_recommendations, classic_context_evidence,
     classic_portfolio_intelligence, classic_postbuild_answer, classic_postbuild_report,
     classic_qb_concentration_plan, topdown_simulate_slate, classic_strategy_theses, bringback_worthy_teams,
@@ -149,6 +149,44 @@ def render_main(settings):
             thesis_table,thesis_state=classic_strategy_theses(df,intel,sim_table,field_size,payout_style,entry_format)
             classic_qb_ids,qb_plan_table,qb_plan=classic_qb_concentration_plan(df,thesis_table,entry_format)
             classic_qb_ids,qb_plan_table,qb_plan=classic_apply_qb_cap(classic_qb_ids,qb_plan_table,qb_plan,st.session_state.get("classic_qb_cap",0))
+            # User QB-pool control: unchecking a QB in the Slate Intel table removes
+            # them from the build. Exclusions are scoped to the current slate
+            # fingerprint so a new upload starts with a clean pool.
+            _qb_pool_fp=f"{entry_format}|{int(field_size)}|{payout_style}|{getattr(dk_file,'name','slate')}"
+            if st.session_state.get("classic_qb_excluded_fp")!=_qb_pool_fp:
+                st.session_state["classic_qb_excluded"]=set()
+                st.session_state["classic_qb_excluded_fp"]=_qb_pool_fp
+            _qb_excluded=set(str(x) for x in (st.session_state.get("classic_qb_excluded") or set()))
+            _qb_base_ids=[str(x) for x in classic_qb_ids]
+            # The editor key includes the slate and the eligible pool, so the widget
+            # (and its edited_rows) resets whenever the pool itself changes — a stale
+            # row-position edit must never exclude the wrong quarterback.
+            _qb_editor_key="classic_qb_pool_editor|"+_qb_pool_fp+"|"+",".join(_qb_base_ids)
+            _qb_order_ids=[]
+            if qb_plan_table is not None and not qb_plan_table.empty and "ID" in qb_plan_table.columns:
+                _qb_order_ids=qb_plan_table["ID"].astype(str).head(12).tolist()
+            _ed_state=st.session_state.get(_qb_editor_key)
+            if isinstance(_ed_state,dict):
+                for _rk,_chg in ((_ed_state.get("edited_rows") or {}).items()):
+                    try:_pos=int(_rk)
+                    except Exception:continue
+                    if 0<=_pos<len(_qb_order_ids) and isinstance(_chg,dict) and "In build pool" in _chg:
+                        _qid=str(_qb_order_ids[_pos])
+                        if bool(_chg["In build pool"]):_qb_excluded.discard(_qid)
+                        else:_qb_excluded.add(_qid)
+                st.session_state["classic_qb_excluded"]=set(_qb_excluded)
+            _qb_pool_kept_one=len(_qb_base_ids)>1 and all(str(x) in _qb_excluded for x in _qb_base_ids)
+            if _qb_pool_kept_one:
+                # Keep the display truthful: the top QB stays in the pool, so it
+                # leaves the excluded set and the editor resets to the corrected
+                # state instead of showing a checked QB as unchecked.
+                _qb_excluded.discard(str(_qb_base_ids[0]))
+                st.session_state["classic_qb_excluded"]=set(_qb_excluded)
+                st.session_state.pop(_qb_editor_key,None)
+            classic_qb_ids=classic_apply_qb_exclusions(_qb_base_ids,_qb_excluded)
+            if qb_plan_table is not None and not qb_plan_table.empty and "ID" in qb_plan_table.columns:
+                qb_plan_table=qb_plan_table.copy()
+                qb_plan_table["In build pool"]=qb_plan_table["ID"].astype(str).isin(set(str(x) for x in classic_qb_ids))
             rec=classic_contest_recommendations(field_size,payout_style,entry_format,sim_table)
             lane=leverage_lane_pick(df)
 
@@ -260,11 +298,15 @@ def render_main(settings):
                 st.markdown("#### QB concentration")
                 st.markdown(f"<div class='intel-card'><div class='intel-kicker'>Contest concentration</div><div class='intel-big'>{qb_plan['label']}</div><div class='intel-copy'>{qb_plan['reason']}</div></div>",unsafe_allow_html=True)
                 if qb_plan_table is not None and not qb_plan_table.empty:
-                    qshow=qb_plan_table.copy()
-                    qshow["In build pool"]=qshow["ID"].astype(str).isin(set(str(x) for x in classic_qb_ids))
-                    st.dataframe(qshow[["QB","Team","Game","Relative %","In build pool","Why"]].head(12),
-                        hide_index=True,use_container_width=True,height=min(430,70+35*min(12,len(qshow))))
-                st.caption("Single Entry and 3-Max intentionally narrow weak QB paths so candidate lineups express a stance. 150-Max keeps a much wider evidence band for portfolio coverage.")
+                    qshow=qb_plan_table[["QB","Team","Game","Relative %","In build pool","Why"]].head(12).reset_index(drop=True)
+                    st.data_editor(qshow,
+                        hide_index=True,use_container_width=True,height=min(430,70+35*min(12,len(qshow))),
+                        disabled=["QB","Team","Game","Relative %","Why"],
+                        column_config={"In build pool":st.column_config.CheckboxColumn("In build pool",help="Uncheck to remove this QB from the build pool.")},
+                        key=_qb_editor_key)
+                    if _qb_pool_kept_one:
+                        st.info("You unchecked every QB, so DFS LAB kept the top-ranked option — the pool can't be empty. Re-check any QB to widen it.")
+                st.caption("Uncheck a QB to remove them from the build pool. Exclusions apply to the next build and reset when you upload a new slate. Single Entry and 3-Max intentionally narrow weak QB paths so candidate lineups express a stance. 150-Max keeps a much wider evidence band for portfolio coverage.")
 
                 st.markdown("#### DFS LAB recommended setup")
                 rr1,rr2,rr3,rr4=st.columns(4)
