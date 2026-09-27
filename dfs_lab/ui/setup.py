@@ -1,5 +1,6 @@
 """Moved verbatim from streamlit_app.py (refactor/modularize). No logic changes."""
 
+import base64
 import csv
 import math
 import io
@@ -8,6 +9,7 @@ import json
 import re
 import difflib
 from collections import defaultdict
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -17,6 +19,17 @@ from scipy.sparse import lil_matrix
 
 
 from dfs_lab import styles
+
+
+def _brand_logo_img():
+    """DFS LAB brand mark as an inline <img>; falls back to the alembic glyph."""
+    try:
+        p = Path(__file__).resolve().parent.parent / "assets" / "dfs-lab-logo.webp"
+        b64 = base64.b64encode(p.read_bytes()).decode("ascii")
+        return (f'<img class="lab-flask-img" alt="DFS LAB logo" '
+                f'src="data:image/webp;base64,{b64}"/>')
+    except Exception:
+        return '<span class="lab-flask">⚗</span>'
 
 
 def render_setup():
@@ -45,8 +58,8 @@ def render_setup():
 
     st.markdown(styles.SETUP_DARK_CC_CSS, unsafe_allow_html=True)
 
-    st.markdown('''<div class="lab-appbar">
-  <div class="lab-brand"><span class="lab-flask">⚗</span><span>DFS</span><b>LAB</b></div>
+    st.markdown(f'''<div class="lab-appbar">
+  <div class="lab-brand">{_brand_logo_img()}<span>DFS</span><b>LAB</b></div>
   <div class="lab-appbar-copy"><strong>NFL DFS COMMAND CENTER</strong><span>Build · Explore · Challenge</span></div>
   <div class="lab-live"><i></i> LIVE SLATE</div>
 </div>''',unsafe_allow_html=True)
