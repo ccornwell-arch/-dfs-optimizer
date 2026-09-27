@@ -248,6 +248,12 @@ def render_main(settings):
             st.session_state.setdefault("classic_nav",_CLASSIC_TABS[0])
             classic_nav=st.segmented_control("DFS LAB workspace",_CLASSIC_TABS,key="classic_nav",label_visibility="collapsed")
 
+            # --- Nav-independent build inputs (Classic) ---
+            # The generate handler below runs on every run, but build_btn and
+            # preferred_stack_teams live in the Build section. Derive them from
+            # session state so builds and exposure rebuilds work from any tab.
+            build_btn=False
+            preferred_stack_teams=list(st.session_state.get("classic_pref_stack",[]))
             if classic_nav==_CLASSIC_TABS[0]:
                 st.markdown('<div class="card-title">DFS LAB Slate Intel</div><div class="card-sub">Study the slate first. Then decide which optimizer rules deserve to be used for this contest.</div>',unsafe_allow_html=True)
                 contest_desc=f"{entry_format} · {int(field_size):,} entries · {payout_style}"
@@ -788,6 +794,40 @@ def render_main(settings):
             # Exposure. Pinned via CSS on the keyed container (.st-key-sd_nav).
             st.session_state.setdefault("sd_nav",_SD_TABS[0])
             sd_nav=st.segmented_control("DFS LAB workspace",_SD_TABS,key="sd_nav",label_visibility="collapsed")
+            # --- Nav-independent build inputs (Showdown) ---
+            # Only the active section's widgets render on a run, but every widget
+            # value persists in session state under its key. The build block below
+            # (and the Lineups section) run on EVERY run, so derive their inputs
+            # here from session state. Sections re-derive the same values from the
+            # live widgets when they render; the values agree.
+            _sd_qb_rule_map={"No rule":0,"Minimum 1":1,"Minimum 2":2,"No more than 1":-1,"No more than 2":-2}
+            _sd_pair_map={"Never":0,"Sometimes":35,"Usually":80,"Always":100}
+            cpt_qb_pc=_sd_qb_rule_map.get(str(st.session_state.get("sd_qb_cpt_pc_rule","No rule")),0)
+            wrte_qb=_sd_pair_map.get(str(st.session_state.get("sd_wrte_pair","Usually")),80)
+            rb_ctrl=_sd_pair_map.get(str(st.session_state.get("sd_rb_pair","Sometimes")),35)
+            max_k=int(st.session_state.get("sd_max_k",2))
+            max_dst=int(st.session_state.get("sd_max_dst",1))
+            construction_weights={"3-3":1 if st.session_state.get("sd_allow_33",True) else 0,
+                                  "4-2":1 if st.session_state.get("sd_allow_42",True) else 0,
+                                  "5-1":1 if st.session_state.get("sd_allow_51",False) else 0}
+            build_btn=False
+            _sd_script=str(st.session_state.get("sd_script","Neutral"))
+            use_score=bool(st.session_state.get("sd_use_score",False))
+            team_scores={}
+            if len(teams)>=2:
+                team_scores={teams[0]:float(st.session_state.get("sd_score_0",0) or 0),
+                             teams[1]:float(st.session_state.get("sd_score_1",0) or 0)}
+            intensity=int(st.session_state.get("sd_intensity",50) or 50)
+            _sd_script_team=str(st.session_state.get("sd_script_team","None"))
+            if _sd_script_team=="None": _sd_script_team=""
+            auto_shape=bool(st.session_state.get("sd_auto_shape",False))
+            effective_script=_sd_script; effective_team=_sd_script_team
+            if use_score and team_scores:
+                _sd_asc,_sd_atm,_sd_sp=infer_score_script(team_scores)
+                if _sd_script=="Auto from score":
+                    effective_script=_sd_asc; effective_team=_sd_atm
+            elif _sd_script=="Auto from score":
+                effective_script="Neutral"; effective_team=""
             if sd_nav==_SD_TABS[0]:
                 st.markdown('<div class="card-title">Showdown Build</div><div class="card-sub">Control how the six-man portfolio is shaped before the optimizer starts solving.</div>',unsafe_allow_html=True)
                 st.markdown("#### Allowed team builds")
@@ -809,18 +849,19 @@ def render_main(settings):
                         "When QB is CPT · pass catchers",
                         ["No rule", "Minimum 1", "Minimum 2", "No more than 1", "No more than 2"],
                         index=0,
+                        key="sd_qb_cpt_pc_rule",
                         help="Minimum/maximum is enforced first. If that rule makes the entire slate impossible, DFS LAB keeps your other settings and falls back to its football-coherence model rather than returning zero lineups."
                     )
                     cpt_qb_pc = {"No rule":0, "Minimum 1":1, "Minimum 2":2, "No more than 1":-1, "No more than 2":-2}[qb_cpt_pc_rule]
                 pair_map={"Never":0,"Sometimes":35,"Usually":80,"Always":100}
-                with b: wrte_pair=st.selectbox("When WR/TE is CPT · pair QB",list(pair_map),index=2,
+                with b: wrte_pair=st.selectbox("When WR/TE is CPT · pair QB",list(pair_map),index=2,key="sd_wrte_pair",
                     help="Sometimes/Usually are SOFT portfolio preferences and will not block a legal build. Always is a hard rule.")
-                with c: rb_pair=st.selectbox("When RB is CPT · pair DST/K",list(pair_map),index=1,
+                with c: rb_pair=st.selectbox("When RB is CPT · pair DST/K",list(pair_map),index=1,key="sd_rb_pair",
                     help="Sometimes/Usually are SOFT portfolio preferences and will not block a legal build. Always is a hard rule.")
                 wrte_qb=pair_map[wrte_pair]; rb_ctrl=pair_map[rb_pair]
                 d,e=st.columns(2)
-                with d:max_k=st.selectbox("Max kickers",[0,1,2],index=2)
-                with e:max_dst=st.selectbox("Max defenses",[0,1,2],index=1)
+                with d:max_k=st.selectbox("Max kickers",[0,1,2],index=2,key="sd_max_k")
+                with e:max_dst=st.selectbox("Max defenses",[0,1,2],index=1,key="sd_max_dst")
                 build_btn=st.button(f"⚡ GENERATE {lineup_count} LINEUPS",type="primary",use_container_width=True,key="v4_sd_build")
 
             if sd_nav==_SD_TABS[1]:
@@ -1099,7 +1140,8 @@ def render_main(settings):
                 st.caption("Projection 29–34% • Captain quality 18% • correlation 20% • leverage 11–15% • duplication proxy 10–15% • your takes 7%. The exact weights move with contest size/payout.")
                 st.caption("The scenario engine changes projection and construction inputs before grading. Game Worlds remain portfolio alternatives, so a directional thesis can still include balanced or opposing worlds; those labels describe the world being explored, not a replacement for your selected thesis.")
 
-            # Defaults exist even before the user opens tabs because Streamlit executes all tab bodies.
+            # Build inputs above are derived unconditionally from session state, so this
+            # block is safe on every run regardless of which nav section rendered.
             strategy_map=st.session_state["showdown_strategy"]
             # Apply the scenario to the actual build, not just the preview.
             build_df=apply_showdown_scenario(df,effective_script,effective_team,use_score,team_scores,intensity)
