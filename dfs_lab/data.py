@@ -17,6 +17,7 @@ from scipy.sparse import lil_matrix
 
 
 from dfs_lab.common import _first_existing
+from dfs_lab.leverage import compute_mobile_qb_tags
 from dfs_lab.showdown import configure_game_worlds
 
 def load_dk_template(uploaded_file):
@@ -337,13 +338,21 @@ def prepare_player_pool(dk_file, ss_file=None):
         # The engine output preserves DK row order (left merge), but merge on
         # Name explicitly so alignment never depends on that assumption.
         proj_df = dfs_lab_projection_engine(dk)
-        proj_cols=["Name","DFS Lab Base Proj","Projection Why","Sim Vol","Matchup Adj %"]
+        proj_cols=["Name","DFS Lab Base Proj","Projection Why","Sim Vol","Matchup Adj %","Rush Share"]
         df = dk.merge(proj_df[[c for c in proj_cols if c in proj_df.columns]], on="Name", how="left")
         df["My Proj"] = pd.to_numeric(df["DFS Lab Base Proj"], errors="coerce").fillna(0.0)
         df["My Own"] = estimate_ownership(df)
         df["Projection Why"] = df["Projection Why"].fillna("DK slate prior fallback")
         df["Sim Vol"] = pd.to_numeric(df["Sim Vol"], errors="coerce").fillna(0.45)
         own_estimated=True
+
+    # Mobile-QB tag: rushing share of fantasy from nflverse history. Absent on
+    # the SaberSim path or when live evidence failed — then no QB is tagged,
+    # never a fabricated one.
+    if "Rush Share" not in df.columns:
+        df["Rush Share"] = 0.0
+    df["Rush Share"] = pd.to_numeric(df["Rush Share"], errors="coerce").fillna(0.0).clip(0.0, 1.0)
+    df["Mobile QB"] = compute_mobile_qb_tags(df)
 
     away, home, matchup = [], [], []
     for g in df["Game Info"]:
@@ -468,6 +477,21 @@ def _dk_fantasy_points_from_stats(stats):
     pts += (col("receiving_yards") >= 100).astype(float) * 3
     return pts
 
+def _dk_rushing_points_from_stats(stats):
+    """Rushing-only DraftKings fantasy points from nflverse weekly player stats.
+
+    Used to measure how much of a player's (especially a QB's) fantasy value
+    comes from rushing, without any hardcoded player list. Mirrors the rushing
+    components of _dk_fantasy_points_from_stats exactly.
+    """
+    def col(name):
+        return pd.to_numeric(stats[name], errors="coerce").fillna(0.0) if name in stats.columns else pd.Series(0.0, index=stats.index)
+    pts = (col("rushing_yards") * 0.10 + col("rushing_tds") * 6
+           - col("rushing_fumbles_lost"))
+    # DK 100-yard rushing bonus.
+    pts += (col("rushing_yards") >= 100).astype(float) * 3
+    return pts
+
 @st.cache_data(ttl=21600, show_spinner=False)
 def _load_nflverse_inputs(season):
     """Multi-year evidence window: weekly player stats + schedules.
@@ -553,7 +577,7 @@ def dfs_lab_projection_engine(dk):
         nc=_name_col(stx); sc=_season_col(stx); oc=_opp_col(stx)
         if not nc or not sc: raise ValueError("nflverse player name/season columns unavailable")
         stx["Name"]=stx[nc].astype(str).str.strip(); stx["Season"]=pd.to_numeric(stx[sc],errors="coerce")
-        stx["_fp"]=_dk_fantasy_points_from_stats(stx); stx["_role"]=_role_points_from_stats(stx)
+        stx["_fp"]=_dk_fantasy_points_from_stats(stx); stx["_role"]=_role_points_from_stats(stx); stx["_rush_fp"]=_dk_rushing_points_from_stats(stx)
         # Ignore placeholder rows with no statistical activity.
         activity=[]
         for c in ["passing_attempts","carries","targets","receptions","field_goals_made","extra_points_made"]:
@@ -563,11 +587,11 @@ def dfs_lab_projection_engine(dk):
             stx=stx[active | (stx["_fp"].abs()>0)].copy()
 
         # Per-player per-season summaries. Four-year weights favor recency without letting one game take over.
-        ss=stx.groupby(["Name","Season"],as_index=False).agg(FPPG=("_fp","mean"),Role=("_role","mean"),Games=("_fp","size"),Std=("_fp","std"))
+        ss=stx.groupby(["Name","Season"],as_index=False).agg(FPPG=("_fp","mean"),RushFPPG=("_rush_fp","mean"),Role=("_role","mean"),Games=("_fp","size"),Std=("_fp","std"))
         season_weights={season:0.34,season-1:0.38,season-2:0.19,season-3:0.09}
         rows=[]
         for name,g in ss.groupby("Name"):
-            hist_num=hist_den=role_num=role_den=vol_num=vol_den=0.0; hist_games=cur_games=0
+            hist_num=hist_den=role_num=role_den=vol_num=vol_den=rush_num=rush_den=0.0; hist_games=cur_games=0
             for _,r in g.iterrows():
                 yr=int(r["Season"]); games=int(r["Games"]); w=season_weights.get(yr,0.0)
                 if w<=0: continue
@@ -575,15 +599,21 @@ def dfs_lab_projection_engine(dk):
                 reliability=min(1.0,max(0.20,games/8.0)) if yr==season else min(1.0,games/8.0)
                 ew=w*reliability
                 hist_num += ew*float(r["FPPG"]); hist_den += ew
+                rush_num += ew*float(r["RushFPPG"]); rush_den += ew
                 role_num += ew*float(r["Role"]); role_den += ew
                 _sd=float(r["Std"]) if pd.notna(r["Std"]) else 0.0
                 vol_num += ew*_sd; vol_den += ew
                 hist_games += games
                 if yr==season: cur_games=games
-            rows.append({"Name":name,"HistProj":hist_num/hist_den if hist_den else 0.0,"RoleSignal":role_num/role_den if role_den else 0.0,"HistoryGames":hist_games,"CurrentGames":cur_games,"Vol":vol_num/vol_den if vol_den else 0.0})
+            rows.append({"Name":name,"HistProj":hist_num/hist_den if hist_den else 0.0,"RushHist":rush_num/rush_den if rush_den else 0.0,"RoleSignal":role_num/role_den if role_den else 0.0,"HistoryGames":hist_games,"CurrentGames":cur_games,"Vol":vol_num/vol_den if vol_den else 0.0})
         ps=pd.DataFrame(rows)
         out=out.merge(ps,on="Name",how="left")
         for c in ["HistProj","RoleSignal","HistoryGames","CurrentGames","Vol"]: out[c]=pd.to_numeric(out[c],errors="coerce").fillna(0.0)
+        # Rushing share of fantasy: the mobile-QB signal. 0 when there is no
+        # usable history rather than a fabricated value.
+        _rh=pd.to_numeric(out["RushHist"],errors="coerce").fillna(0.0) if "RushHist" in out.columns else 0.0
+        _hp=pd.to_numeric(out["HistProj"],errors="coerce").fillna(0.0)
+        out["Rush Share"]=pd.Series(np.where(_hp>1.0,(_rh/_hp).clip(0.0,1.0),0.0),index=out.index).round(3)
 
         # ---- DST model: team-week defensive fantasy scores in DK scoring ----
         # Fumble recoveries aren't split out in the weekly feed, so recoveries are

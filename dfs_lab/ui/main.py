@@ -18,6 +18,7 @@ from scipy.sparse import lil_matrix
 
 from dfs_lab import styles
 from dfs_lab.config import APP_BUILD, PRIORITY_OPTIONS, ROSTER_SLOTS, git_build_stamp
+from dfs_lab.leverage import leverage_lane_pick, chalk_bust_beneficiaries
 from dfs_lab.ui.results import render_results_command_center, postbuild_lineups_context
 from dfs_lab.data import prepare_player_pool, prepare_showdown_pool, apply_projection_overrides, apply_post_edit_availability_gate
 from dfs_lab.classic import (generate_lineups, classic_apply_qb_cap,
@@ -149,6 +150,7 @@ def render_main(settings):
             classic_qb_ids,qb_plan_table,qb_plan=classic_qb_concentration_plan(df,thesis_table,entry_format)
             classic_qb_ids,qb_plan_table,qb_plan=classic_apply_qb_cap(classic_qb_ids,qb_plan_table,qb_plan,st.session_state.get("classic_qb_cap",0))
             rec=classic_contest_recommendations(field_size,payout_style,entry_format,sim_table)
+            lane=leverage_lane_pick(df)
 
 
             # Post-build packet (hoisted): the Slate Intel coach and the Results
@@ -188,6 +190,13 @@ def render_main(settings):
                 st.markdown('<div class="card-title">DFS LAB Slate Intel</div><div class="card-sub">Study the slate first. Then decide which optimizer rules deserve to be used for this contest.</div>',unsafe_allow_html=True)
                 contest_desc=f"{entry_format} · {int(field_size):,} entries · {payout_style}"
                 st.markdown(f"<div class='intel-card'><div class='intel-kicker'>Contest lens</div><div class='intel-big'>{contest_desc}</div><div class='intel-copy'>DFS LAB changes its recommendations with field size, entry format and payout shape. The same slate should not be built the same way in Single Entry and 150-Max.</div></div>",unsafe_allow_html=True)
+
+                # Leverage Lane: one highest-leverage play per slate — projection
+                # edge over salary-implied expectation, per unit of ownership.
+                if lane:
+                    import html as _html
+                    _own_lbl=(f"{lane['own']:.1f}% estimated ownership" if lane["own_estimated"] else f"{lane['own']:.1f}% ownership")
+                    st.markdown(f"<div class='intel-card'><div class='intel-kicker'>Leverage Lane — highest-leverage play</div><div class='intel-big'>{_html.escape(lane['name'])} · {lane['position']} · {lane['team']} · ${lane['salary']:,}</div><div class='intel-copy'>Projects {lane['proj']:.1f} pts (+{lane['edge']:.1f} over salary-implied) at {_own_lbl}. The most projection edge per unit of field ownership on the slate.</div></div>",unsafe_allow_html=True)
 
                 if sim_table is not None and not sim_table.empty:
                     top=sim_table.iloc[0]
@@ -443,8 +452,11 @@ def render_main(settings):
                 r1,r2=st.columns(2)
                 with r1:
                     min_salary=st.slider("Minimum salary",44000,50000,int(st.session_state["classic_min_salary"]),100,key="classic_min_salary")
-                    qb_stack=st.selectbox("QB pass catchers",[1,2,3],key="classic_qb_stack",help="Minimum same-team WR/TE players paired with the QB.")
+                    qb_stack=st.selectbox("QB pass catchers",[1,2,3],key="classic_qb_stack",help="Minimum same-team WR/TE players paired with the QB. Mobile QBs (rushing is the correlation) need one fewer; naked rushing-QB builds are allowed.")
                     bringback_mode=st.selectbox("Bring-back",["Optional","Required","None"],key="classic_bringback",help="Required forces at least one opposing RB/WR/TE with the QB stack — but only from offenses good enough to shoot out (league-average scoring or better).")
+                    _mob_names=df.loc[df["Mobile QB"].fillna(False).astype(bool),"Name"].astype(str).tolist() if "Mobile QB" in df.columns else []
+                    if _mob_names:
+                        st.caption("Mobile QBs need one fewer pass catcher: "+", ".join(_mob_names[:8])+(f" (+{len(_mob_names)-8} more)" if len(_mob_names)>8 else ""))
                     if _bb_weak:
                         st.caption(f"No forced bring-backs from weak offenses: {', '.join(_bb_weak)}. A bring-back only pays when the other side can score.")
                 with r2:

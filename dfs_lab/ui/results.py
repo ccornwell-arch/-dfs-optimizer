@@ -18,6 +18,7 @@ import streamlit as st
 
 from dfs_lab.classic import lineup_sim_equity, classic_postbuild_answer
 from dfs_lab.config import ROSTER_SLOTS
+from dfs_lab.leverage import chalk_bust_beneficiaries
 
 SALARY_CAP = 50000
 
@@ -727,17 +728,48 @@ def render_agent_view(packet, res, df=None, sim_table=None):
 # Main entry
 # ---------------------------------------------------------------------------
 
+def render_chalk_bust_view(sim_worlds, df):
+    """If chalk fails: conditional beneficiaries from the top-down sim worlds.
+
+    For each of the most-owned players, bust worlds = worlds where he scores
+    at/below the 25th percentile of his own simulated distribution. Shows the
+    plays with the best average score in exactly those worlds. Never raises.
+    """
+    try:
+        rows = chalk_bust_beneficiaries(sim_worlds, df)
+    except Exception:
+        return
+    rows = [r for r in rows if r.get("beneficiaries")]
+    if not rows:
+        return
+    st.markdown("<div class='rcc-section-title'>\U0001f329\ufe0f If chalk fails</div>", unsafe_allow_html=True)
+    st.caption("From 10,000 top-down game worlds. Bust = bottom quartile of the chalk play's own simulated outcomes. Beneficiaries average the most in exactly those worlds — conditional leverage, not season averages.")
+    cards = []
+    for r in rows:
+        bens = ", ".join(
+            f"<b>{_esc(b['name'])}</b> ({_esc(b['team'])} · {b['cond_mean']:.1f} avg)"
+            for b in r["beneficiaries"][:3]
+        )
+        cards.append(
+            f"<div class='intel-card'><div class='intel-kicker'>If {_esc(r['chalk'])} "
+            f"({_esc(r['chalk_team'])} · {r['chalk_own']:.1f}% est. own) busts</div>"
+            f"<div class='intel-copy'>Top beneficiaries &rarr; {bens}</div></div>"
+        )
+    st.markdown("".join(cards), unsafe_allow_html=True)
+
+
 def render_results_command_center(res, df, sim_table, sim_worlds, packet):
     """Build-step results, lineups first.
 
     Stacked sections, no sub-tabs: slim banner, lineup cards (full rosters
-    visible), game worlds, Lab+Agent, explorer, data view last. The sticky
+    visible), game worlds, if-chalk-fails, Lab+Agent, explorer, data view last. The sticky
     main tab bar handles navigation.
     """
     disp = _equity(res, sim_worlds, df)
     render_slim_banner(disp)
     render_lineup_cards(disp, df)
     render_worlds_view(sim_table)
+    render_chalk_bust_view(sim_worlds, df)
     render_agent_view(packet, disp, df, sim_table)
     render_explorer(disp, df)
     render_data_view(disp)
