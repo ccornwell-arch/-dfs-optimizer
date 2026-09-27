@@ -17,6 +17,8 @@ from scipy.sparse import lil_matrix
 
 
 from dfs_lab.common import _first_existing, contest_aggression, percentile_label
+from dfs_lab.leverage import (CHALK_CUT_KICKER, chalk_cut_pairs, compute_mobile_qb_tags,
+                              rb_chalk_threshold)
 from dfs_lab.data import (_name_col, _opp_col, _season_col,
                           _dk_fantasy_points_from_stats, _load_nflverse_projection_inputs)
 from dfs_lab.config import ROSTER_SLOTS, PRIORITY_BONUS, TEAM_PRIORITY_BONUS
@@ -40,7 +42,12 @@ def add_ratings(out, aggr):
     proj_pct = out["Projection"].rank(pct=True)
     corr_pct = out["Correlation Raw"].rank(pct=True)
     fit_pct = out["User Fit Raw"].rank(pct=True)
-    lev_pct = (-out["Avg Own"]).rank(pct=True)
+    # Chalk-cutting RB+DST pairs earn leverage credit through the leverage
+    # weight path. The kicker is additive to a separate component from the
+    # flat RB+DST correlation reward, so nothing is double-counted.
+    _chalk = pd.to_numeric(out["Chalk Cut"], errors="coerce").fillna(0.0) if "Chalk Cut" in out.columns else 0.0
+    leverage_raw = -out["Avg Own"] + CHALK_CUT_KICKER * _chalk
+    lev_pct = leverage_raw.rank(pct=True)
     unique_pct = out["Salary Left"].rank(pct=True)
     coherence_pct = out["Coherence Score"].rank(pct=True) if "Coherence Score" in out.columns else pd.Series(0.5,index=out.index)
 
@@ -88,7 +95,7 @@ def add_ratings(out, aggr):
     out["Rating"] = [relative_grade(x) for x in rel_pct]
     out["Projection Grade"] = [percentile_label(x, out["Projection"]) for x in out["Projection"]]
     out["Correlation Grade"] = [percentile_label(x, out["Correlation Raw"]) for x in out["Correlation Raw"]]
-    out["Leverage Grade"] = [percentile_label(-x, -out["Avg Own"]) for x in out["Avg Own"]]
+    out["Leverage Grade"] = [percentile_label(x, leverage_raw) for x in leverage_raw]
 
     # If every lineup has the same user-fit score, don't misleadingly label them all Excellent.
     if out["User Fit Raw"].nunique() <= 1:
@@ -236,9 +243,15 @@ def solve_one(
             rows.append(coeff); lows.append(1.0); highs.append(1.0)
 
     # QB stack / bringback.
+    # Mobile QBs (rushing is the correlation) need one fewer same-team pass
+    # catcher, floor 0 — a naked rushing-QB build is a designed construction,
+    # not a constraint violation.
+    _mob = compute_mobile_qb_tags(df)
     for q in df.index[df["is_QB"] & df["ActiveForBuild"]]:
         team = df.loc[q, "Team"]
         opp = df.loc[q, "Opponent"]
+        qmin = qb_stack_min - (1 if bool(_mob.loc[q]) else 0)
+        qmin = max(0, qmin)
 
         receivers = df.index[
             df["ActiveForBuild"] & (df["Team"] == team) & (df["is_WR"] | df["is_TE"])
@@ -251,7 +264,7 @@ def solve_one(
                     coeff[vidx(i, j)] = coeff.get(vidx(i, j), 0.0) + 1.0
         for j in range(s):
             if elig[ROSTER_SLOTS[j]][q]:
-                coeff[vidx(q, j)] = coeff.get(vidx(q, j), 0.0) - float(qb_stack_min)
+                coeff[vidx(q, j)] = coeff.get(vidx(q, j), 0.0) - float(qmin)
         rows.append(coeff); lows.append(0.0); highs.append(np.inf)
 
         # A forced bring-back from a weak offense is bad process: the "shootout"
@@ -438,6 +451,7 @@ def classic_lineup_coherence(df, chosen):
             score-=8; warnings.append(f"{dst['Name']} faces one player in this lineup")
 
     stack_names=[]; bb_names=[]
+    qb_mobile = bool(qb.get("Mobile QB", False)) if qb is not None else False
     if qb is not None:
         qteam=str(qb["Team"]); opp=str(qb.get("Opponent",""))
         pcs=p[(p["Team"].astype(str).eq(qteam)) & (p["is_WR"]|p["is_TE"])]
@@ -445,9 +459,14 @@ def classic_lineup_coherence(df, chosen):
         stack_names=pcs["Name"].astype(str).tolist()
         bb_names=bring["Name"].astype(str).tolist()
         if len(pcs)==0:
-            # Naked QB can be viable for rushing/TD concentration, so flag it rather
-            # than banning it without a player-specific rushing model.
-            score-=18; warnings.append("Naked QB requires the quarterback to create ceiling without a receiver stack")
+            if qb_mobile:
+                # A naked rushing-QB build is a designed construction: the
+                # rushing equity IS the correlation, so no penalty.
+                pass
+            else:
+                # Naked QB can be viable for rushing/TD concentration, so flag it rather
+                # than banning it without a player-specific rushing model.
+                score-=18; warnings.append("Naked QB requires the quarterback to create ceiling without a receiver stack")
         elif len(pcs)>=2:
             score+=4
         if len(bring)>=1:
@@ -458,9 +477,17 @@ def classic_lineup_coherence(df, chosen):
     score+=min(4,2*rb_dst)
     score=float(np.clip(score,0,100))
 
+    # Chalk-cutting pairs: a chalk RB rostered with his own DST is a
+    # differentiated way to play popular RBs (leverage kicker, not just
+    # the flat correlation reward above).
+    chalk_pairs=chalk_cut_pairs(df, chosen)
+
     if qb is not None:
         qname=str(qb["Name"]); qteam=str(qb["Team"]); opp=str(qb.get("Opponent",""))
-        stack_txt=" + ".join(stack_names) if stack_names else "naked QB ceiling"
+        if stack_names:
+            stack_txt=" + ".join(stack_names)
+        else:
+            stack_txt="naked rushing-QB build" if qb_mobile else "naked QB ceiling"
         bb_txt=(" with "+opp+" run-back "+", ".join(bb_names)) if bb_names else ""
         story=f"{qteam} passing/rushing ceiling through {qname} + {stack_txt}{bb_txt}"
     else:
@@ -468,6 +495,8 @@ def classic_lineup_coherence(df, chosen):
 
     if rb_dst:
         story += f"; {rb_dst} RB+DST correlation" if rb_dst==1 else f"; {rb_dst} RB+DST correlations"
+    for rb_name, dst_name in chalk_pairs[:2]:
+        story += f"; chalk-cutting {rb_name} + {dst_name}"
 
     return {
         "Accept":len(hard)==0,
@@ -489,6 +518,7 @@ def lineup_details(df, chosen, strategy_map, preferred_stack_teams, bringback_wo
     qb_team = qb["Team"]
     opp = qb["Opponent"]
     matchup = qb["Matchup"]
+    qb_mobile = bool(qb.get("Mobile QB", False))
 
     pass_catchers = p[(p["Team"] == qb_team) & (p["is_WR"] | p["is_TE"])]
     # A player from a weak opposing offense is salary filler, not a game-script
@@ -520,17 +550,23 @@ def lineup_details(df, chosen, strategy_map, preferred_stack_teams, bringback_wo
         fit_notes.append(f"{qb_team} preferred stack")
 
     # No correlation credit for a bring-back from an offense too weak to shoot out.
+    # A mobile QB's rushing counts as one stack leg: the rushing equity IS the
+    # correlation, so a skinny/naked mobile-QB build is not scored as uncorrelated.
     bb_worthy = bringback_worthy is None or str(opp).upper() in bringback_worthy
+    stack_legs = min(len(pass_catchers) + (1 if qb_mobile else 0), 2)
     correlation_raw = (
-        2.0 * min(len(pass_catchers), 2)
+        2.0 * stack_legs
         + (0.9 * min(len(bringbacks), 1) if bb_worthy else 0.0)
         + 0.5 * rb_dst
         + 0.35 * max(0, qb_game_players - 2)
     )
+    chalk_pairs = chalk_cut_pairs(df, chosen)
 
     stack_names = " + ".join(pass_catchers["Name"].tolist()) if len(pass_catchers) else "none"
     bb_names = " + ".join(bringbacks["Name"].tolist()) if len(bringbacks) else "none"
     stack_summary = f"{qb_team}: {qb['Name']} + {stack_names} | {opp} bring-back: {bb_names}"
+    if qb_mobile and len(pass_catchers) == 0:
+        stack_summary += " · naked rushing-QB build"
 
     return {
         "Projection": round(projection, 2),
@@ -542,6 +578,8 @@ def lineup_details(df, chosen, strategy_map, preferred_stack_teams, bringback_wo
         "Bring-backs": len(bringbacks),
         "QB Game Players": qb_game_players,
         "RB+DST": rb_dst,
+        "Chalk Cut": len(chalk_pairs),
+        "QB Mobile": 1 if qb_mobile else 0,
         "Correlation Raw": round(correlation_raw, 2),
         "User Fit Raw": round(fit, 2),
         "Stack Summary": stack_summary,
@@ -1232,6 +1270,9 @@ def classic_portfolio_intelligence(df, result):
     stack_mix={}
     if "QB Stack" in result.columns:
         for k,v in result["QB Stack"].value_counts().sort_index().items(): stack_mix[str(int(k))]=int(v)
+    # Mobile-QB lineups are designed to run skinny stacks; the stack-structure
+    # coach finding below excludes them from the skinny-stack denominator.
+    mobile_qb_lineups=int(pd.to_numeric(result["QB Mobile"],errors="coerce").fillna(0).sum()) if "QB Mobile" in result.columns else 0
     bringback_mix={}
     if "Bring-backs" in result.columns:
         for k,v in result["Bring-backs"].value_counts().sort_index().items(): bringback_mix[str(int(k))]=int(v)
@@ -1267,7 +1308,7 @@ def classic_portfolio_intelligence(df, result):
 
     return {
         "built":True,"lineups":n,"unique_qbs":len(qbs),"qb_usage":qbs,
-        "stack_mix":stack_mix,"bringback_mix":bringback_mix,"flex_mix_pct":flex_mix_pct,
+        "stack_mix":stack_mix,"bringback_mix":bringback_mix,"flex_mix_pct":flex_mix_pct,"mobile_qb_lineups":mobile_qb_lineups,
         "salary_left":{"mean":round(float(salary_left.mean()),1) if len(salary_left) else None,
                        "median":round(float(salary_left.median()),1) if len(salary_left) else None,
                        "max":int(salary_left.max()) if len(salary_left) else None},
@@ -1303,13 +1344,17 @@ def classic_postbuild_report(packet):
         findings.append(("QB concentration",
             f"{uq} QBs across {n} lineups is broad for 20-Max. The portfolio may be spreading conviction too thin unless the slate is unusually flat."))
 
-    # Stack structure.
+    # Stack structure. Mobile-QB lineups run skinny stacks by design (rushing
+    # is the correlation), so the skinny-stack check excludes them.
     sm={str(k):int(v) for k,v in (p.get("stack_mix",{}) or {}).items()}
     singles=sm.get("1",0); doubles=sm.get("2",0); triples=sm.get("3",0)
-    if n:
-        if doubles/n < .20:
+    n_mobile=int(p.get("mobile_qb_lineups",0) or 0)
+    skinny_eligible=max(n-n_mobile,0)
+    if skinny_eligible:
+        if doubles/skinny_eligible < .20:
+            _mob_note=f" ({n_mobile} mobile-QB lineups run skinny by design and are excluded)" if n_mobile else ""
             findings.append(("Stack structure",
-                f"Only {doubles} of {n} lineups are QB+2 builds. That is not automatically wrong, but DFS LAB should verify that skinny stacks are being chosen because the second pass catcher is weak—not just because the optimizer prefers median projection."))
+                f"Only {doubles} of {skinny_eligible} non-mobile-QB lineups are QB+2 builds{_mob_note}. That is not automatically wrong, but DFS LAB should verify that skinny stacks are being chosen because the second pass catcher is weak—not just because the optimizer prefers median projection."))
         elif doubles/n > .70:
             findings.append(("Stack structure",
                 f"{doubles} of {n} lineups are QB+2 builds. That is a concentrated construction bet; make sure the slate actually has enough condensed passing offenses to justify it."))
