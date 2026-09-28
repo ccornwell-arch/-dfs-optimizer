@@ -43,6 +43,14 @@ def configure_game_worlds(df):
     def primary_qb(team):
         q=df[df["Team"].eq(team)&df["is_QB"]].copy()
         if q.empty: return ""
+        # Never name a world after a quarterback who is not playing: the
+        # depth-chart "Primary QB" flag can still point at an inactive player
+        # (e.g. an OUT starter), which produced nonsense like a
+        # "Caleb Williams ceiling" world for a game he is not playing in.
+        if "ActiveForBuild" in q.columns:
+            q_active=q[q["ActiveForBuild"].fillna(True).astype(bool)]
+            if q_active.empty: return ""
+            q=q_active
         marked=q[q.get("Primary QB",False).astype(bool)] if "Primary QB" in q.columns else pd.DataFrame()
         if not marked.empty: return str(marked.iloc[0]["Name"])
         q=q.sort_values(["FlexSalary","AvgPointsPerGame","My Proj"],ascending=False)
@@ -91,6 +99,11 @@ def contest_world_weights(entry_format, field_size, script="Neutral"):
             if cfg.get("family")=="low": w[name]*=3.0
             elif cfg.get("family")=="rb_control": w[name]*=1.35
             elif cfg.get("family")=="shootout": w[name]*=0.45
+            # A low-scoring thesis contradicts passing-ceiling worlds too: keep
+            # them as rare alternatives, not full-weight draws.
+            elif cfg.get("family")=="pass_ceiling": w[name]*=0.5
+            elif cfg.get("family")=="qb_ceiling": w[name]*=0.6
+            elif cfg.get("family")=="comeback": w[name]*=0.7
 
     if field_size>=50000 and entry_format=="150-Max":
         for name,cfg in GAME_WORLDS.items():

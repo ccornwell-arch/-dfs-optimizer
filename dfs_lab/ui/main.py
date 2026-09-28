@@ -1051,6 +1051,7 @@ def render_main(settings):
             if sd_nav==_SD_TABS[3]:
                 st.markdown('<div class="card-title">Game View</div><div class="card-sub">The football signals DFS LAB is using for this slate. Neutral inputs stay out of the way; open Model details only when you want to audit them.</div>',unsafe_allow_html=True)
                 st.info("Ratings are confidence-shrunk and capped. Defense and current usage carry more weight than travel or primetime splits.")
+                st.caption("This table is your input, not the model's output — all zeros means you are applying no adjustment. Rate players −3 to +3 wherever you have a take (e.g. Ertz's bigger role with Goedert out: Usage +2); the Context influence slider scales how strongly it moves DFS Lab Proj in the preview below, capped at ±18%.")
                 context_strength=st.select_slider("Context influence",options=["Conservative","Standard","Aggressive"],key="context_strength")
                 rating_opts=[-3,-2,-1,0,1,2,3]
                 ced=pd.DataFrame({
@@ -1473,6 +1474,13 @@ def render_main(settings):
                         if world_filter!="All worlds" and not filtered_result.empty:
                             w1,w2,w3=st.columns(3); w1.metric("Lineups in world",len(filtered_result)); w2.metric("Top projection",f"{filtered_result['Projection'].max():.1f}"); w3.metric("Avg salary left",f"${int(filtered_result['Salary Left'].mean()):,}")
                             st.caption(str(filtered_result.iloc[0].get("World Thesis","")))
+                            st.markdown(f"#### Lineups built for {world_filter}")
+                            st.caption("This world's separated set — the same lineups the Lineup Lab explorer below is now showing.")
+                            _wl_cols=[c for c in ["Rank","Captain","Construction","Projection","Salary Left","Dup Risk"] if c in filtered_result.columns]
+                            st.dataframe(filtered_result[_wl_cols],hide_index=True,use_container_width=True,height=min(560,110+34*len(filtered_result)),
+                                         column_config={"Captain":st.column_config.TextColumn("Captain",pinned=True,width=170),
+                                                        "Projection":st.column_config.NumberColumn("Proj",format="%.1f"),
+                                                        "Salary Left":st.column_config.NumberColumn("$ Left",format="$%d")})
                     with result_views[2]:
                         st.markdown("<div class='results-view-title'>Lineup Lab</div><div class='results-view-sub'>Pick any lineup, see the football story behind all six players, challenge assumptions, test swaps, and talk directly to DFS LAB Agent.</div>",unsafe_allow_html=True)
                         st.markdown("#### Lineup Explorer")
@@ -1798,7 +1806,7 @@ def render_main(settings):
                 else:
                     exp=showdown_exposure_table(df,result,strategy_map)
                     st.markdown("#### Set player exposure")
-                    st.caption("iPad-friendly controls. Type a percentage or use +/−. Minimums are enforced across the requested portfolio when feasible.")
+                    st.caption("iPad-friendly controls. Type a percentage or use +/−. Minimums are enforced across the requested portfolio when feasible. Changes take effect on your next build — tap Generate again in ⚡ Build.")
                     exp_names=exp["Name"].astype(str).tolist()
                     ep=st.selectbox("Player",exp_names,key="exposure_player_select")
                     erow=df[df["Name"].astype(str).eq(ep)].iloc[0]; epid=str(erow["ID"])
@@ -1815,6 +1823,7 @@ def render_main(settings):
                     else:
                         estrat.update({"Min Exposure":float(emin),"Max Exposure":float(emax),"CPT Min":float(cmin),"CPT Max":float(cmax)})
                     st.markdown("#### Portfolio exposure")
+                    st.caption("Read-only report of the last build — set targets with the player controls above, then rebuild.")
                     st.dataframe(exp,hide_index=True,use_container_width=True,height=560,column_config={"Name":st.column_config.TextColumn("Player",pinned=True,width=190)})
                     st.download_button("Download exposure CSV",exp.to_csv(index=False),"showdown_exposure_v6_1.csv","text/csv",use_container_width=True)
                     st.button("📋 Back to Lineups",key="sd_exposure_back_to_lineups",use_container_width=True,on_click=_sd_nav_go,args=(_SD_TABS[5],))
