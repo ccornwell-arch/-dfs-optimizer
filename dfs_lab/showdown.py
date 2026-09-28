@@ -566,18 +566,18 @@ def solve_showdown_one(
         # QB captain -> optional minimum/maximum same-team pass-catcher rule.
         if r["is_QB"] and cpt_qb_passcatchers != 0:
             pcs=df.index[df["ActiveForBuild"] & df["Team"].eq(r["Team"]) & df["is_passcatcher"]].tolist()
-            n=abs(int(cpt_qb_passcatchers))
+            n_pc=abs(int(cpt_qb_passcatchers))
             coeff={}
             for i in pcs:
                 for j in range(1,s): coeff[vidx(i,j)] = coeff.get(vidx(i,j),0)+1
             if cpt_qb_passcatchers > 0:
                 # Minimum N: when this QB is Captain, require at least N same-team pass catchers.
-                coeff[vidx(cpt,0)] = coeff.get(vidx(cpt,0),0)-float(n)
+                coeff[vidx(cpt,0)] = coeff.get(vidx(cpt,0),0)-float(n_pc)
                 _add_constraint(rows,lows,highs,coeff,0,np.inf)
             else:
                 # No more than N: when this QB is Captain, cap same-team pass catchers at N.
                 max_flex=float(s-1)
-                coeff[vidx(cpt,0)] = coeff.get(vidx(cpt,0),0)+(max_flex-float(n))
+                coeff[vidx(cpt,0)] = coeff.get(vidx(cpt,0),0)+(max_flex-float(n_pc))
                 _add_constraint(rows,lows,highs,coeff,-np.inf,max_flex)
 
         # WR/TE captain -> same-team QB.
