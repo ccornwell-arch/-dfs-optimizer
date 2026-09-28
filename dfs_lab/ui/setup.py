@@ -59,6 +59,8 @@ def render_setup():
 
     st.markdown(styles.SETUP_DARK_CC_CSS, unsafe_allow_html=True)
 
+    st.markdown(styles.SETUP_APPBAR_DARK_CSS, unsafe_allow_html=True)
+
     st.markdown(f'''<div class="lab-appbar">
   <div class="lab-brand">{_brand_logo_img()}<span>DFS</span><b>LAB</b></div>
   <div class="lab-appbar-copy"><strong>NFL DFS COMMAND CENTER</strong><span>Build · Explore · Challenge</span></div>

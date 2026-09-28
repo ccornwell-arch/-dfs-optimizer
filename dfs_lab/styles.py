@@ -1368,3 +1368,17 @@ html body #root .lineup-count-readout span{color:var(--rcc-text)!important;-webk
 html body #root .lineup-count-readout b{color:var(--rcc-accent2)!important;-webkit-text-fill-color:var(--rcc-accent2)!important;}
 </style>
 """
+
+# Banner dark-mode guarantee: the DFS LAB appbar must never render as a light
+# band inside the dark app. Injected dead-last in render_setup so it wins the
+# light/dark stylesheet tug-of-war (incl. -webkit-text-fill-color on iPad).
+SETUP_APPBAR_DARK_CSS = """<style>
+[data-testid="stAppViewContainer"] .lab-appbar{background:linear-gradient(135deg,#0b1728 0%,#12263d 100%)!important;border:1px solid #1e3a56!important;border-radius:16px!important;padding:12px 16px 14px!important;margin-bottom:12px!important;}
+[data-testid="stAppViewContainer"] .lab-appbar .lab-brand{color:#fff!important;-webkit-text-fill-color:#fff!important;}
+[data-testid="stAppViewContainer"] .lab-appbar .lab-brand b{color:#1493ff!important;-webkit-text-fill-color:#1493ff!important;}
+[data-testid="stAppViewContainer"] .lab-appbar .lab-appbar-copy{border-left:1px solid #294057!important;}
+[data-testid="stAppViewContainer"] .lab-appbar .lab-appbar-copy strong{color:#d8e6f5!important;-webkit-text-fill-color:#d8e6f5!important;}
+[data-testid="stAppViewContainer"] .lab-appbar .lab-appbar-copy span{color:#8fa5bc!important;-webkit-text-fill-color:#8fa5bc!important;}
+[data-testid="stAppViewContainer"] .lab-appbar .lab-live{color:#b7c9da!important;-webkit-text-fill-color:#b7c9da!important;border:1px solid #274762!important;}
+</style>
+"""

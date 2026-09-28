@@ -28,7 +28,7 @@ from dfs_lab.classic import (generate_lineups, classic_apply_qb_cap, classic_app
     classic_qb_concentration_plan, topdown_simulate_slate, classic_strategy_theses, bringback_worthy_teams,
     calculate_exposure_table)
 from dfs_lab.showdown import (apply_context_engine, apply_showdown_scenario,
-    audit_showdown_portfolio,
+    audit_showdown_portfolio, captain_pool_ids,
     generate_showdown_lineups, infer_score_script, script_build_adjustments,
     showdown_exposure_table, showdown_upload_csv)
 
@@ -864,7 +864,7 @@ def render_main(settings):
                 build_btn=st.button(f"⚡ GENERATE {lineup_count} LINEUPS",type="primary",use_container_width=True,key="v4_sd_build")
 
             if sd_nav==_SD_TABS[1]:
-                st.markdown('<div class="card-title">Player + Captain Exposure</div><div class="card-sub">Overall exposure and Captain exposure are controlled separately.</div>',unsafe_allow_html=True)
+                st.markdown('<div class="card-title">Players</div><div class="card-sub">Overall exposure and Captain exposure are controlled separately. Check CPT? only for the players you want in the Captain pool.</div>',unsafe_allow_html=True)
                 team_filter=st.multiselect("Teams",teams,key="v4_sdteam")
                 pos_filter=st.multiselect("Positions",sorted(df["Position"].dropna().unique().tolist()),key="v4_sdpos")
                 current_script=st.session_state.get("sd_script","Neutral")
@@ -882,6 +882,17 @@ def render_main(settings):
                 view=scenario_df.copy()
                 if team_filter:view=view[view["Team"].isin(team_filter)]
                 if pos_filter:view=view[view["Position"].isin(pos_filter)]
+                # Same sort controls as the Classic Players section so both
+                # tables act the same. Sorting changes the visible row order,
+                # which scopes the editor key (pending edits reset with a
+                # warning instead of landing on the wrong player).
+                _ss1,_ss2=st.columns([2,1])
+                with _ss1:
+                    sd_sort_by=st.selectbox("Sort players by",["Salary","Projection","Ownership","Name"],index=0,key="sd_player_sort")
+                with _ss2:
+                    sd_sort_dir=st.segmented_control("Order",["High → Low","Low → High"],default="High → Low",key="sd_player_sort_dir")
+                _sd_sort_col={"Salary":"FlexSalary","Projection":"DFS Lab Proj","Ownership":"My Own","Name":"Name"}[sd_sort_by]
+                view=view.sort_values(_sd_sort_col,ascending=(sd_sort_dir=="Low → High"),kind="mergesort").reset_index(drop=True)
 
                 st.markdown("##### Quick lock")
                 _reset_col1,_reset_col2=st.columns([1,2])
@@ -914,11 +925,11 @@ def render_main(settings):
                             st.session_state["showdown_strategy"].pop(qid,None); st.rerun()
                     st.caption("Lock = every lineup • CPT = Captain every lineup • Out = never use")
 
-                ed=pd.DataFrame({"ID":view["ID"].astype(str),"Name":view["Name"],"Pos":view["Position"],"Team":view["Team"],"Flex $":view["FlexSalary"],"DFS Base":view["My Proj"].round(2),"Availability":view.get("Live Status",pd.Series("Not verified",index=view.index)),"Hist G":view.get("History Games",pd.Series(0,index=view.index)),"Matchup %":view.get("Matchup Adj %",pd.Series(0.0,index=view.index)),"Model":view["Model Proj"].round(2),"Your Proj":view["DFS Lab Proj"].round(2),"Δ%":view["Proj Change %"].round(1),"Own":view["My Own"].round(1),"CPT Own":view["CPT Own"].round(1),"Lock":False,"CPT Lock":False,"Exclude":False,"CPT Eligible":True,"Priority":"Neutral","Min Exposure":0,"Max Exposure":100,"CPT Min":0,"CPT Max":100})
+                ed=pd.DataFrame({"ID":view["ID"].astype(str),"Name":view["Name"],"Pos":view["Position"],"Team":view["Team"],"Flex $":view["FlexSalary"],"DFS Base":view["My Proj"].round(2),"Availability":view.get("Live Status",pd.Series("Not verified",index=view.index)),"Hist G":view.get("History Games",pd.Series(0,index=view.index)),"Matchup %":view.get("Matchup Adj %",pd.Series(0.0,index=view.index)),"Model":view["Model Proj"].round(2),"Your Proj":view["DFS Lab Proj"].round(2),"Δ%":view["Proj Change %"].round(1),"Own":view["My Own"].round(1),"CPT Own":view["CPT Own"].round(1),"Lock":False,"CPT Lock":False,"Exclude":False,"CPT Eligible":False,"Priority":"Neutral","Min Exposure":0,"Max Exposure":100,"CPT Min":0,"CPT Max":100})
                 for x,r in ed.iterrows():
                     e=st.session_state["showdown_strategy"].get(str(r["ID"]),{})
-                    for c,k,d in [("Lock","Lock",False),("CPT Lock","CPT Lock",False),("Exclude","Exclude",False),("CPT Eligible","CPT Eligible",True),("Priority","Priority","Neutral"),("Min Exposure","Min Exposure",0),("Max Exposure","Max Exposure",100),("CPT Min","CPT Min",0),("CPT Max","CPT Max",100)]: ed.at[x,c]=e.get(k,d)
-                st.caption("Make all of your player/Captain changes, then tap Apply changes once. This prevents the screen from dimming after every checkbox. The Your Proj column is editable — type your own projection and the build uses your number instead of the model.")
+                    for c,k,d in [("Lock","Lock",False),("CPT Lock","CPT Lock",False),("Exclude","Exclude",False),("CPT Eligible","CPT Eligible",False),("Priority","Priority","Neutral"),("Min Exposure","Min Exposure",0),("Max Exposure","Max Exposure",100),("CPT Min","CPT Min",0),("CPT Max","CPT Max",100)]: ed.at[x,c]=e.get(k,d)
+                st.caption("Make all of your player/Captain changes, then tap Apply changes once. This prevents the screen from dimming after every checkbox. The Your Proj column is editable — type your own projection and the build uses your number instead of the model. CPT? starts unchecked: check it only for the players you want in the Captain pool.")
                 # Same row-positional hazard as the Classic editor: pending
                 # edits are positional, so scope the widget key to the exact
                 # visible order. A filter change before tapping Apply resets
@@ -1186,124 +1197,129 @@ def render_main(settings):
                         for y in range(x+1,len(rb_ids)):
                             active_relationships.append({"enabled":True,"rule":"Never Together","a":{"kind":"Player","id":rb_ids[x]},"b":{"kind":"Player","id":rb_ids[y]}})
             if build_btn:
-                result=generate_showdown_lineups(build_df,field_size,payout_style,lineup_count,max(120,lineup_count*5),min_salary,max_salary,build_weights,effective_script,effective_team,strategy_map,entry_format,eff_qb_pc,eff_wrte_qb,eff_rb_ctrl,max_k,max_dst,min_unique,seed,relationship_rules=active_relationships,world_influence=intensity)
-                # If percentage-based Captain pairing happens to over-constrain every sampled
-                # path, retry once with only the deterministic user rule for QB Captain and
-                # no probabilistic WR/TE/RB pairing. This is a targeted feasibility fallback,
-                # not a silent change to locks, exposures, salary, CPT eligibility or team builds.
-                _pairing_fallback_used=False
-                if result is None or result.empty:
-                    _fallback=generate_showdown_lineups(
-                        build_df,field_size,payout_style,lineup_count,max(80,lineup_count*3),
-                        min_salary,max_salary,build_weights,effective_script,effective_team,
-                        strategy_map,entry_format,eff_qb_pc,0,0,max_k,max_dst,min_unique,seed+17,
-                        relationship_rules=active_relationships,world_influence=intensity
-                    )
-                    if _fallback is not None and not _fallback.empty:
-                        result=_fallback
-                        _pairing_fallback_used=True
+                _cpt_pool=captain_pool_ids(build_df,strategy_map)
+                if not _cpt_pool:
+                    st.error("No captain-eligible players — every CPT? box is unchecked (or excluded). Check **CPT?** for at least one player in 👤 Players, tap **Apply player changes**, then generate again.")
+                    st.session_state["showdown_result_v4"]=None
+                else:
+                    result=generate_showdown_lineups(build_df,field_size,payout_style,lineup_count,max(120,lineup_count*5),min_salary,max_salary,build_weights,effective_script,effective_team,strategy_map,entry_format,eff_qb_pc,eff_wrte_qb,eff_rb_ctrl,max_k,max_dst,min_unique,seed,relationship_rules=active_relationships,world_influence=intensity)
+                    # If percentage-based Captain pairing happens to over-constrain every sampled
+                    # path, retry once with only the deterministic user rule for QB Captain and
+                    # no probabilistic WR/TE/RB pairing. This is a targeted feasibility fallback,
+                    # not a silent change to locks, exposures, salary, CPT eligibility or team builds.
+                    _pairing_fallback_used=False
+                    if result is None or result.empty:
+                        _fallback=generate_showdown_lineups(
+                            build_df,field_size,payout_style,lineup_count,max(80,lineup_count*3),
+                            min_salary,max_salary,build_weights,effective_script,effective_team,
+                            strategy_map,entry_format,eff_qb_pc,0,0,max_k,max_dst,min_unique,seed+17,
+                            relationship_rules=active_relationships,world_influence=intensity
+                        )
+                        if _fallback is not None and not _fallback.empty:
+                            result=_fallback
+                            _pairing_fallback_used=True
 
-                # Smart feasibility fallback: a Captain-correlation preference should not
-                # brick the entire slate. If the requested QB-Captain pass-catcher rule is
-                # the blocker, keep every user lock/exclusion/exposure/team-build rule intact
-                # and allow QB Captain lineups to be judged by the coherence engine instead.
-                # This does NOT make nonsense lineups acceptable: QB-CPT without a receiver
-                # is explicitly penalized in coherence and will rank behind cleaner stories.
-                _qb_rule_fallback_used=False
-                if (result is None or result.empty) and eff_qb_pc != 0:
-                    _qb_fallback=generate_showdown_lineups(
-                        build_df,field_size,payout_style,lineup_count,max(100,lineup_count*4),
-                        min_salary,max_salary,build_weights,effective_script,effective_team,
-                        strategy_map,entry_format,0,eff_wrte_qb,eff_rb_ctrl,max_k,max_dst,min_unique,seed+29,
-                        relationship_rules=active_relationships,world_influence=intensity
-                    )
-                    if _qb_fallback is not None and not _qb_fallback.empty:
-                        result=_qb_fallback
-                        _qb_rule_fallback_used=True
+                    # Smart feasibility fallback: a Captain-correlation preference should not
+                    # brick the entire slate. If the requested QB-Captain pass-catcher rule is
+                    # the blocker, keep every user lock/exclusion/exposure/team-build rule intact
+                    # and allow QB Captain lineups to be judged by the coherence engine instead.
+                    # This does NOT make nonsense lineups acceptable: QB-CPT without a receiver
+                    # is explicitly penalized in coherence and will rank behind cleaner stories.
+                    _qb_rule_fallback_used=False
+                    if (result is None or result.empty) and eff_qb_pc != 0:
+                        _qb_fallback=generate_showdown_lineups(
+                            build_df,field_size,payout_style,lineup_count,max(100,lineup_count*4),
+                            min_salary,max_salary,build_weights,effective_script,effective_team,
+                            strategy_map,entry_format,0,eff_wrte_qb,eff_rb_ctrl,max_k,max_dst,min_unique,seed+29,
+                            relationship_rules=active_relationships,world_influence=intensity
+                        )
+                        if _qb_fallback is not None and not _qb_fallback.empty:
+                            result=_qb_fallback
+                            _qb_rule_fallback_used=True
 
-                st.session_state["showdown_result_v4"]=result
-                # Post-build hard-rule audit: the MILP enforces CPT eligibility,
-                # exclusions and locks as hard bounds, so any violation here means
-                # the saved strategy and the built lineups disagree (e.g. a UI edit
-                # landed on the wrong player) and the user must see it loudly.
-                if result is not None and not result.empty:
-                    _id_to_name={str(r["ID"]):str(r["Name"]) for _,r in build_df.iterrows()}
-                    _violations=audit_showdown_portfolio(result,strategy_map,_id_to_name)
-                    if _violations:
-                        _shown="\n".join(f"- {v}" for v in _violations[:10])
-                        _more=f"\n…plus {len(_violations)-10} more." if len(_violations)>10 else ""
-                        st.error(f"⚠️ DFS LAB caught a hard-rule violation in the built portfolio. Your player settings say one thing, but the lineups say another — re-check Players and rebuild:\n{_shown}{_more}")
-                if _pairing_fallback_used:
-                    st.warning("DFS LAB built the portfolio after dropping the probabilistic WR/TE→QB and RB→DST/K pairing suggestions. Your explicit QB-Captain pass-catcher rule, salary, locks, CPT pool, exposures and team-build rules were kept.")
-                if _qb_rule_fallback_used:
-                    st.info("DFS LAB detected that the QB-Captain pass-catcher rule blocked the slate, so it used football-coherence scoring for QB Captain builds instead of returning no lineups. All player locks, exclusions, exposures, salary and team-build settings were kept.")
-                if result is not None and not result.empty and len(result) < int(lineup_count):
-                    st.warning(f"Built {len(result)} of {int(lineup_count)} requested lineups. DFS LAB stopped after the optimizer stalled on the current hard rules instead of hanging indefinitely. Loosen the rule called out below or build the smaller portfolio.")
-                if result is None or result.empty:
-                    st.error("DFS LAB could not produce a lineup with the current rules. Running a quick feasibility check…")
+                    st.session_state["showdown_result_v4"]=result
+                    # Post-build hard-rule audit: the MILP enforces CPT eligibility,
+                    # exclusions and locks as hard bounds, so any violation here means
+                    # the saved strategy and the built lineups disagree (e.g. a UI edit
+                    # landed on the wrong player) and the user must see it loudly.
+                    if result is not None and not result.empty:
+                        _id_to_name={str(r["ID"]):str(r["Name"]) for _,r in build_df.iterrows()}
+                        _violations=audit_showdown_portfolio(result,strategy_map,_id_to_name)
+                        if _violations:
+                            _shown="\n".join(f"- {v}" for v in _violations[:10])
+                            _more=f"\n…plus {len(_violations)-10} more." if len(_violations)>10 else ""
+                            st.error(f"⚠️ DFS LAB caught a hard-rule violation in the built portfolio. Your player settings say one thing, but the lineups say another — re-check Players and rebuild:\n{_shown}{_more}")
+                    if _pairing_fallback_used:
+                        st.warning("DFS LAB built the portfolio after dropping the probabilistic WR/TE→QB and RB→DST/K pairing suggestions. Your explicit QB-Captain pass-catcher rule, salary, locks, CPT pool, exposures and team-build rules were kept.")
+                    if _qb_rule_fallback_used:
+                        st.info("DFS LAB detected that the QB-Captain pass-catcher rule blocked the slate, so it used football-coherence scoring for QB Captain builds instead of returning no lineups. All player locks, exclusions, exposures, salary and team-build settings were kept.")
+                    if result is not None and not result.empty and len(result) < int(lineup_count):
+                        st.warning(f"Built {len(result)} of {int(lineup_count)} requested lineups. DFS LAB stopped after the optimizer stalled on the current hard rules instead of hanging indefinitely. Loosen the rule called out below or build the smaller portfolio.")
+                    if result is None or result.empty:
+                        st.error("DFS LAB could not produce a lineup with the current rules. Running a quick feasibility check…")
 
-                    def _diag_build(_strategy=strategy_map, _min_salary=min_salary, _weights=build_weights,
-                                    _qb=eff_qb_pc, _wrte=eff_wrte_qb, _rb=eff_rb_ctrl,
-                                    _rels=active_relationships, _unique=min_unique,
-                                    _max_k=max_k, _max_dst=max_dst):
-                        try:
-                            x=generate_showdown_lineups(
-                                build_df,field_size,payout_style,1,4,_min_salary,max_salary,_weights,
-                                effective_script,effective_team,_strategy,entry_format,
-                                _qb,_wrte,_rb,_max_k,_max_dst,_unique,seed+991,
-                                relationship_rules=_rels,world_influence=intensity,show_progress=False)
-                            return x is not None and not x.empty
-                        except Exception:
-                            return False
+                        def _diag_build(_strategy=strategy_map, _min_salary=min_salary, _weights=build_weights,
+                                        _qb=eff_qb_pc, _wrte=eff_wrte_qb, _rb=eff_rb_ctrl,
+                                        _rels=active_relationships, _unique=min_unique,
+                                        _max_k=max_k, _max_dst=max_dst):
+                            try:
+                                x=generate_showdown_lineups(
+                                    build_df,field_size,payout_style,1,4,_min_salary,max_salary,_weights,
+                                    effective_script,effective_team,_strategy,entry_format,
+                                    _qb,_wrte,_rb,_max_k,_max_dst,_unique,seed+991,
+                                    relationship_rules=_rels,world_influence=intensity,show_progress=False)
+                                return x is not None and not x.empty
+                            except Exception:
+                                return False
 
-                    tests=[]
-                    tests.append(("Relationship rules", _diag_build(_rels=[])))
-                    tests.append(("QB-Captain pass-catcher rule", _diag_build(_qb=0)))
-                    tests.append(("WR/TE-Captain QB rule", _diag_build(_wrte=0)))
-                    tests.append(("RB-Captain DST/K rule", _diag_build(_rb=0)))
-                    tests.append(("All Captain-pairing rules", _diag_build(_qb=0,_wrte=0,_rb=0)))
-                    tests.append(("Allowed team builds", _diag_build(_weights={"3-3":1.0,"4-2":1.0,"5-1":1.0})))
-                    tests.append((f"Minimum salary (${int(min_salary):,})", _diag_build(_min_salary=0)))
-                    tests.append(("Uniqueness requirement", _diag_build(_unique=0)))
-                    tests.append(("Kicker/defense caps", _diag_build(_max_k=5,_max_dst=5)))
+                        tests=[]
+                        tests.append(("Relationship rules", _diag_build(_rels=[])))
+                        tests.append(("QB-Captain pass-catcher rule", _diag_build(_qb=0)))
+                        tests.append(("WR/TE-Captain QB rule", _diag_build(_wrte=0)))
+                        tests.append(("RB-Captain DST/K rule", _diag_build(_rb=0)))
+                        tests.append(("All Captain-pairing rules", _diag_build(_qb=0,_wrte=0,_rb=0)))
+                        tests.append(("Allowed team builds", _diag_build(_weights={"3-3":1.0,"4-2":1.0,"5-1":1.0})))
+                        tests.append((f"Minimum salary (${int(min_salary):,})", _diag_build(_min_salary=0)))
+                        tests.append(("Uniqueness requirement", _diag_build(_unique=0)))
+                        tests.append(("Kicker/defense caps", _diag_build(_max_k=5,_max_dst=5)))
 
-                    all_cpt_strategy={str(k):dict(v) for k,v in strategy_map.items()}
-                    for _,rr in build_df.iterrows():
-                        pid=str(rr["ID"])
-                        e=all_cpt_strategy.setdefault(pid,{})
-                        if not bool(e.get("Exclude",False)):
-                            e["CPT Eligible"]=True
-                    tests.append(("Captain pool", _diag_build(_strategy=all_cpt_strategy)))
-
-                    exposure_strategy={str(k):dict(v) for k,v in strategy_map.items()}
-                    for _,e in exposure_strategy.items():
-                        e["Min Exposure"]=0; e["Max Exposure"]=100
-                        e["CPT Min"]=0; e["CPT Max"]=100
-                    tests.append(("Exposure minimums/maximums", _diag_build(_strategy=exposure_strategy)))
-
-                    lock_strategy={str(k):dict(v) for k,v in strategy_map.items()}
-                    for _,e in lock_strategy.items():
-                        e["Lock"]=False; e["CPT Lock"]=False
-                    tests.append(("Player/Captain locks", _diag_build(_strategy=lock_strategy)))
-
-                    blockers=[name for name,works in tests if works]
-                    if blockers:
-                        st.warning("**Feasibility diagnostic:** A test build succeeded when DFS LAB relaxed: **" + ", ".join(blockers) + "**. This is a clue, not proof that the setting itself is invalid. Your settings were not changed.")
-                    else:
-                        clean_strategy={}
+                        all_cpt_strategy={str(k):dict(v) for k,v in strategy_map.items()}
                         for _,rr in build_df.iterrows():
-                            clean_strategy[str(rr["ID"]) ]={"CPT Eligible":True,"Min Exposure":0,"Max Exposure":100,"CPT Min":0,"CPT Max":100,"Lock":False,"CPT Lock":False,"Exclude":False,"Priority":"Neutral"}
-                        fully_relaxed=_diag_build(_strategy=clean_strategy,_min_salary=0,_weights={"3-3":1.0,"4-2":1.0,"5-1":1.0},_qb=0,_wrte=0,_rb=0,_rels=[],_unique=0,_max_k=5,_max_dst=5)
-                        if fully_relaxed:
-                            st.warning("**Feasibility diagnostic:** No single setting is responsible; two or more constraints conflict when combined. Your settings were not changed.")
-                        else:
-                            st.error("**Feasibility diagnostic:** Even a fully relaxed six-player build is infeasible. This points to a slate-data or optimizer bug, not something you selected.")
+                            pid=str(rr["ID"])
+                            e=all_cpt_strategy.setdefault(pid,{})
+                            if not bool(e.get("Exclude",False)):
+                                e["CPT Eligible"]=True
+                        tests.append(("Captain pool", _diag_build(_strategy=all_cpt_strategy)))
 
-                    with st.expander("Feasibility test details"):
-                        for name,works in tests:
-                            st.write(("✅ Legal when relaxed: " if works else "— Still infeasible when relaxed: ") + name)
-                elif len(result) < lineup_count:
-                    st.warning(f"Built {len(result)} of {lineup_count} requested lineups. The current portfolio rules are limiting the number of unique legal builds.")
+                        exposure_strategy={str(k):dict(v) for k,v in strategy_map.items()}
+                        for _,e in exposure_strategy.items():
+                            e["Min Exposure"]=0; e["Max Exposure"]=100
+                            e["CPT Min"]=0; e["CPT Max"]=100
+                        tests.append(("Exposure minimums/maximums", _diag_build(_strategy=exposure_strategy)))
+
+                        lock_strategy={str(k):dict(v) for k,v in strategy_map.items()}
+                        for _,e in lock_strategy.items():
+                            e["Lock"]=False; e["CPT Lock"]=False
+                        tests.append(("Player/Captain locks", _diag_build(_strategy=lock_strategy)))
+
+                        blockers=[name for name,works in tests if works]
+                        if blockers:
+                            st.warning("**Feasibility diagnostic:** A test build succeeded when DFS LAB relaxed: **" + ", ".join(blockers) + "**. This is a clue, not proof that the setting itself is invalid. Your settings were not changed.")
+                        else:
+                            clean_strategy={}
+                            for _,rr in build_df.iterrows():
+                                clean_strategy[str(rr["ID"]) ]={"CPT Eligible":True,"Min Exposure":0,"Max Exposure":100,"CPT Min":0,"CPT Max":100,"Lock":False,"CPT Lock":False,"Exclude":False,"Priority":"Neutral"}
+                            fully_relaxed=_diag_build(_strategy=clean_strategy,_min_salary=0,_weights={"3-3":1.0,"4-2":1.0,"5-1":1.0},_qb=0,_wrte=0,_rb=0,_rels=[],_unique=0,_max_k=5,_max_dst=5)
+                            if fully_relaxed:
+                                st.warning("**Feasibility diagnostic:** No single setting is responsible; two or more constraints conflict when combined. Your settings were not changed.")
+                            else:
+                                st.error("**Feasibility diagnostic:** Even a fully relaxed six-player build is infeasible. This points to a slate-data or optimizer bug, not something you selected.")
+
+                        with st.expander("Feasibility test details"):
+                            for name,works in tests:
+                                st.write(("✅ Legal when relaxed: " if works else "— Still infeasible when relaxed: ") + name)
+                    elif len(result) < lineup_count:
+                        st.warning(f"Built {len(result)} of {lineup_count} requested lineups. The current portfolio rules are limiting the number of unique legal builds.")
             result=st.session_state.get("showdown_result_v4")
 
             if sd_nav==_SD_TABS[5]:

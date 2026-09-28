@@ -1014,6 +1014,25 @@ def showdown_upload_csv(result):
         rows.append([r.get(c+"_NameID",r[c]) for c in cols])
     return pd.DataFrame(rows,columns=["CPT","FLEX","FLEX","FLEX","FLEX","FLEX"]).to_csv(index=False)
 
+def captain_pool_ids(df, strategy_map):
+    """IDs the optimizer may actually put at Captain.
+
+    Mirrors the MILP's own semantics (showdown build): a player must be active
+    for the build, not excluded, and CPT-eligible. A player with no strategy
+    entry at all defaults to eligible (first-run behavior); an explicit
+    CPT Eligible=False (CPT? unchecked + applied) removes them from the pool.
+    """
+    ids = []
+    active = (df["ActiveForBuild"].to_numpy(bool) if "ActiveForBuild" in df.columns
+              else [True] * len(df))
+    for pos, (_, r) in enumerate(df.iterrows()):
+        strat = strategy_map.get(str(r["ID"]), {})
+        excluded = bool(strat.get("Exclude", False)) or strat.get("Priority") == "Exclude"
+        if active[pos] and not excluded and bool(strat.get("CPT Eligible", True)):
+            ids.append(str(r["ID"]))
+    return ids
+
+
 def audit_showdown_portfolio(result, strategy_map, id_to_name=None):
     """Post-build hard-rule audit for a Showdown portfolio.
 
