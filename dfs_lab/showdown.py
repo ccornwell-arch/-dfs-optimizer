@@ -1025,6 +1025,51 @@ def showdown_exposure_table(df,result,strategy_map):
                      "CPT Min %":float(strat.get("CPT Min",0)),"CPT Max %":float(strat.get("CPT Max",100))})
     return pd.DataFrame(rows).sort_values(["Actual %","Proj"],ascending=[False,False]).reset_index(drop=True)
 
+def audit_min_exposure(result, df, strategy_map):
+    """Check minimum-exposure targets against actuals, with a reason for each miss.
+
+    A missed target is silent in the UI unless something says why. Reasons:
+    the player is marked Out/excluded, is inactive (not in the build pool), or
+    the target simply was not in force when the build ran (edited but never
+    applied, or clobbered by a stale editor). Pure.
+    Returns a list of dicts: {name, target, actual, reason}.
+    """
+    if result is None or result.empty:
+        return []
+    n = len(result)
+    total = defaultdict(int)
+    for _, r in result.iterrows():
+        total[str(r["CPT"])] += 1
+        for col in ("FLEX1", "FLEX2", "FLEX3", "FLEX4", "FLEX5"):
+            total[str(r[col])] += 1
+    id_to_name = {}
+    id_to_active = {}
+    for _, r in df.iterrows():
+        pid = str(r["ID"])
+        id_to_name[pid] = str(r["Name"])
+        id_to_active[pid] = bool(r.get("ActiveForBuild", True))
+    misses = []
+    for pid, strat in (strategy_map or {}).items():
+        tmin = float((strat or {}).get("Min Exposure", 0) or 0)
+        if tmin <= 0:
+            continue
+        pid = str(pid)
+        name = id_to_name.get(pid, pid)
+        actual = 100.0 * total.get(name, 0) / n
+        if actual >= tmin - 0.51:
+            continue
+        if pid not in id_to_name:
+            reason = "not in this slate's player pool"
+        elif not id_to_active.get(pid, True):
+            reason = "inactive — not in the build pool (check the Players tab Live column)"
+        elif bool((strat or {}).get("Exclude", False)) or str((strat or {}).get("Priority", "")) == "Exclude":
+            reason = "marked Out/excluded in the Players tab — uncheck Out so the optimizer can pick them"
+        else:
+            reason = "target was not in force for the last build — re-apply it in the Exposure Lab, then Generate"
+        misses.append({"name": name, "target": tmin, "actual": round(actual, 1), "reason": reason})
+    return misses
+
+
 def showdown_upload_csv(result):
     cols=["CPT","FLEX1","FLEX2","FLEX3","FLEX4","FLEX5"]
     rows=[]

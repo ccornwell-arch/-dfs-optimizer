@@ -28,7 +28,7 @@ from dfs_lab.classic import (generate_lineups, classic_apply_qb_cap, classic_app
     classic_qb_concentration_plan, topdown_simulate_slate, classic_strategy_theses, bringback_worthy_teams,
     calculate_exposure_table)
 from dfs_lab.showdown import (apply_context_engine, apply_showdown_scenario,
-    audit_showdown_portfolio, captain_pool_ids,
+    audit_min_exposure, audit_showdown_portfolio, captain_pool_ids,
     generate_showdown_lineups, infer_score_script, script_build_adjustments,
     showdown_exposure_table, showdown_upload_csv)
 
@@ -1082,6 +1082,11 @@ def render_main(settings):
                     # were already applied. Rerun so the table immediately shows
                     # the new Your Proj values.
                     st.session_state.pop(_sed_key,None)
+                    # The Exposure Lab edits these same target columns: reset its
+                    # editor too, so a stale snapshot can't write old values back
+                    # over what was just applied here.
+                    for _k in [k for k in list(st.session_state.keys()) if str(k).startswith("sd_exp_editor_")]:
+                        st.session_state.pop(_k,None)
                     _n_ov=len(st.session_state["projection_overrides"])
                     st.success(f"Player settings applied.{f' {_n_ov} projection override(s) active — builds use your numbers.' if _n_ov else ''}")
                     st.rerun()
@@ -1378,6 +1383,12 @@ def render_main(settings):
                         st.info("DFS LAB detected that the QB-Captain pass-catcher rule blocked the slate, so it used football-coherence scoring for QB Captain builds instead of returning no lineups. All player locks, exclusions, exposures, salary and team-build settings were kept.")
                     if result is not None and not result.empty and len(result) < int(lineup_count):
                         st.warning(f"Built {len(result)} of {int(lineup_count)} requested lineups. DFS LAB stopped after the optimizer stalled on the current hard rules instead of hanging indefinitely. Loosen the rule called out below or build the smaller portfolio.")
+                    if result is not None and not result.empty:
+                        _exp_misses=audit_min_exposure(result,build_df,strategy_map)
+                        if _exp_misses:
+                            _lines="\n".join(f"• {_m['name']}: target min {_m['target']:.0f}%, got {_m['actual']:.1f}% — {_m['reason']}." for _m in _exp_misses[:8])
+                            _more=f"\n…plus {len(_exp_misses)-8} more." if len(_exp_misses)>8 else ""
+                            st.warning(f"⚠️ Minimum-exposure targets missed:{chr(10)}{_lines}{_more}")
                     if result is None or result.empty:
                         st.error("DFS LAB could not produce a lineup with the current rules. Running a quick feasibility check…")
 
@@ -1956,7 +1967,23 @@ def render_main(settings):
                             st.error("Minimum above maximum for: "+", ".join(_bad)+". Those rows were skipped — fix and Apply again.")
                         else:
                             st.session_state.pop(_exp_key,None)
+                            # The Players tab edits these same target columns and its
+                            # Apply overwrites every row: reset its editor so a stale
+                            # snapshot cannot silently write the old values back.
+                            _sed_key=st.session_state.get("v4_sdplayers_key")
+                            if _sed_key: st.session_state.pop(_sed_key,None)
+                            _excl_warn=[]
+                            _df_active={str(r["ID"]):bool(r.get("ActiveForBuild",True)) for _,r in df.iterrows()}
+                            _df_name={str(r["ID"]):str(r["Name"]) for _,r in df.iterrows()}
+                            for _ri in (_edited or {}):
+                                try: _pid=str(exp.iloc[int(_ri)]["ID"])
+                                except Exception: continue
+                                _st=st.session_state["showdown_strategy"].get(_pid,{}) or {}
+                                if float(_st.get("Min Exposure",0) or 0)>0 and (bool(_st.get("Exclude",False)) or not _df_active.get(_pid,True)):
+                                    _excl_warn.append(_df_name.get(_pid,_pid))
                             st.success(f"Saved exposure targets for {_n} player{'s' if _n!=1 else ''}. Tap ⚡ Build → GENERATE to rebuild with them.")
+                            if _excl_warn:
+                                st.warning("Min exposure can't be met while a player is Out or inactive: "+", ".join(sorted(set(_excl_warn)))+". Uncheck Out in the Players tab first.")
                             st.rerun()
                     st.download_button("Download exposure CSV",exp.to_csv(index=False),"showdown_exposure_v6_1.csv","text/csv",use_container_width=True)
                     st.button("📋 Back to Lineups",key="sd_exposure_back_to_lineups",use_container_width=True,on_click=_sd_nav_go,args=(_SD_TABS[5],))
