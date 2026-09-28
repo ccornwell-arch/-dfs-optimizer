@@ -86,3 +86,34 @@ if __name__ == "__main__":
     test_pool_empty_when_nothing_checked()
     test_optimizer_and_audit_keep_true_default()
     print("OK")
+
+
+def test_cpt_lock_implies_eligibility_in_pool():
+    """Regression: checking the CPT (lock) column alone must put the player in
+    the captain pool. The user hit 'No captain-eligible players' after checking
+    CPT locks but not CPT? -- the lock is the stronger intent ('WILL captain')
+    and must imply eligibility, as it did before the CPT? opt-in change."""
+    strat = {"1": {"CPT Eligible": False, "CPT Lock": True},
+             "2": {"CPT Eligible": False}}
+    pool = captain_pool_ids(_pool_df(), strat)
+    _check("CPT-locked player is in pool despite CPT? unchecked", pool == ["1", "3"])
+    _check("CPT lock does not override an exclusion",
+           captain_pool_ids(_pool_df(), {"1": {"CPT Eligible": False, "CPT Lock": True, "Exclude": True}}) == ["2", "3"])
+
+
+def test_optimizer_source_treats_lock_as_eligible():
+    """The MILP's own cpt_ok must agree with captain_pool_ids: a CPT-locked
+    player may not have the CPT slot upper-bounded to 0 (that + the lock's
+    hard 'must captain' constraint = infeasible model)."""
+    src = open("dfs_lab/showdown.py").read()
+    _check("optimizer cpt_ok includes CPT Lock",
+           'bool(strat.get("CPT Lock", False))) and not excluded' in src)
+    msrc = open("dfs_lab/ui/main.py").read()
+    _check("apply handler normalizes lock -> eligible",
+           "cpt_elig=(bool(r[\"CPT Eligible\"]) or cptlock) and not ex" in msrc)
+
+
+if __name__ == "__main__":
+    test_cpt_lock_implies_eligibility_in_pool()
+    test_optimizer_source_treats_lock_as_eligible()
+    print("lock-implies-eligibility regression tests done")

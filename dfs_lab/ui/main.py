@@ -985,7 +985,11 @@ def render_main(settings):
                         if abs(user_val-model_val)>0.01: st.session_state["projection_overrides"][pid]=user_val
                         else: st.session_state["projection_overrides"].pop(pid,None)
                         ex=bool(r["Exclude"]); cptlock=bool(r["CPT Lock"]) and not ex
-                        st.session_state["showdown_strategy"][str(r["ID"]) ]={"Lock":bool(r["Lock"]) and not ex and not cptlock,"CPT Lock":cptlock,"Exclude":ex,"CPT Eligible":bool(r["CPT Eligible"]) and not ex,"Priority":"Exclude" if ex else str(r["Priority"]),"Min Exposure":float(r["Min Exposure"]),"Max Exposure":float(r["Max Exposure"]),"CPT Min":float(r["CPT Min"]),"CPT Max":float(r["CPT Max"])}
+                        # A captain lock implies captain eligibility: checking the CPT column
+                        # alone must put the player in the captain pool (it did before the
+                        # CPT? opt-in change, and the lock is the stronger intent).
+                        cpt_elig=(bool(r["CPT Eligible"]) or cptlock) and not ex
+                        st.session_state["showdown_strategy"][str(r["ID"]) ]={"Lock":bool(r["Lock"]) and not ex and not cptlock,"CPT Lock":cptlock,"Exclude":ex,"CPT Eligible":cpt_elig,"Priority":"Exclude" if ex else str(r["Priority"]),"Min Exposure":float(r["Min Exposure"]),"Max Exposure":float(r["Max Exposure"]),"CPT Min":float(r["CPT Min"]),"CPT Max":float(r["CPT Max"])}
                     # Drop the widget's pending-edit state (pop the key: mutating
                     # nested widget state is forbidden by Streamlit) so a later
                     # sort/filter change doesn't warn about "unapplied" edits that
@@ -1199,7 +1203,7 @@ def render_main(settings):
             if build_btn:
                 _cpt_pool=captain_pool_ids(build_df,strategy_map)
                 if not _cpt_pool:
-                    st.error("No captain-eligible players — every CPT? box is unchecked (or excluded). Check **CPT?** for at least one player in 👤 Players, tap **Apply player changes**, then generate again.")
+                    st.error("No captain-eligible players — every CPT? box is unchecked (or excluded). Check **CPT?** for at least one player in 👤 Players (checking the **CPT** lock column counts too), tap **Apply player changes**, then generate again.")
                     st.session_state["showdown_result_v4"]=None
                 else:
                     result=generate_showdown_lineups(build_df,field_size,payout_style,lineup_count,max(120,lineup_count*5),min_salary,max_salary,build_weights,effective_script,effective_team,strategy_map,entry_format,eff_qb_pc,eff_wrte_qb,eff_rb_ctrl,max_k,max_dst,min_unique,seed,relationship_rules=active_relationships,world_influence=intensity)

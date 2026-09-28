@@ -415,7 +415,12 @@ def solve_showdown_one(
     for i, r in df.iterrows():
         strat = strategy_map.get(str(r["ID"]), {})
         excluded = bool(strat.get("Exclude", False)) or strat.get("Priority") == "Exclude"
-        cpt_ok = bool(strat.get("CPT Eligible", True)) and not excluded
+        # A captain-locked player is by definition captain-eligible: the lock is
+        # the stronger, more explicit intent ("WILL captain" beats "may captain").
+        # Without this, CPT Lock=True + CPT Eligible=False forces the player into
+        # the CPT slot (hard constraint below) while the slot's upper bound is
+        # 0 -- an infeasible model.
+        cpt_ok = (bool(strat.get("CPT Eligible", True)) or bool(strat.get("CPT Lock", False))) and not excluded
         for j, slot in enumerate(SHOWDOWN_SLOTS):
             if not active[i] or excluded:
                 ub[vidx(i,j)] = 0
@@ -1021,6 +1026,10 @@ def captain_pool_ids(df, strategy_map):
     for the build, not excluded, and CPT-eligible. A player with no strategy
     entry at all defaults to eligible (first-run behavior); an explicit
     CPT Eligible=False (CPT? unchecked + applied) removes them from the pool.
+
+    A captain-locked player (CPT Lock checked) is always eligible: the lock is
+    the stronger intent ("WILL captain"), so checking the CPT column alone is
+    enough to put a player in the pool.
     """
     ids = []
     active = (df["ActiveForBuild"].to_numpy(bool) if "ActiveForBuild" in df.columns
@@ -1028,7 +1037,8 @@ def captain_pool_ids(df, strategy_map):
     for pos, (_, r) in enumerate(df.iterrows()):
         strat = strategy_map.get(str(r["ID"]), {})
         excluded = bool(strat.get("Exclude", False)) or strat.get("Priority") == "Exclude"
-        if active[pos] and not excluded and bool(strat.get("CPT Eligible", True)):
+        eligible = bool(strat.get("CPT Eligible", True)) or bool(strat.get("CPT Lock", False))
+        if active[pos] and not excluded and eligible:
             ids.append(str(r["ID"]))
     return ids
 
@@ -1063,7 +1073,8 @@ def audit_showdown_portfolio(result, strategy_map, id_to_name=None):
         cap_id = str(row.get("CPT_ID", ""))
         cap_name = str(row.get("CPT", _nm(cap_id)))
         cap_strat = strategy_map.get(cap_id, {})
-        if cap_id and not bool(cap_strat.get("CPT Eligible", True)):
+        # A captain-locked player is eligible by definition (lock implies eligibility).
+        if cap_id and not (bool(cap_strat.get("CPT Eligible", True)) or bool(cap_strat.get("CPT Lock", False))):
             violations.append(
                 f"{label}: {cap_name} is Captain but CPT? is unchecked for them."
             )
