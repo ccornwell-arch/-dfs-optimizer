@@ -77,6 +77,28 @@ def _apply_exposure_targets(ed, exp, edited_rows, strategy):
     return n, bad
 
 
+def _auto_intel_adopt_manual(context, snapshot, manual):
+    """Mark user-touched Game Intel cells as manual. Pure.
+
+    A cell is manual when its current value differs from what auto-fill last
+    wrote (or from the neutral default if auto-fill never touched it). The
+    auto-fill pass skips manual cells, so anything the user typed survives.
+    """
+    _cols = ["Defense", "Usage", "Home/Rest", "Travel", "Time/Split", "Confidence", "Note"]
+    _defaults = {"Defense": 0, "Usage": 0, "Home/Rest": 0, "Travel": 0,
+                 "Time/Split": 0, "Confidence": 50, "Note": ""}
+    for pid, cfg in (context or {}).items():
+        for col in _cols:
+            cur = (cfg or {}).get(col, _defaults[col])
+            old = (snapshot or {}).get(str(pid), {}).get(col, _defaults[col])
+            key = f"{pid}|{col}"
+            if cur != old:
+                manual.add(key)
+            else:
+                manual.discard(key)
+    return manual
+
+
 def _sd_lineup_card_html(lr, headshot_map):
     """Full-roster lineup card HTML for a Showdown portfolio row.
 
@@ -1115,6 +1137,35 @@ def render_main(settings):
             if sd_nav==_SD_TABS[3]:
                 st.markdown('<div class="card-title">Game View</div><div class="card-sub">The football signals DFS LAB is using for this slate. Neutral inputs stay out of the way; open Model details only when you want to audit them.</div>',unsafe_allow_html=True)
                 st.info("Ratings are confidence-shrunk and capped. Defense and current usage carry more weight than travel or primetime splits.")
+                st.session_state.setdefault("showdown_context_auto",{})
+                st.session_state.setdefault("showdown_context_manual",set())
+                _ai1,_ai2=st.columns(2)
+                with _ai1:
+                    if st.button("✨ AUTO-FILL GAME INTEL",use_container_width=True,key="auto_intel_fill",
+                                 help="DFS LAB researches defensive matchups, usage trends, rest edges and travel from nflverse and pre-fills the ratings. Anything you've typed yourself is never overwritten."):
+                        from dfs_lab.data import _slate_season
+                        from dfs_lab.auto_intel import auto_fill_game_intel
+                        with st.spinner("DFS LAB is researching matchups, usage trends, rest and travel…"):
+                            _sugg,_amsg=auto_fill_game_intel(df,_slate_season(df))
+                        if _sugg:
+                            _auto_intel_adopt_manual(st.session_state["showdown_context"],st.session_state["showdown_context_auto"],st.session_state["showdown_context_manual"])
+                            for _pid,_s in _sugg.items():
+                                _cfg=st.session_state["showdown_context"].setdefault(str(_pid),{})
+                                for _col,_val in _s.items():
+                                    if f"{_pid}|{_col}" not in st.session_state["showdown_context_manual"]:
+                                        _cfg[_col]=_val
+                                st.session_state["showdown_context_auto"][str(_pid)]=dict(_s)
+                            st.success(f"{_amsg} Your edits always win — auto-fill never overwrites a cell you've touched.")
+                        else:
+                            st.warning(_amsg or "Auto-fill found no suggestions for this slate.")
+                with _ai2:
+                    if st.button("Reset Game Intel",use_container_width=True,key="auto_intel_reset"):
+                        st.session_state["showdown_context"]={}
+                        st.session_state["showdown_context_auto"]={}
+                        st.session_state["showdown_context_manual"]=set()
+                        st.session_state.pop("v51_context_editor",None)
+                        st.rerun()
+                st.caption("DFS LAB does the research — defensive matchups, usage trends, rest edges, travel — and pre-fills the ratings below. Type over anything you disagree with; your cells are yours.")
                 st.caption("This table is your input, not the model's output — all zeros means you are applying no adjustment. Rate players −3 to +3 wherever you have a take (e.g. Ertz's bigger role with Goedert out: Usage +2); the Context influence slider scales how strongly it moves DFS Lab Proj in the preview below, capped at ±18%.")
                 context_strength=st.select_slider("Context influence",options=["Conservative","Standard","Aggressive"],key="context_strength")
                 rating_opts=[-3,-2,-1,0,1,2,3]
@@ -1142,6 +1193,9 @@ def render_main(settings):
                     },key="v51_context_editor")
                 for _,r in cedited.iterrows():
                     st.session_state["showdown_context"][str(r["ID"])]= {k:(int(r[k]) if k not in ["Note"] else str(r[k])) for k in ["Defense","Usage","Home/Rest","Travel","Time/Split","Confidence","Note"]}
+                # Any cell the user changed away from the last auto-fill value
+                # is theirs from now on: future auto-fills won't overwrite it.
+                _auto_intel_adopt_manual(st.session_state["showdown_context"],st.session_state["showdown_context_auto"],st.session_state["showdown_context_manual"])
 
                 # Preview context on top of the current scenario state.
                 ctx_script=st.session_state.get("sd_script","Neutral"); ctx_team=st.session_state.get("sd_script_team","None")
