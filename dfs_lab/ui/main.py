@@ -49,6 +49,70 @@ def _classic_nav_go(tab):
     st.session_state["classic_nav"]=tab
 
 
+def _apply_exposure_targets(ed, exp, edited_rows, strategy):
+    """Apply data_editor exposure-target edits to the strategy map. Pure.
+
+    ed: display table (Player, Target Min %, ...) indexed by row position.
+    exp: showdown_exposure_table output (carries the ID column).
+    edited_rows: {row_index: {column: new_value}} from the editor widget.
+    Returns (applied_count, bad_players): rows whose min exceeds max are
+    skipped and reported instead of being written.
+    """
+    bad = []
+    n = 0
+    for ri, chg in (edited_rows or {}).items():
+        ri = int(ri)
+        drow = ed.iloc[ri]
+        pid = str(exp.iloc[ri]["ID"])
+        tmin = float(chg.get("Target Min %", drow["Target Min %"]))
+        tmax = float(chg.get("Target Max %", drow["Target Max %"]))
+        cmin = float(chg.get("CPT Target Min %", drow["CPT Target Min %"]))
+        cmax = float(chg.get("CPT Target Max %", drow["CPT Target Max %"]))
+        if tmin > tmax or cmin > cmax:
+            bad.append(str(drow["Player"]))
+            continue
+        strat = strategy.setdefault(pid, {})
+        strat.update({"Min Exposure": tmin, "Max Exposure": tmax, "CPT Min": cmin, "CPT Max": cmax})
+        n += 1
+    return n, bad
+
+
+def _sd_lineup_card_html(lr, headshot_map):
+    """Full-roster lineup card HTML for a Showdown portfolio row.
+
+    Same look as the 'Your lineups' top cards: captain feature, all five
+    FLEX players, salary/construction/dup meta and the grade strip. Used by
+    the Game Worlds view so a selected world shows full lineups, not just a
+    summary table. Pure: no Streamlit calls.
+    """
+    import html as _h
+
+    def _avatar(name, captain=False):
+        safe = _h.escape(str(name))
+        url = _h.escape(headshot_map.get(str(name), ""))
+        cls = "player-avatar captain-avatar" if captain else "player-avatar flex-avatar"
+        if url:
+            return f"<div class='{cls}'><img src='{url}' alt='{safe}'></div>"
+        initials = "".join([x[:1] for x in str(name).replace(".", " ").split()[:2]]).upper() or "NFL"
+        return f"<div class='{cls} avatar-fallback'>{_h.escape(initials)}</div>"
+
+    world = str(lr.get("Game World", ""))
+    captain = str(lr["Captain"])
+    flexes = [str(lr.get("FLEX" + str(i), "")) for i in range(1, 6)]
+    flex_people = "".join(
+        "<div class='flex-person'>" + _avatar(nm, False) + "<span>" + _h.escape(nm) + "</span></div>"
+        for nm in flexes if nm
+    )
+    card = ("<div class='lineup-card lineup-card-grid'><div class='lineup-card-head'><div class='lineup-rank'>#%s</div><div class='lineup-grade'>%s</div></div>" % (int(lr["Rank"]), lr["Rating"]) +
+            "<div class='captain-feature'>" + _avatar(captain, True) + "<div><div class='lineup-points'>%.1f <small>pts</small></div>" % lr["Projection"] +
+            "<div class='lineup-cpt'><span>CPT</span> %s</div></div></div>" % _h.escape(captain) +
+            "<div class='lineup-flex-grid'>%s</div>" % flex_people +
+            "<div class='lineup-meta'>$%s &nbsp; • &nbsp; %s &nbsp; • &nbsp; %s dup risk</div>" % (f"{int(lr['Salary']):,}", lr["Construction"], lr["Dup Risk"]) +
+            "<div class='lineup-why-strip'><span>%s DUP</span><span>%s CORR</span><span>%s LEVERAGE</span></div>" % (_h.escape(str(lr.get("Dup Risk", "—")).upper()), _h.escape(str(lr.get("Correlation Grade", "—")).upper()), _h.escape(str(lr.get("Leverage Grade", "—")).upper())) +
+            (("<div class='lineup-world'>◉ &nbsp; %s</div>" % _h.escape(world)) if world else "") + "</div>")
+    return card
+
+
 @st.cache_resource
 def _dfs_lab_slate_cache():
     return {}
@@ -1475,12 +1539,17 @@ def render_main(settings):
                             w1,w2,w3=st.columns(3); w1.metric("Lineups in world",len(filtered_result)); w2.metric("Top projection",f"{filtered_result['Projection'].max():.1f}"); w3.metric("Avg salary left",f"${int(filtered_result['Salary Left'].mean()):,}")
                             st.caption(str(filtered_result.iloc[0].get("World Thesis","")))
                             st.markdown(f"#### Lineups built for {world_filter}")
-                            st.caption("This world's separated set — the same lineups the Lineup Lab explorer below is now showing.")
-                            _wl_cols=[c for c in ["Rank","Captain","Construction","Projection","Salary Left","Dup Risk"] if c in filtered_result.columns]
-                            st.dataframe(filtered_result[_wl_cols],hide_index=True,use_container_width=True,height=min(560,110+34*len(filtered_result)),
-                                         column_config={"Captain":st.column_config.TextColumn("Captain",pinned=True,width=170),
-                                                        "Projection":st.column_config.NumberColumn("Proj",format="%.1f"),
-                                                        "Salary Left":st.column_config.NumberColumn("$ Left",format="$%d")})
+                            st.caption("Every lineup in this world's separated set — full rosters, not summaries. Same set the Lineup Lab explorer below is analyzing.")
+                            _wl_headshots={}
+                            if "Headshot URL" in build_df.columns:
+                                _wl_headshots={str(r["Name"]):str(r.get("Headshot URL","")) for _,r in build_df.iterrows()
+                                               if str(r.get("Headshot URL","")).lower() not in ["","nan","none"]}
+                            _wl_rows=list(filtered_result.iterrows())
+                            for _ci in range(0,len(_wl_rows),2):
+                                _ccols=st.columns(2)
+                                for _cc,(_, _wlr) in zip(_ccols,_wl_rows[_ci:_ci+2]):
+                                    with _cc:
+                                        st.markdown(_sd_lineup_card_html(_wlr,_wl_headshots),unsafe_allow_html=True)
                     with result_views[2]:
                         st.markdown("<div class='results-view-title'>Lineup Lab</div><div class='results-view-sub'>Pick any lineup, see the football story behind all six players, challenge assumptions, test swaps, and talk directly to DFS LAB Agent.</div>",unsafe_allow_html=True)
                         st.markdown("#### Lineup Explorer")
@@ -1801,30 +1870,40 @@ def render_main(settings):
                         st.caption(f"Projection {r['Projection']} • Salary ${int(r['Salary']):,} • ${int(r['Salary Left']):,} left • Duplication risk {r['Dup Risk']} • {r['Strategy Notes']}")
 
             if sd_nav==_SD_TABS[6]:
-                st.markdown('<div class="card-title">Exposure Lab</div><div class="card-sub">See overall and Captain exposure side by side.</div>',unsafe_allow_html=True)
+                st.markdown('<div class="card-title">Exposure Lab</div><div class="card-sub">Edit exposure targets right here — no trip to Players needed.</div>',unsafe_allow_html=True)
                 if result is None or result.empty: st.info("Generate lineups first.")
                 else:
                     exp=showdown_exposure_table(df,result,strategy_map)
-                    st.markdown("#### Set player exposure")
-                    st.caption("iPad-friendly controls. Type a percentage or use +/−. Minimums are enforced across the requested portfolio when feasible. Changes take effect on your next build — tap Generate again in ⚡ Build.")
-                    exp_names=exp["Name"].astype(str).tolist()
-                    ep=st.selectbox("Player",exp_names,key="exposure_player_select")
-                    erow=df[df["Name"].astype(str).eq(ep)].iloc[0]; epid=str(erow["ID"])
-                    estrat=st.session_state["showdown_strategy"].setdefault(epid,{})
-                    actual=float(exp.loc[exp["Name"].eq(ep),"Actual %"].iloc[0]); cactual=float(exp.loc[exp["Name"].eq(ep),"CPT Actual %"].iloc[0])
-                    st.caption(f"Current portfolio: {actual:.0f}% overall • {cactual:.0f}% Captain")
-                    e1,e2,e3,e4=st.columns(4)
-                    with e1: emin=st.number_input("Min %",0,100,int(estrat.get("Min Exposure",0)),5,key=f"emin_{epid}")
-                    with e2: emax=st.number_input("Max %",0,100,int(estrat.get("Max Exposure",100)),5,key=f"emax_{epid}")
-                    with e3: cmin=st.number_input("CPT Min %",0,100,int(estrat.get("CPT Min",0)),5,key=f"ecmin_{epid}")
-                    with e4: cmax=st.number_input("CPT Max %",0,100,int(estrat.get("CPT Max",100)),5,key=f"ecmax_{epid}")
-                    if emin>emax or cmin>cmax:
-                        st.warning("Minimum exposure cannot be higher than maximum exposure.")
-                    else:
-                        estrat.update({"Min Exposure":float(emin),"Max Exposure":float(emax),"CPT Min":float(cmin),"CPT Max":float(cmax)})
-                    st.markdown("#### Portfolio exposure")
-                    st.caption("Read-only report of the last build — set targets with the player controls above, then rebuild.")
-                    st.dataframe(exp,hide_index=True,use_container_width=True,height=560,column_config={"Name":st.column_config.TextColumn("Player",pinned=True,width=190)})
+                    # Editor key is scoped to this exact portfolio fingerprint: if the
+                    # user rebuilds between editing and applying, the key changes and
+                    # stale row-position edits can never land on the wrong player.
+                    _fp=f"{len(result)}_{int(result['Rank'].sum())}_{float(result['Projection'].sum()):.1f}_{str(result['CPT'].iloc[0])}_{str(result['CPT'].iloc[-1])}"
+                    _exp_key=f"sd_exp_editor_{_fp}"
+                    st.markdown("#### Exposure targets")
+                    st.caption("Edit the Target columns, then APPLY. Actuals are read-only — they describe the last build. New targets take effect on your next Generate in ⚡ Build.")
+                    _ed=exp.rename(columns={"Name":"Player","Actual %":"My Exp %","Min %":"Target Min %","Max %":"Target Max %","CPT Actual %":"CPT Exp %","CPT Min %":"CPT Target Min %","CPT Max %":"CPT Target Max %"})
+                    _ed_cols=["Player","Pos","Team","My Exp %","Target Min %","Target Max %","CPT Exp %","CPT Target Min %","CPT Target Max %"]
+                    _ed=_ed[[c for c in _ed_cols if c in _ed.columns]]
+                    st.data_editor(
+                        _ed,hide_index=True,use_container_width=True,height=560,key=_exp_key,
+                        disabled=[c for c in _ed.columns if "Target" not in c],
+                        column_config={
+                            "Player":st.column_config.TextColumn("Player",pinned=True,width=170),
+                            "My Exp %":st.column_config.NumberColumn("My Exp %",format="%.1f"),
+                            "Target Min %":st.column_config.NumberColumn("Min %",min_value=0,max_value=100,step=5),
+                            "Target Max %":st.column_config.NumberColumn("Max %",min_value=0,max_value=100,step=5),
+                            "CPT Exp %":st.column_config.NumberColumn("CPT %",format="%.1f"),
+                            "CPT Target Min %":st.column_config.NumberColumn("CPT Min %",min_value=0,max_value=100,step=5),
+                            "CPT Target Max %":st.column_config.NumberColumn("CPT Max %",min_value=0,max_value=100,step=5)})
+                    if st.button("✅ APPLY EXPOSURE TARGETS",use_container_width=True,key=f"sd_exp_apply_{_fp}"):
+                        _edited=(st.session_state.get(_exp_key,{}) or {}).get("edited_rows",{}) or {}
+                        _n,_bad=_apply_exposure_targets(_ed,exp,_edited,st.session_state["showdown_strategy"])
+                        if _bad:
+                            st.error("Minimum above maximum for: "+", ".join(_bad)+". Those rows were skipped — fix and Apply again.")
+                        else:
+                            st.session_state.pop(_exp_key,None)
+                            st.success(f"Saved exposure targets for {_n} player{'s' if _n!=1 else ''}. Tap ⚡ Build → GENERATE to rebuild with them.")
+                            st.rerun()
                     st.download_button("Download exposure CSV",exp.to_csv(index=False),"showdown_exposure_v6_1.csv","text/csv",use_container_width=True)
                     st.button("📋 Back to Lineups",key="sd_exposure_back_to_lineups",use_container_width=True,on_click=_sd_nav_go,args=(_SD_TABS[5],))
         except Exception as e:
