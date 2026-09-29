@@ -60,7 +60,8 @@ def test_css_is_single_style_block_with_team_accent():
     assert t["on_accent"] in css
     # key brand touchpoints are themed
     for sel in ('button[kind="primary"]', 'button[data-selected="true"]',
-                ".lineup-cpt span", ".lab-brand b", 'button[aria-selected="true"]'):
+                ".lineup-cpt span", ".lab-brand b", 'button[aria-selected="true"]',
+                "st-key-fav_team"):
         assert sel in css, sel
 
 

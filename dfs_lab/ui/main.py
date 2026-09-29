@@ -31,7 +31,7 @@ from dfs_lab.showdown import (apply_context_engine, apply_showdown_scenario,
     audit_min_exposure, audit_showdown_portfolio, captain_pool_ids,
     generate_showdown_lineups, infer_score_script, script_build_adjustments,
     showdown_exposure_table, showdown_upload_csv)
-from dfs_lab.theme import team_options, theme_css
+from dfs_lab.theme import resolve_theme, team_options, theme_css
 
 
 def _sd_nav_go(tab):
@@ -185,6 +185,16 @@ def render_main(settings):
         if _want!=_qp_now:
             if _want: st.query_params["team"]=_want
             elif "team" in st.query_params: del st.query_params["team"]
+        # Instant feedback: show the resolved accent next to the picker so the
+        # theme choice is visible immediately, not just on later screens.
+        _tv=resolve_theme(st.session_state.get("fav_team"))
+        st.markdown(
+            f"<div style='display:flex;align-items:center;gap:10px;margin:10px 2px 2px;'>"
+            f"<div style='width:36px;height:36px;border-radius:11px;background:{_tv['accent']};"
+            f"border:1px solid rgba(255,255,255,.28);box-shadow:0 4px 14px {_tv['glow']};'></div>"
+            f"<div style='font-size:.85rem;color:#cdd8ea;'><b style='color:#fff;'>{_tv['name']}</b> accent · "
+            f"paints buttons, the nav pill, CPT badges and highlights across the app.</div></div>",
+            unsafe_allow_html=True)
 
     # Keep a working copy of uploaded bytes during ordinary Streamlit reruns. This prevents
     # widget refreshes from forcing the user to remove/re-add the same slate.

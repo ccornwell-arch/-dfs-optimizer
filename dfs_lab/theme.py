@@ -164,6 +164,8 @@ html body .st-key-sd_results_hub [role="tab"][aria-selected="true"] p,
 html body .st-key-sd_results_hub [role="tab"][aria-selected="true"] span{{
 color:var(--lab-on-accent)!important;-webkit-text-fill-color:var(--lab-on-accent)!important;}}
 .lab-brand b{{color:var(--lab-accent)!important;}}
+html body .st-key-fav_team [data-baseweb="select"]>div{{border-color:var(--lab-accent)!important;
+box-shadow:0 0 0 1px var(--lab-soft)!important;}}
 .lineup-cpt span{{background:var(--lab-accent)!important;color:var(--lab-on-accent)!important;
 -webkit-text-fill-color:var(--lab-on-accent)!important;border-radius:6px;padding:1px 8px;}}
 .answer-kicker{{color:var(--lab-accent)!important;}}
