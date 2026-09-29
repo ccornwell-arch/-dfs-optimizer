@@ -1062,7 +1062,7 @@ def render_main(settings):
                     use_container_width=True,
                     height=650,
                     disabled=["ID","Name","Pos","Team","Flex $","DFS Base","Availability","Hist G","Matchup %","Model","Δ%","Own","CPT Own"],
-                    column_order=["Name","Availability","Lock","CPT Lock","Exclude","CPT Eligible","Priority","Pos","Team","Flex $","DFS Base","Hist G","Matchup %","Model","Your Proj","Δ%","Own","CPT Own","Min Exposure","Max Exposure","CPT Min","CPT Max"],
+                    column_order=["Name","CPT Eligible","CPT Lock","Lock","Exclude","Priority","Availability","Pos","Team","Flex $","DFS Base","Hist G","Matchup %","Model","Your Proj","Δ%","Own","CPT Own","Min Exposure","Max Exposure","CPT Min","CPT Max"],
                     column_config={
                         "ID":None,
                         "Name":st.column_config.TextColumn("Player",width=190,pinned=True),
@@ -1079,7 +1079,7 @@ def render_main(settings):
                         "Lock":st.column_config.CheckboxColumn("Lock",width=62,pinned=True),
                         "CPT Lock":st.column_config.CheckboxColumn("CPT",width=62,pinned=True),
                         "Exclude":st.column_config.CheckboxColumn("Out",width=58,pinned=True),
-                        "CPT Eligible":st.column_config.CheckboxColumn("CPT?",width=60),
+                        "CPT Eligible":st.column_config.CheckboxColumn("CPT?",width=60,pinned=True),
                         "Priority":st.column_config.SelectboxColumn("Lean",options=PRIORITY_OPTIONS,width=92),
                         "Min Exposure":st.column_config.NumberColumn("Min %",min_value=0,max_value=100,step=5,width=70),
                         "Max Exposure":st.column_config.NumberColumn("Max %",min_value=0,max_value=100,step=5,width=70),
