@@ -1,0 +1,79 @@
+"""Team-color theming: 32-team map, auto-lift for dark accents, single CSS block.
+
+The favorite-team theme must never produce an invisible accent on the
+midnight base (dark brand colors like Ravens purple get lifted), text on the
+accent must stay readable, and unknown/empty picks must fall back to the
+Midnight Volt house theme.
+"""
+import re
+
+from dfs_lab.theme import (
+    TEAM_COLORS, on_accent, resolve_theme, team_options, theme_css, _luminance,
+)
+
+
+def test_all_32_teams_present():
+    assert len(TEAM_COLORS) == 32
+    assert set(TEAM_COLORS) >= {"PHI", "KC", "DAL", "GB", "NE", "SF"}
+
+
+def test_all_colors_are_valid_hex():
+    for abbr, (name, p, s) in TEAM_COLORS.items():
+        assert re.fullmatch(r"#[0-9A-Fa-f]{6}", p), abbr
+        assert re.fullmatch(r"#[0-9A-Fa-f]{6}", s), abbr
+        assert name and len(name) > 3, abbr
+
+
+def test_dark_accents_are_lifted_to_visible():
+    # Brand colors that are near-invisible on midnight navy must be lifted.
+    for abbr in ("BAL", "IND", "PHI", "NYJ", "HOU"):
+        t = resolve_theme(abbr)
+        assert _luminance(t["accent"]) >= 0.22, f"{abbr} accent too dark: {t['accent']}"
+
+
+def test_all_team_accents_visible():
+    for abbr in TEAM_COLORS:
+        t = resolve_theme(abbr)
+        assert _luminance(t["accent"]) >= 0.22, abbr
+
+
+def test_on_accent_contrast():
+    assert on_accent("#C6F135") == "#11151D"   # volt -> dark text
+    assert on_accent("#E31837") == "#FFFFFF"   # chiefs red -> white text
+    t = resolve_theme("GB")
+    assert t["on_accent"] in ("#11151D", "#FFFFFF")
+
+
+def test_default_is_midnight_volt():
+    for abbr in (None, "", "XXX"):
+        t = resolve_theme(abbr)
+        assert t["abbr"] is None
+        assert t["name"] == "Midnight Volt"
+        assert t["accent"] == "#C6F135"
+
+
+def test_css_is_single_style_block_with_team_accent():
+    css = theme_css("KC")
+    assert css.count("<style>") == 1 and css.count("</style>") == 1
+    t = resolve_theme("KC")
+    assert t["accent"] in css
+    assert t["on_accent"] in css
+    # key brand touchpoints are themed
+    for sel in ('button[kind="primary"]', 'button[data-selected="true"]',
+                ".lineup-cpt span", ".lab-brand b", 'button[aria-selected="true"]'):
+        assert sel in css, sel
+
+
+def test_css_uses_vars_not_hardcoded_wars():
+    css = theme_css("PHI")
+    assert "var(--lab-accent)" in css
+    # must not reintroduce the old hard-coded blue wars
+    assert "#0071e3" not in css and "#5B9DFF" not in css
+
+
+def test_team_options_default_first_and_sorted():
+    opts = team_options()
+    assert opts[0] == (None, "Midnight Volt")
+    names = [n for _, n in opts[1:]]
+    assert names == sorted(names)
+    assert len(opts) == 33

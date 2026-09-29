@@ -31,6 +31,7 @@ from dfs_lab.showdown import (apply_context_engine, apply_showdown_scenario,
     audit_min_exposure, audit_showdown_portfolio, captain_pool_ids,
     generate_showdown_lineups, infer_score_script, script_build_adjustments,
     showdown_exposure_table, showdown_upload_csv)
+from dfs_lab.theme import team_options, theme_css
 
 
 def _sd_nav_go(tab):
@@ -170,6 +171,20 @@ def render_main(settings):
         u1,u2=st.columns(2)
         with u1: dk_file=st.file_uploader("DraftKings salaries/template · required",type=["csv"],key="dfs_lab_dk_upload")
         with u2: ss_file=st.file_uploader("SaberSim · optional comparison",type=["csv"],key="dfs_lab_ss_upload")
+        # Favorite-team theme: the app's accent color follows the user's team.
+        # Persisted in the URL (?team=PHI) so a bookmark keeps it without accounts.
+        _team_opts=team_options(); _team_ids=[a for a,_ in _team_opts]
+        if "fav_team" not in st.session_state:
+            _qp=str(st.query_params.get("team","") or "").upper()
+            st.session_state["fav_team"]=_qp if _qp in _team_ids else None
+        st.selectbox("Favorite team · app theme",options=_team_ids,
+            format_func=lambda a: dict(_team_opts)[a],key="fav_team",
+            help="DFS LAB's accent color follows your team. Midnight Volt is the house theme.")
+        _qp_now=str(st.query_params.get("team","") or "").upper()
+        _want=st.session_state.get("fav_team") or ""
+        if _want!=_qp_now:
+            if _want: st.query_params["team"]=_want
+            elif "team" in st.query_params: del st.query_params["team"]
 
     # Keep a working copy of uploaded bytes during ordinary Streamlit reruns. This prevents
     # widget refreshes from forcing the user to remove/re-add the same slate.
@@ -2019,3 +2034,8 @@ def render_main(settings):
     # Results Command Center dark theme lock: final cascade. Dark gray surfaces,
     # light text on dark bars (contrast fix), tabular numerals, RCC components.
     st.markdown(styles.RCC_DARK_CSS, unsafe_allow_html=True)
+
+    # Dynamic team theme: the single brand source. Injected last so it wins the
+    # cascade — primary buttons, selected nav pill, selected tabs, CPT badge,
+    # kickers, links and the wordmark accent all follow the favorite team.
+    st.markdown(theme_css(st.session_state.get("fav_team")), unsafe_allow_html=True)
