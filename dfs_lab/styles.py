@@ -1305,6 +1305,21 @@ html body .st-key-sd_results_hub [role="tablist"],
 html body .st-key-sd_results_hub [data-baseweb="tab-list"]{
   position:relative!important;top:auto!important;
 }
+/* phone: wrap the 7 workspace pills into rows so every tab is visible at once.
+   A horizontally-scrolling strip hides Build/Lineups/Exposure behind a swipe,
+   which is why the tabs never felt "always accessible" on a phone. */
+@media(max-width:760px){
+  html body .st-key-sd_nav [data-testid="stButtonGroup"],
+  html body .st-key-classic_nav [data-testid="stButtonGroup"]{
+    display:flex!important;flex-wrap:wrap!important;overflow:visible!important;
+    gap:.35rem!important;
+  }
+  html body .st-key-sd_nav [data-testid="stButtonGroup"] button,
+  html body .st-key-classic_nav [data-testid="stButtonGroup"] button{
+    flex:1 1 30%!important;white-space:nowrap!important;
+    padding:.5rem .2rem!important;font-size:.82rem!important;text-align:center!important;
+  }
+}
 /* ---------- expanders: definitive dark ---------- */
 html body #root [data-testid="stAppViewContainer"] [data-testid="stExpander"],
 html body #root [data-testid="stAppViewContainer"] [data-testid="stExpander"]>details,

@@ -84,6 +84,31 @@ def test_css_uses_vars_not_hardcoded_wars():
     assert "#0071e3" not in css and "#5B9DFF" not in css
 
 
+def test_css_selectors_beat_legacy_specificity():
+    # Several legacy theme blocks use the `html body` prefix, which outranks a
+    # bare selector (0,2,2 beats 0,2,1) no matter the source order. Every real
+    # selector in the dynamic theme must carry the prefix, or "injected last"
+    # does not win — this is exactly how the GENERATE button stayed blue.
+    css = theme_css("SF")
+    in_block = False
+    for raw in css.splitlines():
+        s = raw.strip()
+        if not s or s.startswith("/*") or s in ("<style>", "</style>"):
+            continue
+        if s.startswith(":root{"):
+            in_block = True
+            continue
+        if "{" in s and not in_block:
+            in_block = True
+            sels = s.split("{")[0]
+            for sel in sels.split(","):
+                sel = sel.strip()
+                assert sel.startswith("html body"), f"unprefixed selector loses the theme war: {sel!r}"
+            continue
+        if "}" in s:
+            in_block = False
+
+
 def test_team_options_default_first_and_sorted():
     opts = team_options()
     assert opts[0] == (None, "Midnight Volt")
