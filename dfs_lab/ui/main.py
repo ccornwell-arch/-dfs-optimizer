@@ -31,7 +31,7 @@ from dfs_lab.showdown import (apply_context_engine, apply_showdown_scenario,
     audit_min_exposure, audit_showdown_portfolio, captain_pool_ids,
     generate_showdown_lineups, infer_score_script, script_build_adjustments,
     showdown_exposure_table, showdown_upload_csv)
-from dfs_lab.theme import resolve_theme, team_options, theme_css
+from dfs_lab.theme import theme_css
 
 
 def _sd_nav_go(tab):
@@ -150,6 +150,20 @@ def render_main(settings):
     lineup_count = settings["lineup_count"]
     seed = settings["seed"]
 
+    # House theme first: inject every style block before any UI renders, so the
+    # setup screen (which stops the script before any upload) is dark from the
+    # first paint — no light-background flash that later flips to dark.
+    # Single color scheme: Midnight Volt house theme. (Team theming scrapped
+    # Sep 2026; dfs_lab/theme.py is kept for a future revisit.)
+    st.markdown(styles.MAIN_V634_SHELL_CSS, unsafe_allow_html=True)
+    st.markdown(styles.MAIN_DYNAMIC_SHELL_CSS, unsafe_allow_html=True)
+    st.markdown(styles.MAIN_UNIFORM_THEME_CSS, unsafe_allow_html=True)
+    st.markdown(styles.MAIN_EXPANDERS_CSS, unsafe_allow_html=True)
+    st.markdown(styles.MAIN_EXPANDER_HEADERS_CSS, unsafe_allow_html=True)
+    st.markdown(styles.MAIN_WHY_STRIP_CSS, unsafe_allow_html=True)
+    st.markdown(styles.RCC_DARK_CSS, unsafe_allow_html=True)
+    st.markdown(theme_css(), unsafe_allow_html=True)
+
     # Keep each browser's last successfully uploaded slate alive across ordinary page refreshes.
     # The cache key is stored in the URL so a new Streamlit session can recover the same files.
     if "slate_session" not in st.query_params:
@@ -171,32 +185,6 @@ def render_main(settings):
         u1,u2=st.columns(2)
         with u1: dk_file=st.file_uploader("DraftKings salaries/template · required",type=["csv"],key="dfs_lab_dk_upload")
         with u2: ss_file=st.file_uploader("SaberSim · optional comparison",type=["csv"],key="dfs_lab_ss_upload")
-        # Favorite-team theme: the app's accent color follows the user's team.
-        # Persisted in the URL (?team=PHI) so a bookmark keeps it without accounts.
-        _team_opts=team_options(); _team_ids=[a for a,_ in _team_opts]
-        if "fav_team" not in st.session_state:
-            _qp=str(st.query_params.get("team","") or "").upper()
-            st.session_state["fav_team"]=_qp if _qp in _team_ids else None
-        st.selectbox("Favorite team · app theme",options=_team_ids,
-            format_func=lambda a: dict(_team_opts)[a],key="fav_team",
-            help="DFS LAB's accent color follows your team. Midnight Volt is the house theme.")
-        _qp_now=str(st.query_params.get("team","") or "").upper()
-        _want=st.session_state.get("fav_team") or ""
-        if _want!=_qp_now:
-            if _want: st.query_params["team"]=_want
-            elif "team" in st.query_params: del st.query_params["team"]
-        # Instant feedback: show the resolved accent next to the picker so the
-        # theme choice is visible immediately, not just on later screens.
-        _tv=resolve_theme(st.session_state.get("fav_team"))
-        st.markdown(
-            f"<div style='display:flex;align-items:center;gap:10px;margin:10px 2px 2px;'>"
-            f"<div style='display:flex;border-radius:11px;overflow:hidden;border:1px solid rgba(255,255,255,.28);"
-            f"box-shadow:0 4px 14px {_tv['glow']};'>"
-            f"<div style='width:30px;height:36px;background:{_tv['accent']};'></div>"
-            f"<div style='width:30px;height:36px;background:{_tv['accent2']};'></div></div>"
-            f"<div style='font-size:.85rem;color:#cdd8ea;'><b style='color:#fff;'>{_tv['name']}</b> · "
-            f"both team colors paint buttons, nav, badges and the page glow.</div></div>",
-            unsafe_allow_html=True)
 
     # Keep a working copy of uploaded bytes during ordinary Streamlit reruns. This prevents
     # widget refreshes from forcing the user to remove/re-add the same slate.
@@ -2019,35 +2007,4 @@ def render_main(settings):
 
 
 
-    st.markdown(styles.MAIN_V634_SHELL_CSS, unsafe_allow_html=True)
-
     st.caption(f"DFS LAB · Build the story. Test the lineup. Challenge the field. · build {git_build_stamp()}")
-
-
-    st.markdown(styles.MAIN_DYNAMIC_SHELL_CSS, unsafe_allow_html=True)
-
-
-    # Final global theme lock: keep the same visual treatment before and after lineups are generated.
-    st.markdown(styles.MAIN_UNIFORM_THEME_CSS, unsafe_allow_html=True)
-
-
-    # Final readability pass: one coherent blue/ink palette, readable dark bars, and lineup headshots.
-    st.markdown(styles.MAIN_EXPANDERS_CSS, unsafe_allow_html=True)
-
-
-    # iPad contrast hard-stop: do not use dark expander/control bars on the light workspace.
-    # This deliberately makes the surface readable even if Streamlit's internal text classes change.
-    st.markdown(styles.MAIN_EXPANDER_HEADERS_CSS, unsafe_allow_html=True)
-
-
-    # Lineup WHY drawer: restore the explanation layer without widening the lineup table.
-    st.markdown(styles.MAIN_WHY_STRIP_CSS, unsafe_allow_html=True)
-
-    # Results Command Center dark theme lock: final cascade. Dark gray surfaces,
-    # light text on dark bars (contrast fix), tabular numerals, RCC components.
-    st.markdown(styles.RCC_DARK_CSS, unsafe_allow_html=True)
-
-    # Dynamic team theme: the single brand source. Injected last so it wins the
-    # cascade — primary buttons, selected nav pill, selected tabs, CPT badge,
-    # kickers, links and the wordmark accent all follow the favorite team.
-    st.markdown(theme_css(st.session_state.get("fav_team")), unsafe_allow_html=True)
