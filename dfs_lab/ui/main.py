@@ -190,10 +190,12 @@ def render_main(settings):
         _tv=resolve_theme(st.session_state.get("fav_team"))
         st.markdown(
             f"<div style='display:flex;align-items:center;gap:10px;margin:10px 2px 2px;'>"
-            f"<div style='width:36px;height:36px;border-radius:11px;background:{_tv['accent']};"
-            f"border:1px solid rgba(255,255,255,.28);box-shadow:0 4px 14px {_tv['glow']};'></div>"
-            f"<div style='font-size:.85rem;color:#cdd8ea;'><b style='color:#fff;'>{_tv['name']}</b> accent · "
-            f"paints buttons, the nav pill, CPT badges and highlights across the app.</div></div>",
+            f"<div style='display:flex;border-radius:11px;overflow:hidden;border:1px solid rgba(255,255,255,.28);"
+            f"box-shadow:0 4px 14px {_tv['glow']};'>"
+            f"<div style='width:30px;height:36px;background:{_tv['accent']};'></div>"
+            f"<div style='width:30px;height:36px;background:{_tv['accent2']};'></div></div>"
+            f"<div style='font-size:.85rem;color:#cdd8ea;'><b style='color:#fff;'>{_tv['name']}</b> · "
+            f"both team colors paint buttons, nav, badges and the page glow.</div></div>",
             unsafe_allow_html=True)
 
     # Keep a working copy of uploaded bytes during ordinary Streamlit reruns. This prevents

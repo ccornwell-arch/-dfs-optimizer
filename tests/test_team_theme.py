@@ -35,6 +35,17 @@ def test_all_team_accents_visible():
     for abbr in TEAM_COLORS:
         t = resolve_theme(abbr)
         assert _luminance(t["accent"]) >= 0.22, abbr
+        # secondary must also survive the midnight base (black -> trim gray)
+        assert _luminance(t["accent2"]) >= 0.10, f"{abbr} secondary too dark"
+
+
+def test_duotone_keys_present():
+    t = resolve_theme("SF")
+    for k in ("accent", "accent2", "accent_deep", "accent2_deep",
+              "on_accent", "on_gradient", "wash_a", "wash_b"):
+        assert k in t and t[k], k
+    # 49ers: red primary, gold secondary — genuinely two colors
+    assert t["accent"] != t["accent2"]
 
 
 def test_on_accent_contrast():
@@ -57,11 +68,12 @@ def test_css_is_single_style_block_with_team_accent():
     assert css.count("<style>") == 1 and css.count("</style>") == 1
     t = resolve_theme("KC")
     assert t["accent"] in css
-    assert t["on_accent"] in css
+    assert t["accent2"] in css
+    assert t["on_gradient"] in css
     # key brand touchpoints are themed
     for sel in ('button[kind="primary"]', 'button[data-selected="true"]',
                 ".lineup-cpt span", ".lab-brand b", 'button[aria-selected="true"]',
-                "st-key-fav_team"):
+                "st-key-fav_team", "stAppViewContainer", "border-image"):
         assert sel in css, sel
 
 

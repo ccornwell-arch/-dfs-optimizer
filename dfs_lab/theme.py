@@ -119,18 +119,27 @@ def resolve_theme(team_abbr=None):
     if abbr in TEAM_COLORS:
         name, primary, secondary = TEAM_COLORS[abbr]
         accent = _lift(primary)
+        # The secondary must also survive the midnight base: black becomes a
+        # dark trim gray, navy becomes readable blue, white stays white.
+        accent2 = _lift(secondary, floor=0.10)
     else:
         abbr, name, secondary = None, DEFAULT_NAME, DEFAULT_ACCENT2
         accent = DEFAULT_ACCENT
+        accent2 = _lift(secondary, floor=0.10)
+    grad_mid = _mix(accent, accent2, 0.5)
     return {
         "abbr": abbr,
         "name": name,
         "accent": accent,
         "accent_deep": _darken(accent),
-        "accent2": secondary,
+        "accent2": accent2,
+        "accent2_deep": _darken(accent2, 0.45),
         "on_accent": on_accent(accent),
+        "on_gradient": on_accent(grad_mid),
         "glow": _rgba(accent, 0.28),
         "soft": _rgba(accent, 0.14),
+        "wash_a": _rgba(accent, 0.10),
+        "wash_b": _rgba(accent2, 0.10),
     }
 
 
@@ -144,32 +153,53 @@ def theme_css(team_abbr=None):
     """One dynamic <style> block with the team theme. Injected last. Pure."""
     t = resolve_theme(team_abbr)
     a, ad, oa, glow, soft = t["accent"], t["accent_deep"], t["on_accent"], t["glow"], t["soft"]
+    a2, a2d, og = t["accent2"], t["accent2_deep"], t["on_gradient"]
+    wa, wb = t["wash_a"], t["wash_b"]
     return f"""<style>
 /* DFS LAB dynamic team theme · {t["name"]} — single brand source, injected last */
-:root{{--lab-accent:{a};--lab-accent-deep:{ad};--lab-on-accent:{oa};--lab-glow:{glow};--lab-soft:{soft};}}
+:root{{--lab-accent:{a};--lab-accent-deep:{ad};--lab-accent2:{a2};--lab-accent2-deep:{a2d};
+--lab-on-accent:{oa};--lab-on-gradient:{og};--lab-glow:{glow};--lab-soft:{soft};
+--lab-wash-a:{wa};--lab-wash-b:{wb};}}
+/* Team wash: the whole page sits in a faint duotone of the team colors. */
+[data-testid="stAppViewContainer"]{{
+background:radial-gradient(1100px 520px at 8% -6%,var(--lab-wash-a),transparent 60%),
+radial-gradient(1000px 520px at 96% 4%,var(--lab-wash-b),transparent 60%),
+linear-gradient(145deg,#171c24 0%,#202733 55%,#252d39 100%)!important;}}
+/* Primary actions: duotone gradient in both team colors. */
 .stButton>button[kind="primary"],[data-testid="stFormSubmitButton"] button,[data-testid="stDownloadButton"] button{{
-background:linear-gradient(100deg,var(--lab-accent),var(--lab-accent-deep))!important;
-color:var(--lab-on-accent)!important;-webkit-text-fill-color:var(--lab-on-accent)!important;
+background:linear-gradient(100deg,var(--lab-accent) 15%,var(--lab-accent2) 120%)!important;
+color:var(--lab-on-gradient)!important;-webkit-text-fill-color:var(--lab-on-gradient)!important;
 border:0!important;box-shadow:0 8px 24px var(--lab-glow)!important;}}
 .stButton>button[kind="primary"] *,[data-testid="stFormSubmitButton"] button *,[data-testid="stDownloadButton"] button *{{
 color:inherit!important;-webkit-text-fill-color:inherit!important;}}
+/* Nav: selected pill in primary, gradient rule under the bar in both colors. */
 html body .st-key-sd_nav [data-testid="stButtonGroup"] button[data-selected="true"],
 html body .st-key-classic_nav [data-testid="stButtonGroup"] button[data-selected="true"]{{
 color:var(--lab-on-accent)!important;background:var(--lab-accent)!important;border-color:var(--lab-accent)!important;}}
+html body .st-key-sd_nav,html body .st-key-classic_nav{{
+border-bottom:2px solid transparent!important;
+border-image:linear-gradient(90deg,var(--lab-accent),var(--lab-accent2)) 1!important;}}
+/* Tabs + results hub tabs */
 [data-testid="stTabs"] button[aria-selected="true"]{{background:var(--lab-accent)!important;}}
 [data-testid="stTabs"] button[aria-selected="true"] p{{color:var(--lab-on-accent)!important;-webkit-text-fill-color:var(--lab-on-accent)!important;}}
 html body .st-key-sd_results_hub [role="tab"][aria-selected="true"]{{
-background:linear-gradient(100deg,var(--lab-accent),var(--lab-accent-deep))!important;}}
+background:linear-gradient(100deg,var(--lab-accent) 15%,var(--lab-accent2) 120%)!important;}}
 html body .st-key-sd_results_hub [role="tab"][aria-selected="true"] p,
 html body .st-key-sd_results_hub [role="tab"][aria-selected="true"] span{{
-color:var(--lab-on-accent)!important;-webkit-text-fill-color:var(--lab-on-accent)!important;}}
+color:var(--lab-on-gradient)!important;-webkit-text-fill-color:var(--lab-on-gradient)!important;}}
+/* Wordmark + picker */
 .lab-brand b{{color:var(--lab-accent)!important;}}
 html body .st-key-fav_team [data-baseweb="select"]>div{{border-color:var(--lab-accent)!important;
 box-shadow:0 0 0 1px var(--lab-soft)!important;}}
+/* CPT badge in primary, rank highlight in secondary */
 .lineup-cpt span{{background:var(--lab-accent)!important;color:var(--lab-on-accent)!important;
 -webkit-text-fill-color:var(--lab-on-accent)!important;border-radius:6px;padding:1px 8px;}}
+.lineup-rank span{{color:var(--lab-accent2)!important;}}
+/* Kickers + links */
 .answer-kicker{{color:var(--lab-accent)!important;}}
 a{{color:var(--lab-accent)!important;}}
-.results-hub-hero{{border:1px solid var(--lab-glow)!important;}}
+/* Results hero: duotone gradient, darkened so text stays readable */
+.results-hub-hero{{background:linear-gradient(115deg,var(--lab-accent-deep),var(--lab-accent2-deep))!important;
+border:1px solid var(--lab-glow)!important;}}
 [data-testid="stExpander"] summary:hover{{color:var(--lab-accent)!important;}}
 </style>"""
