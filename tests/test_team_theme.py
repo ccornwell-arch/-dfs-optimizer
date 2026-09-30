@@ -8,7 +8,7 @@ Midnight Volt house theme.
 import re
 
 from dfs_lab.theme import (
-    TEAM_COLORS, on_accent, resolve_theme, team_options, theme_css, _luminance,
+    LEGACY_SURFACES, TEAM_COLORS, on_accent, resolve_theme, team_options, theme_css, _luminance,
 )
 
 
@@ -82,6 +82,27 @@ def test_css_uses_vars_not_hardcoded_wars():
     assert "var(--lab-accent)" in css
     # must not reintroduce the old hard-coded blue wars
     assert "#0071e3" not in css and "#5B9DFF" not in css
+
+
+def test_team_takeover_redefines_legacy_surfaces():
+    # Full team takeover: picking a team must re-tint the legacy surfaces,
+    # not just the accents — otherwise the app stays midnight with red bits.
+    t = resolve_theme("SF")
+    for k in ("rcc_bg", "rcc_panel", "rcc_panel2", "rcc_line", "rcc_accent", "rcc_accent2"):
+        assert t[k] != LEGACY_SURFACES[k], k
+    css = theme_css("SF")
+    assert "--rcc-panel:" in css and "--rcc-accent:" in css
+    # the takeover must be dark enough to keep text readable
+    from dfs_lab.theme import _luminance
+    assert _luminance(t["rcc_bg"]) < 0.03
+    assert _luminance(t["rcc_panel"]) < 0.06
+
+
+def test_default_keeps_legacy_surfaces():
+    # No team picked -> house theme pixel-identical to before.
+    t = resolve_theme(None)
+    for k, v in LEGACY_SURFACES.items():
+        assert t[k] == v, k
 
 
 def test_css_selectors_beat_legacy_specificity():

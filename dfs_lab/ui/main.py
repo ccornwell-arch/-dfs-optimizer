@@ -854,7 +854,7 @@ def render_main(settings):
     else:
         try:
             df=prepare_showdown_pool(dk_file,ss_file); teams=[t for t in df["Team"].dropna().unique().tolist() if t]
-            if len(teams)!=2: st.warning(f"Showdown normally has two teams. I found {len(teams)}: {', '.join(teams)}")
+            if len(teams)!=2: st.warning(f"Showdown is one game (2 teams), but this file has {len(teams)}: {', '.join(teams[:8])}. Lineups will be built from the wrong player pool — re-upload the single-game DK Showdown salaries for the game you're playing.")
             nonzero_proj=int((pd.to_numeric(df["My Proj"],errors="coerce").fillna(0)>0.05).sum())
             nonzero_own=int((pd.to_numeric(df["My Own"],errors="coerce").fillna(0)>0).sum())
             if nonzero_proj==0:

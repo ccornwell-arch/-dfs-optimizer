@@ -73,6 +73,40 @@ def _mix(h1, h2, t):
     return _rgb_to_hex(tuple(x + (y - x) * t for x, y in zip(a, b)))
 
 
+def _shade(h, amt):
+    """Mix a hex color toward black by amt (0..1)."""
+    return _mix(h, "#000000", amt)
+
+
+# Legacy dark surfaces (the pre-theme values). Used when no team is picked so
+# the house Midnight Volt theme is pixel-identical to before.
+LEGACY_SURFACES = {
+    "rcc_bg": "#101418", "rcc_bg2": "#0b0f13",
+    "rcc_panel": "#151b23", "rcc_panel2": "#1b232e", "rcc_panel3": "#222c39",
+    "rcc_line": "#2b3644", "rcc_line2": "#354252",
+    "rcc_text": "#eef3f8", "rcc_muted": "#94a5b8",
+    "rcc_accent": "#5b9dff", "rcc_accent2": "#7fb3ff", "rcc_accent_dim": "#274b73",
+}
+
+
+def _team_surfaces(primary, accent, accent2):
+    """Full team takeover: every legacy dark surface re-tinted in team colors."""
+    return {
+        "rcc_bg": _shade(primary, 0.93),
+        "rcc_bg2": _shade(primary, 0.90),
+        "rcc_panel": _mix(primary, "#151b23", 0.80),
+        "rcc_panel2": _mix(primary, "#1b232e", 0.74),
+        "rcc_panel3": _mix(primary, "#222c39", 0.66),
+        "rcc_line": _mix(primary, "#2b3644", 0.52),
+        "rcc_line2": _mix(primary, "#354252", 0.48),
+        "rcc_text": _mix("#ffffff", primary, 0.05),
+        "rcc_muted": _mix("#94a5b8", primary, 0.14),
+        "rcc_accent": accent,
+        "rcc_accent2": accent2,
+        "rcc_accent_dim": _darken(accent, 0.5),
+    }
+
+
 def _lift(h, floor=0.22):
     """Lift a dark brand color just enough to pop on the midnight base.
 
@@ -122,10 +156,12 @@ def resolve_theme(team_abbr=None):
         # The secondary must also survive the midnight base: black becomes a
         # dark trim gray, navy becomes readable blue, white stays white.
         accent2 = _lift(secondary, floor=0.10)
+        surfaces = _team_surfaces(primary, accent, accent2)
     else:
-        abbr, name, secondary = None, DEFAULT_NAME, DEFAULT_ACCENT2
+        abbr, name = None, DEFAULT_NAME
         accent = DEFAULT_ACCENT
-        accent2 = _lift(secondary, floor=0.10)
+        accent2 = _lift(DEFAULT_ACCENT2, floor=0.10)
+        surfaces = dict(LEGACY_SURFACES)
     grad_mid = _mix(accent, accent2, 0.5)
     return {
         "abbr": abbr,
@@ -140,6 +176,7 @@ def resolve_theme(team_abbr=None):
         "soft": _rgba(accent, 0.14),
         "wash_a": _rgba(accent, 0.10),
         "wash_b": _rgba(accent2, 0.10),
+        **surfaces,
     }
 
 
@@ -155,19 +192,36 @@ def theme_css(team_abbr=None):
     a, ad, oa, glow, soft = t["accent"], t["accent_deep"], t["on_accent"], t["glow"], t["soft"]
     a2, a2d, og = t["accent2"], t["accent2_deep"], t["on_gradient"]
     wa, wb = t["wash_a"], t["wash_b"]
+    rcc_vars = "".join(f"--{k.replace('_','-')}:{t[k]};" for k in
+                       ("rcc_bg", "rcc_bg2", "rcc_panel", "rcc_panel2", "rcc_panel3",
+                        "rcc_line", "rcc_line2", "rcc_text", "rcc_muted",
+                        "rcc_accent", "rcc_accent2", "rcc_accent_dim"))
     return f"""<style>
 /* DFS LAB dynamic team theme · {t["name"]} — single brand source, injected last.
    Every selector carries the `html body` prefix: several legacy theme blocks use it,
-   and without it they outrank this layer on specificity despite loading earlier. */
+   and without it they outrank this layer on specificity despite loading earlier.
+   Full takeover: the legacy --rcc-* surface vars are redefined here, so every
+   legacy rule built on them (cards, expanders, metrics, hovers, focus rings)
+   picks up the team tint with no per-component overrides. */
 :root{{--lab-accent:{a};--lab-accent-deep:{ad};--lab-accent2:{a2};--lab-accent2-deep:{a2d};
 --lab-on-accent:{oa};--lab-on-gradient:{og};--lab-glow:{glow};--lab-soft:{soft};
---lab-wash-a:{wa};--lab-wash-b:{wb};}}
-/* Team wash: the whole page sits in a faint duotone of the team colors. */
+--lab-wash-a:{wa};--lab-wash-b:{wb};{rcc_vars}}}
+/* Team wash: the whole page sits in the team colors — tinted base + duotone glow. */
 html body [data-testid="stAppViewContainer"]{{
 background:radial-gradient(1100px 520px at 8% -6%,var(--lab-wash-a),transparent 60%),
 radial-gradient(1000px 520px at 96% 4%,var(--lab-wash-b),transparent 60%),
-linear-gradient(145deg,#171c24 0%,#202733 55%,#252d39 100%)!important;}}
-/* Primary actions: duotone gradient in both team colors. */
+linear-gradient(145deg,var(--rcc-bg) 0%,var(--rcc-bg2) 60%,var(--rcc-bg) 100%)!important;}}
+/* Nav bar + cards/metrics/frames follow the team surfaces */
+html body .st-key-sd_nav,html body .st-key-classic_nav{{background:var(--rcc-bg)!important;}}
+html body [data-testid="stMetric"],html body [data-testid="stDataFrame"],html body .lineup-card{{
+background:var(--rcc-panel)!important;border-color:var(--rcc-line)!important;}}
+/* Selectboxes: dark team-tinted, never white */
+html body [data-baseweb="select"]>div{{background:var(--rcc-panel2)!important;
+border-color:var(--rcc-line2)!important;}}
+html body [data-baseweb="select"] [data-testid="stMarkdownContainer"] p{{
+color:var(--rcc-text)!important;-webkit-text-fill-color:var(--rcc-text)!important;}}
+/* Primary actions: duotone gradient in both team colors. Descendants are
+   forced transparent — no legacy blue inner leaking through. */
 html body .stButton>button[kind="primary"],html body [data-testid="stFormSubmitButton"] button,
 html body [data-testid="stDownloadButton"] button{{
 background:linear-gradient(100deg,var(--lab-accent) 15%,var(--lab-accent2) 120%)!important;
@@ -175,6 +229,7 @@ color:var(--lab-on-gradient)!important;-webkit-text-fill-color:var(--lab-on-grad
 border:0!important;box-shadow:0 8px 24px var(--lab-glow)!important;}}
 html body .stButton>button[kind="primary"] *,html body [data-testid="stFormSubmitButton"] button *,
 html body [data-testid="stDownloadButton"] button *{{
+background:transparent!important;background-image:none!important;
 color:inherit!important;-webkit-text-fill-color:inherit!important;}}
 /* Nav: selected pill in primary, gradient rule under the bar in both colors. */
 html body .st-key-sd_nav [data-testid="stButtonGroup"] button[data-selected="true"],
