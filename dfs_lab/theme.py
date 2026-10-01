@@ -1,9 +1,10 @@
-"""Team-color theming for DFS LAB.
+"""House theme for DFS LAB: Midnight Ice.
 
 A single dynamic <style> block, injected last in the cascade, that paints the
 app's brand touchpoints (primary buttons, selected nav pill, selected tabs,
-CPT badge, kickers, links, wordmark accent) in the user's favorite team's
-colors over the midnight base. Pure: no Streamlit calls.
+CPT badge, kickers, links, wordmark accent) in ice cyan over the midnight
+base. Team theming was scrapped Sep 2026; theme.py stays as the single brand
+source. Pure: no Streamlit calls.
 """
 
 # abbr: (full name, primary accent, secondary accent). The primary is the
@@ -44,9 +45,10 @@ TEAM_COLORS = {
     "WAS": ("Washington Commanders", "#FFB612", "#5A1414"),
 }
 
-# The house theme when no team is picked: Midnight Volt.
-DEFAULT_NAME = "Midnight Volt"
-DEFAULT_ACCENT = "#C6F135"
+# The house theme: Midnight Ice (deep navy + ice cyan). Chosen Sep 2026 after
+# the neon volt yellow was rejected for readability.
+DEFAULT_NAME = "Midnight Ice"
+DEFAULT_ACCENT = "#6FD3F2"
 DEFAULT_ACCENT2 = "#4D8DFF"
 
 
@@ -79,7 +81,7 @@ def _shade(h, amt):
 
 
 # Legacy dark surfaces (the pre-theme values). Used when no team is picked so
-# the house Midnight Volt theme is pixel-identical to before.
+# the house Midnight Ice theme is pixel-identical to before.
 LEGACY_SURFACES = {
     "rcc_bg": "#101418", "rcc_bg2": "#0b0f13",
     "rcc_panel": "#151b23", "rcc_panel2": "#1b232e", "rcc_panel3": "#222c39",
@@ -162,7 +164,12 @@ def resolve_theme(team_abbr=None):
         accent = DEFAULT_ACCENT
         accent2 = _lift(DEFAULT_ACCENT2, floor=0.10)
         surfaces = dict(LEGACY_SURFACES)
-    grad_mid = _mix(accent, accent2, 0.5)
+    # Text that sits on a button gradient must stay readable across the whole
+    # gradient. Buttons use a deliberately NARROW single-hue gradient
+    # (accent -> 14% shaded accent) so one text color keeps >= 4.5:1 contrast
+    # at both ends; contrast is judged at the gradient midpoint.
+    btn_deep = _shade(accent, 0.14)
+    grad_mid = _mix(accent, btn_deep, 0.5)
     return {
         "abbr": abbr,
         "name": name,
@@ -172,6 +179,7 @@ def resolve_theme(team_abbr=None):
         "accent2_deep": _darken(accent2, 0.45),
         "on_accent": on_accent(accent),
         "on_gradient": on_accent(grad_mid),
+        "btn_deep": btn_deep,
         "glow": _rgba(accent, 0.28),
         "soft": _rgba(accent, 0.14),
         "wash_a": _rgba(accent, 0.10),
@@ -190,7 +198,7 @@ def theme_css(team_abbr=None):
     """One dynamic <style> block with the team theme. Injected last. Pure."""
     t = resolve_theme(team_abbr)
     a, ad, oa, glow, soft = t["accent"], t["accent_deep"], t["on_accent"], t["glow"], t["soft"]
-    a2, a2d, og = t["accent2"], t["accent2_deep"], t["on_gradient"]
+    a2, a2d, og, bd = t["accent2"], t["accent2_deep"], t["on_gradient"], t["btn_deep"]
     wa, wb = t["wash_a"], t["wash_b"]
     rcc_vars = "".join(f"--{k.replace('_','-')}:{t[k]};" for k in
                        ("rcc_bg", "rcc_bg2", "rcc_panel", "rcc_panel2", "rcc_panel3",
@@ -203,7 +211,7 @@ def theme_css(team_abbr=None):
    Full takeover: the legacy --rcc-* surface vars are redefined here, so every
    legacy rule built on them (cards, expanders, metrics, hovers, focus rings)
    picks up the team tint with no per-component overrides. */
-:root{{--lab-accent:{a};--lab-accent-deep:{ad};--lab-accent2:{a2};--lab-accent2-deep:{a2d};
+:root{{--lab-accent:{a};--lab-accent-deep:{ad};--lab-btn-deep:{bd};--lab-accent2:{a2};--lab-accent2-deep:{a2d};
 --lab-on-accent:{oa};--lab-on-gradient:{og};--lab-glow:{glow};--lab-soft:{soft};
 --lab-wash-a:{wa};--lab-wash-b:{wb};{rcc_vars}}}
 /* Team wash: the whole page sits in the team colors — tinted base + duotone glow. */
@@ -220,11 +228,12 @@ html body [data-baseweb="select"]>div{{background:var(--rcc-panel2)!important;
 border-color:var(--rcc-line2)!important;}}
 html body [data-baseweb="select"] [data-testid="stMarkdownContainer"] p{{
 color:var(--rcc-text)!important;-webkit-text-fill-color:var(--rcc-text)!important;}}
-/* Primary actions: duotone gradient in both team colors. Descendants are
-   forced transparent — no legacy blue inner leaking through. */
+/* Primary actions: single-hue gradient (accent -> deeper accent) so the
+   button text color stays high-contrast across the whole surface.
+   Descendants are forced transparent — no legacy blue inner leaking through. */
 html body .stButton>button[kind="primary"],html body [data-testid="stFormSubmitButton"] button,
 html body [data-testid="stDownloadButton"] button{{
-background:linear-gradient(100deg,var(--lab-accent) 15%,var(--lab-accent2) 120%)!important;
+background:linear-gradient(180deg,var(--lab-accent) 0%,var(--lab-btn-deep) 100%)!important;
 color:var(--lab-on-gradient)!important;-webkit-text-fill-color:var(--lab-on-gradient)!important;
 border:0!important;box-shadow:0 8px 24px var(--lab-glow)!important;}}
 html body .stButton>button[kind="primary"] *,html body [data-testid="stFormSubmitButton"] button *,
@@ -243,7 +252,7 @@ html body [data-testid="stTabs"] button[aria-selected="true"]{{background:var(--
 html body [data-testid="stTabs"] button[aria-selected="true"] p{{
 color:var(--lab-on-accent)!important;-webkit-text-fill-color:var(--lab-on-accent)!important;}}
 html body .st-key-sd_results_hub [role="tab"][aria-selected="true"]{{
-background:linear-gradient(100deg,var(--lab-accent) 15%,var(--lab-accent2) 120%)!important;}}
+background:linear-gradient(180deg,var(--lab-accent) 0%,var(--lab-btn-deep) 100%)!important;}}
 html body .st-key-sd_results_hub [role="tab"][aria-selected="true"] p,
 html body .st-key-sd_results_hub [role="tab"][aria-selected="true"] span{{
 color:var(--lab-on-gradient)!important;-webkit-text-fill-color:var(--lab-on-gradient)!important;}}

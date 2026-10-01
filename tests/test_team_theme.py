@@ -1,9 +1,8 @@
 """Team-color theming: 32-team map, auto-lift for dark accents, single CSS block.
 
-The favorite-team theme must never produce an invisible accent on the
-midnight base (dark brand colors like Ravens purple get lifted), text on the
-accent must stay readable, and unknown/empty picks must fall back to the
-Midnight Volt house theme.
+The house theme must keep button text readable: the accent is ice cyan,
+and text on the button gradient is judged at the gradient midpoint.
+Unknown/empty picks fall back to the Midnight Ice house theme.
 """
 import re
 
@@ -49,18 +48,30 @@ def test_duotone_keys_present():
 
 
 def test_on_accent_contrast():
-    assert on_accent("#C6F135") == "#11151D"   # volt -> dark text
+    assert on_accent("#6FD3F2") == "#11151D"   # ice cyan -> dark text
     assert on_accent("#E31837") == "#FFFFFF"   # chiefs red -> white text
     t = resolve_theme("GB")
     assert t["on_accent"] in ("#11151D", "#FFFFFF")
 
 
-def test_default_is_midnight_volt():
+def test_default_is_midnight_ice():
     for abbr in (None, "", "XXX"):
         t = resolve_theme(abbr)
         assert t["abbr"] is None
-        assert t["name"] == "Midnight Volt"
-        assert t["accent"] == "#C6F135"
+        assert t["name"] == "Midnight Ice"
+        assert t["accent"] == "#6FD3F2"
+
+
+def test_button_gradient_text_stays_readable():
+    # The button gradient runs accent -> btn_deep (narrow, single hue); the
+    # on-gradient text color must keep >= 4.5:1 contrast at both ends.
+    t = resolve_theme(None)
+    assert t["on_gradient"] == "#11151D"
+    for h in (t["accent"], t["btn_deep"]):
+        lum = _luminance(h)
+        tlum = _luminance(t["on_gradient"])
+        ratio = (max(lum, tlum) + 0.05) / (min(lum, tlum) + 0.05)
+        assert ratio >= 4.5, f"{h} contrast {ratio:.2f}"
 
 
 def test_css_is_single_style_block_with_team_accent():
@@ -132,7 +143,7 @@ def test_css_selectors_beat_legacy_specificity():
 
 def test_team_options_default_first_and_sorted():
     opts = team_options()
-    assert opts[0] == (None, "Midnight Volt")
+    assert opts[0] == (None, "Midnight Ice")
     names = [n for _, n in opts[1:]]
     assert names == sorted(names)
     assert len(opts) == 33
