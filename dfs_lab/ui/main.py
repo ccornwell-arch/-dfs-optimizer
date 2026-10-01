@@ -1296,7 +1296,7 @@ def render_main(settings):
                 st.caption("These are bounded scenario tilts applied to the DFS Lab baseline projections. They are not a claim that a final score can precisely predict individual fantasy points.")
                 st.markdown("#### How V6.3 grades Showdown")
                 st.caption("Projection 29–34% • Captain quality 18% • correlation 20% • leverage 11–15% • duplication proxy 10–15% • your takes 7%. The exact weights move with contest size/payout.")
-                st.caption("The scenario engine changes projection and construction inputs before grading. Game Worlds remain portfolio alternatives, so a directional thesis can still include balanced or opposing worlds; those labels describe the world being explored, not a replacement for your selected thesis.")
+                st.caption("The scenario engine changes projection and construction inputs before grading. When your game thesis is directional (low-scoring, shootout, ground-and-pound…), its Game World leads the portfolio at ~45% of lineups; the other worlds remain as genuine alternatives so one thesis doesn't become twenty identical teams.")
 
             # Build inputs above are derived unconditionally from session state, so this
             # block is safe on every run regardless of which nav section rendered.
@@ -1631,7 +1631,7 @@ def render_main(settings):
                                     with _cc:
                                         st.markdown(_sd_lineup_card_html(_wlr,_wl_headshots),unsafe_allow_html=True)
                     with result_views[2]:
-                        st.markdown("<div class='results-view-title'>Lineup Lab</div><div class='results-view-sub'>Pick any lineup, see the football story behind all six players, challenge assumptions, test swaps, and talk directly to DFS LAB Agent.</div>",unsafe_allow_html=True)
+                        st.markdown("<div class='results-view-title'>Lineup Lab</div><div class='results-view-sub'>Pick any lineup and see the football story behind all six players — then test swaps yourself.</div>",unsafe_allow_html=True)
                         st.markdown("#### Lineup Explorer")
                         st.caption("Highlight a lineup and DFS LAB will analyze all six players together — not just the Captain.")
                         lineup_choices=[f"#{int(r['Rank'])} · {r['Captain']} CPT · {r['Construction']} · {r['Projection']:.1f} pts" for _,r in filtered_result.iterrows()]
@@ -1656,273 +1656,11 @@ def render_main(settings):
                             st.dataframe(pd.DataFrame(detail_rows),hide_index=True,use_container_width=True,column_config={"Player":st.column_config.TextColumn("Player",pinned=True),"Salary":st.column_config.NumberColumn("Salary",format="$%d")})
                             low=min(detail_rows,key=lambda x:x["DFS Lab"])
                             st.write(f"**Weakest projection link:** {low['Player']} ({low['DFS Lab']:.2f}). DFS LAB is using this spot as {low['Purpose'].lower()} within the six-player construction.")
-                        # ---------- DFS LAB AGENT / SCENARIO CONSOLE ----------
-                        st.markdown("### 🧠 DFS LAB Agent")
-                        st.caption("Question the model, compare players, test assumptions, and turn a conversation into a reversible lineup scenario.")
-                        st.session_state.setdefault("agent_projection_scenario",{})
-                        st.session_state.setdefault("dfs_lab_chat",[])
-                        st.session_state.setdefault("agent_last_players",[])
-
-                        def _player_record(name):
-                            z=build_df[build_df['Name'].astype(str).str.lower().eq(str(name).lower())]
-                            return None if z.empty else z.iloc[0]
-
-                        def _mentioned_players(qtext):
-                            q=str(qtext or '').lower(); hits=[]
-                            names_all=[str(x) for x in build_df['Name'].dropna().astype(str).unique()]
-                            for nm in names_all:
-                                last=nm.split()[-1].lower()
-                                if nm.lower() in q or (len(last)>2 and re.search(r'\b'+re.escape(last)+r'\b',q)):
-                                    hits.append(nm)
-                            if not hits:
-                                words=[w for w in re.findall(r"[a-zA-Z][a-zA-Z'\-]+",q) if len(w)>=4]
-                                last_map={nm.split()[-1].lower():nm for nm in names_all}
-                                full_map={nm.lower():nm for nm in names_all}
-                                for w in words:
-                                    m=difflib.get_close_matches(w,list(last_map.keys()),n=1,cutoff=.82)
-                                    if m and last_map[m[0]] not in hits: hits.append(last_map[m[0]])
-                                if not hits:
-                                    m=difflib.get_close_matches(q,list(full_map.keys()),n=1,cutoff=.72)
-                                    if m: hits.append(full_map[m[0]])
-                            if not hits and any(x in q for x in ['he ','him ','his ','one ','them ','those ']):
-                                hits=st.session_state.get('agent_last_players',[])
-                            if hits: st.session_state['agent_last_players']=hits[:4]
-                            return hits[:4]
-                        def build_agent_packet():
-                            pool_cols=[c for c in ['ID','Name','Position','Team','DFS Lab Proj','FlexSalary','CPTSalary','DFS Base','Model Proj','Script Proj','Proj Change %'] if c in build_df.columns]
-                            pool=build_df[pool_cols].copy().sort_values('DFS Lab Proj',ascending=False).head(60)
-                            roster=[]
-                            for rr in detail_rows:
-                                rec=dict(rr); pr=_player_record(rr['Player'])
-                                if pr is not None:
-                                    pid=str(pr.get('ID','')); rec['ID']=pid
-                                    rec['Base Before Agent']=float(pr.get('Model Proj',pr.get('DFS Lab Proj',0)))
-                                    rec['Agent Scenario']=st.session_state['agent_projection_scenario'].get(pid)
-                                roster.append(rec)
-                            return {'contest':{'entry_format':entry_format,'field_size':int(field_size),'payout':payout_style},
-                                'scenario':{'script':effective_script,'team':effective_team,'influence':int(intensity),'agent_projection_overrides':st.session_state['agent_projection_scenario']},
-                                'active_lineup':{'rank':int(lr['Rank']),'rating':str(lr['Rating']),'projection':float(lr['Projection']),'salary':int(lr['Salary']),'salary_left':int(lr['Salary Left']),'construction':str(lr['Construction']),'captain':str(lr['Captain']),'game_world':str(lr.get('Game World',effective_script)),'world_thesis':str(lr.get('World Thesis','')),'players':roster},
-                                'portfolio':{'lineups':int(len(result)),'avg_projection':round(float(result['Projection'].mean()),2),'top_projection':round(float(result['Projection'].max()),2),'world_counts':result['Game World'].value_counts().head(10).to_dict() if 'Game World' in result.columns else {},'captain_counts':result['Captain'].value_counts().head(12).to_dict() if 'Captain' in result.columns else {}},
-                                'player_pool':pool.to_dict(orient='records')}
-
-                        def local_agent_answer(qtext, packet):
-                            q=str(qtext or '').lower().strip(); names=_mentioned_players(qtext)
-                            recs=[]
-                            for nm in names:
-                                pr=_player_record(nm)
-                                if pr is not None: recs.append(pr)
-
-                            qwords=re.findall(r"[a-z]+",q)
-
-                            typo_neg=any(difflib.SequenceMatcher(None,w,"wont").ratio()>=0.72 for w in qwords)
-
-                            challenge=(any(x in q for x in ["don't like","dont like","do not like","hate ","not sold","don't want","dont want","get rid","remove ","fade ","off of ","too high","overprojected","over projected","won't score","wont score","won’t score","won't get","wont get","won’t get","score that much","get that much","projected high","projection high","seems high","too much","not score","not get"]) or (typo_neg and any(x in q for x in ["score","get","project","points","much"])))
-                            if recs and challenge:
-                                pr=recs[0]; nm=str(pr['Name']); proj=float(pr.get('DFS Lab Proj',0))
-                                rr=next((x for x in detail_rows if str(x.get('Player','')).lower()==nm.lower()),None)
-                                if rr:
-                                    slot=str(rr.get('Slot','FLEX')).upper(); lineup_salary=int(packet['active_lineup']['salary'])
-                                    old_cost=int(pr.get('CaptainSalary',pr.get('CPTSalary',0))) if slot=='CPT' else int(pr.get('FlexSalary',0))
-                                    max_cost=50000-(lineup_salary-old_cost)
-                                    used={str(x.get('Player','')) for x in detail_rows}
-                                    sal_col='CaptainSalary' if slot=='CPT' and 'CaptainSalary' in build_df.columns else ('CPTSalary' if slot=='CPT' and 'CPTSalary' in build_df.columns else 'FlexSalary')
-                                    legal=build_df[(~build_df['Name'].astype(str).isin(used)) & (pd.to_numeric(build_df[sal_col],errors='coerce').fillna(999999)<=max_cost)].copy()
-                                    legal=legal.sort_values('DFS Lab Proj',ascending=False)
-                                    direct=None if legal.empty else legal.iloc[0]
-                                    alt_rows=[]
-                                    for _,cand_line in result.iterrows():
-                                        cand_names=[str(cand_line.get('Captain',''))]+[str(cand_line.get('FLEX'+str(i),'')) for i in range(1,6)]
-                                        if nm not in cand_names: alt_rows.append(cand_line)
-                                    best_no_player=alt_rows[0] if alt_rows else None
-                                    if best_no_player is not None:
-                                        new_names=[str(best_no_player.get('Captain',''))]+[str(best_no_player.get('FLEX'+str(i),'')) for i in range(1,6)]
-                                        current_names=[str(x.get('Player','')) for x in packet['active_lineup']['players']]
-                                        outs=[x for x in current_names if x not in new_names]
-                                        ins=[x for x in new_names if x not in current_names]
-                                        changes=[]
-                                        if outs: changes.append('remove ' + ', '.join(outs))
-                                        if ins: changes.append('add ' + ', '.join(ins))
-                                        change_text='; '.join(changes) if changes else 'use that lineup as built'
-                                        proj_diff=float(best_no_player.get('Projection',0))-float(packet['active_lineup']['projection'])
-                                        return f"**I’d move off {nm}.** DFS LAB has him at **{proj:.2f}**, and your concern is enough to test the best valid build without him. **My recommendation is lineup #{int(best_no_player.get('Rank',0))}: {best_no_player.get('Captain','')} at Captain**, projected **{float(best_no_player.get('Projection',0)):.2f}** ({proj_diff:+.2f} vs this lineup), salary **${int(best_no_player.get('Salary',0)):,}**. To get there: **{change_text}**. That recommendation is already salary-cap legal and comes from the generated portfolio, so you do not need to pick a replacement manually."
-                                    if direct is not None:
-                                        dproj=float(direct['DFS Lab Proj'])-proj
-                                        return f"**I’d move off {nm}.** The best salary-cap-legal direct replacement is **{direct['Name']}** at **{float(direct['DFS Lab Proj']):.2f}** and **${int(direct[sal_col]):,}**, a projection change of **{dproj:+.2f}**."
-                                    return f"**I’d fade {nm}, but there is no legal one-for-one swap in this build.** The next step should be a two-player rebuild, not forcing an illegal replacement."
-                                return f"**I’d treat {nm} as a fade for the next build.** DFS LAB has him at **{proj:.2f}**, but he is not in the active lineup."
-
-                            if len(recs)>=2:
-                                a,b=recs[0],recs[1]; ap=float(a['DFS Lab Proj']); bp=float(b['DFS Lab Proj']); gap=abs(ap-bp)
-                                asal=int(a.get('FlexSalary',0)); bsal=int(b.get('FlexSalary',0)); sg=abs(asal-bsal)
-                                return f"**That's a real projection question.** DFS LAB has **{a['Name']} at {ap:.2f}** and **{b['Name']} at {bp:.2f}** — only **{gap:.2f} DK points apart**, with a **${sg:,} salary difference**. I wouldn't just accept that gap. We can challenge either assumption without changing the base model. **Lower {a['Name']}, lower {b['Name']}, adjust both, or investigate first.**"
-                            m=re.search(r'(?:scored?|gets?|got|puts? up)\s+(-?\d+(?:\.\d+)?)',q)
-                            if recs and m:
-                                actual=float(m.group(1)); nm=str(recs[0]['Name']); expected=float(recs[0]['DFS Lab Proj']); delta=actual-expected
-                                return f"**Scenario test:** {nm} {expected:.2f} → **{actual:.2f}** ({delta:+.2f}). I can keep that as a temporary Agent Scenario and rebuild around it without touching DFS LAB's base projection."
-                            if recs:
-                                pr=recs[0]; return f"**{pr['Name']} is at {float(pr['DFS Lab Proj']):.2f}.** Tell me what you dislike about the play, or I can test removing him from this build and compare the salary-feasible alternatives."
-                            return "I couldn't resolve the player or request from the current slate. Rephrase it with the player's last name and I’ll evaluate that player against this exact lineup instead of giving you a generic lineup summary."
-                        def build_question_evidence(qtext, packet):
-                            """Deterministic calculator layer. The model reasons; DFS LAB supplies the math."""
-                            names=_mentioned_players(qtext)
-                            evidence={"mentioned_players":[],"comparison":None,"what_if":None,"active_lineup_test":None}
-                            for nm in names:
-                                pr=_player_record(nm)
-                                if pr is None: continue
-                                rr=next((x for x in detail_rows if str(x.get('Player','')).lower()==str(nm).lower()),None)
-                                evidence["mentioned_players"].append({
-                                    "name":nm,
-                                    "projection":round(float(pr.get('DFS Lab Proj',0)),2),
-                                    "flex_salary":int(pr.get('FlexSalary',0)),
-                                    "captain_salary":int(pr.get('CaptainSalary',pr.get('CPTSalary',0))),
-                                    "position":str(pr.get('Position','')),
-                                    "team":str(pr.get('Team','')),
-                                    "in_active_lineup":bool(rr),
-                                    "slot":rr.get('Slot') if rr else None,
-                                    "purpose":rr.get('Purpose') if rr else None,
-                                })
-                            if len(evidence["mentioned_players"])>=2:
-                                a,b=evidence["mentioned_players"][:2]
-                                evidence["comparison"]={
-                                    "players":[a['name'],b['name']],
-                                    "projection_gap":round(abs(a['projection']-b['projection']),2),
-                                    "salary_gap":abs(a['flex_salary']-b['flex_salary']),
-                                    "better_points_per_dollar": (a['name'] if (a['projection']/max(a['flex_salary'],1))>(b['projection']/max(b['flex_salary'],1)) else b['name'])
-                                }
-                            num=None
-                            pats=[r'(?:score|scores|scored|gets?|got|puts? up|project(?:ed)?(?: for)?|at|to)\s*(?:about\s*)?(-?\d+(?:\.\d+)?)',r'(-?\d+(?:\.\d+)?)\s*(?:dk\s*)?points?']
-                            for pat in pats:
-                                m=re.search(pat,qtext,re.I)
-                                if m:
-                                    try: num=float(m.group(1)); break
-                                    except Exception: pass
-                            if num is not None and evidence["mentioned_players"]:
-                                target=evidence["mentioned_players"][0]
-                                current=float(target['projection']); delta=float(num-current)
-                                evidence["what_if"]={"player":target['name'],"current_projection":current,"assumed_projection":num,"projection_delta":round(delta,2)}
-                                if target['in_active_lineup']:
-                                    mult=1.5 if str(target.get('slot','')).upper()=='CPT' else 1.0
-                                    revised=float(packet['active_lineup']['projection']) + delta*mult
-                                    rescored=[]
-                                    for _,r in result.iterrows():
-                                        names_in=[str(r.get('Captain',''))]+[str(r.get('FLEX'+str(i),'')) for i in range(1,6)]
-                                        adj=float(r.get('Projection',0))
-                                        if target['name'] in names_in:
-                                            adj += delta*(1.5 if str(r.get('Captain',''))==target['name'] else 1.0)
-                                        rescored.append((adj,int(r.get('Rank',0)),str(r.get('Captain','')),names_in))
-                                    rescored.sort(key=lambda x:x[0],reverse=True)
-                                    active_players=[str(x.get('Player','')) for x in packet['active_lineup']['players']]
-                                    active_key=set(active_players)
-                                    new_rank=None
-                                    for ix,x in enumerate(rescored,1):
-                                        if set(x[3])==active_key and x[2]==packet['active_lineup']['captain']:
-                                            new_rank=ix; break
-                                    better=sum(1 for x in rescored if x[0]>revised+1e-9)
-                                    evidence["active_lineup_test"]={
-                                        "original_lineup_projection":round(float(packet['active_lineup']['projection']),2),
-                                        "revised_lineup_projection":round(revised,2),
-                                        "lineup_projection_change":round(delta*mult,2),
-                                        "existing_generated_lineups_now_above_it":int(better),
-                                        "counterfactual_rank_within_existing_portfolio":new_rank,
-                                        "portfolio_size":len(rescored),
-                                        "note":"This re-scores the already-generated portfolio; it is not a fresh optimizer run."
-                                    }
-                            return evidence
-
-                        def run_ai_agent(qtext, packet, history):
-                            try:
-                                from openai import OpenAI
-                                try: api_key=st.secrets.get('OPENAI_API_KEY',None)
-                                except Exception: api_key=os.getenv('OPENAI_API_KEY')
-                                if not api_key: return None
-                                hist='\n'.join([f"USER: {x[0]}\nDFS LAB: {x[1]}" for x in history[-10:]])
-                                calc=build_question_evidence(qtext,packet)
-                                instructions="""You are DFS LAB Agent, a sharp NFL DraftKings Showdown analyst embedded inside an optimizer. You are not a generic chatbot and you are not here to defend the optimizer.
-
-    On every message: infer what the user actually means even with typos, fragments, shorthand or follow-ups; resolve all players and conversation references; use DFS LAB CALCULATOR EVIDENCE for math; answer the exact question first; question DFS LAB's own projections when warranted; and never invent projections, salaries, lineup ranks, ownership, injuries, news, simulations or optimizer results. If the user expresses dislike, distrust, avoidance or a fade preference for a player, treat that as a request to evaluate replacing/fading that player in the active lineup: answer that preference directly, identify what the lineup is giving up, and discuss supported alternatives. Do not respond with a generic explanation of why the existing lineup was selected.
-
-    If the user gives a hypothetical score, analyze that exact score. If the calculator re-scores the existing portfolio, clearly call it a re-score, not a fresh optimization. Never say a lineup is still optimal unless a fresh optimizer run proves it. For comparisons, discuss both players, the projection gap, salary/value context, and what it means to this six-player build. If a user challenges a projection, you may recommend a reversible Agent Scenario. Actual changes to projections, locks, exclusions, exposures, Game Worlds or lineup generation require confirmation.
-
-    Be conversational, concise, and useful. Sound like a strong DFS partner sitting next to the user. Avoid canned filler such as 'I can inspect...' when evidence already answers the question. If evidence is insufficient, say exactly what is missing and give the best supported observation."""
-                                prompt=f"{instructions}\n\nRECENT CONVERSATION:\n{hist}\n\nCURRENT DFS LAB STATE:\n{json.dumps(packet,default=str)}\n\nDFS LAB CALCULATOR EVIDENCE FOR THIS QUESTION:\n{json.dumps(calc,default=str)}\n\nUSER MESSAGE:\n{qtext}"
-                                resp=OpenAI(api_key=api_key).responses.create(
-                                    model='gpt-5.6-sol',
-                                    reasoning={"effort":"medium"},
-                                    input=prompt,
-                                    max_output_tokens=1400
-                                )
-                                return resp.output_text
-                            except Exception as e:
-                                st.session_state['dfs_agent_error']=str(e); return None
-
-                        # Scenario strip
-                        active_scen=st.session_state['agent_projection_scenario']
-                        if active_scen:
-                            labels=[]
-                            for pid,val in active_scen.items():
-                                z=build_df[build_df['ID'].astype(str).eq(str(pid))] if 'ID' in build_df.columns else pd.DataFrame()
-                                if not z.empty: labels.append(f"{z.iloc[0]['Name']} {float(val):.1f}")
-                            st.markdown(f"<div class='agent-scenario'><b>⚡ ACTIVE AGENT SCENARIO</b><span>{' · '.join(labels)}</span></div>",unsafe_allow_html=True)
-                            if st.button("↺ RESET AGENT SCENARIO",key='reset_agent_scenario'):
-                                st.session_state['agent_projection_scenario']={}; st.rerun()
-
-                        qcols=st.columns(4)
-                        quick_prompts=['Explain this build','Question these projections','Find the hidden risk','What is this lineup betting on?']
-                        for qi,(qc,qp) in enumerate(zip(qcols,quick_prompts)):
-                            if qc.button(qp,key=f'agent_quick_{qi}',use_container_width=True): st.session_state['dfs_agent_pending']=qp
-                        with st.form('dfs_lab_agent_form',clear_on_submit=True):
-                            ai_q=st.text_area('Ask DFS LAB',placeholder='Try: I don’t believe Shakir and Palmer should be this close…',height=88,label_visibility='collapsed')
-                            ask_submit=st.form_submit_button('ASK DFS LAB  ↗',type='primary',use_container_width=True)
-                        pending=st.session_state.pop('dfs_agent_pending',None)
-                        question=(ai_q.strip() if ask_submit and ai_q.strip() else pending)
-                        if question:
-                            packet=build_agent_packet(); names=_mentioned_players(question)
-                            # Stage explicit natural-language projection commands for confirmation.
-                            staged=None
-                            setm=re.search(r'(?:set|put|make|lower|raise)\\s+(.+?)\\s+(?:to|at)\\s+(\\d+(?:\\.\\d+)?)',question,re.I)
-                            if setm:
-                                target=setm.group(1).strip().lower(); val=float(setm.group(2))
-                                matches=[nm for nm in build_df['Name'].astype(str).unique() if nm.lower() in target or nm.split()[-1].lower() in target]
-                                if matches:
-                                    pr=_player_record(matches[0]); staged={'id':str(pr.get('ID','')),'name':matches[0],'old':float(pr['DFS Lab Proj']),'new':val}
-                                    st.session_state['agent_staged_projection']=staged
-                            with st.spinner('Checking players → lineup → Game World → portfolio…'):
-                                response=run_ai_agent(question,packet,st.session_state['dfs_lab_chat']) or local_agent_answer(question,packet)
-                            st.session_state['dfs_lab_chat'].append((question,response))
-
-                        staged=st.session_state.get('agent_staged_projection')
-                        if staged:
-                            st.markdown(f"<div class='scenario-proposal'><b>PROPOSED SCENARIO CHANGE</b><br>{staged['name']} &nbsp; {staged['old']:.2f} → <b>{staged['new']:.2f}</b><br><span>Temporary Agent Scenario · base projection stays untouched</span></div>",unsafe_allow_html=True)
-                            ca,cb=st.columns(2)
-                            if ca.button('✓ APPLY TO AGENT SCENARIO',type='primary',use_container_width=True,key='apply_agent_proj'):
-                                st.session_state['agent_projection_scenario'][staged['id']]=float(staged['new']); st.session_state.pop('agent_staged_projection',None); st.rerun()
-                            if cb.button('CANCEL',use_container_width=True,key='cancel_agent_proj'):
-                                st.session_state.pop('agent_staged_projection',None); st.rerun()
-
-                        if st.session_state['dfs_lab_chat']:
-                            latest_q,latest_a=st.session_state['dfs_lab_chat'][-1]
-                            st.markdown("<div class='answer-kicker'>LATEST INVESTIGATION</div>",unsafe_allow_html=True)
-                            st.markdown(f"<div class='chat-user'><div class='chat-label'>YOU</div>{latest_q}</div>",unsafe_allow_html=True)
-                            st.markdown("<div class='chat-agent-label'>DFS LAB AGENT</div>",unsafe_allow_html=True); st.markdown(latest_a)
-                            older=st.session_state['dfs_lab_chat'][:-1]
-                            if older:
-                                with st.expander(f"Earlier conversation · {len(older)}",expanded=False):
-                                    for uq,ar in reversed(older[-8:]): st.markdown(f"**You:** {uq}"); st.markdown(ar); st.divider()
-                        if st.session_state.get('dfs_agent_error'):
-                            st.warning(f"Agent status: API fallback is active. {st.session_state.get('dfs_agent_error','unknown')}")
-
-                        if st.session_state['dfs_lab_chat']:
-                            with st.form('dfs_lab_followup_form', clear_on_submit=True):
-                                follow_q=st.text_input('Reply to DFS LAB', placeholder='Reply to DFS LAB…', label_visibility='collapsed')
-                                follow_submit=st.form_submit_button('SEND REPLY  ↗', type='primary', use_container_width=True)
-                            if follow_submit and follow_q.strip():
-                                st.session_state['dfs_agent_pending']=follow_q.strip()
-                                st.rerun()
 
                         st.write(f"DFS Lab selected **{lr['Captain']} at Captain** while preserving the {lr['Construction']} game construction because this combination ranked strongly under the current projection, correlation, salary and contest-risk settings. {lr.get('Strategy Notes','')}")
                         if float(lr.get('Scenario Delta',0))!=0: st.write(f"Your game thesis moved this lineup by **{float(lr['Scenario Delta']):+.2f} projected DK points** versus the unadjusted baseline.")
                         st.markdown("##### Manual swap check (optional)")
-                        st.caption("The Agent should recommend the move first. Use this only to inspect a specific one-for-one swap. Only salary-cap-legal replacements are shown.")
+                        st.caption("Inspect a specific one-for-one swap. Only salary-cap-legal replacements are shown.")
                         out_player=st.selectbox("Replace",roster_names,key="lab_out")
                         if out_player:
                             po=build_df[build_df['Name'].astype(str).eq(out_player)].iloc[0]
@@ -1940,7 +1678,7 @@ def render_main(settings):
                                 dproj=float(pi['DFS Lab Proj'])-float(po['DFS Lab Proj']); dsal=int(pi[out_sal_col])-old_sal
                                 st.write(f"**Legal direct swap:** projection {dproj:+.2f} · salary {dsal:+,} · new salary ${int(lr['Salary'])+dsal:,}.")
                             else:
-                                st.info("No one-for-one replacement fits the salary cap. Ask DFS LAB Agent for the best two-player rebuild instead.")
+                                st.info("No one-for-one replacement fits the salary cap.")
                         with st.expander("Detailed lineup grades & diagnostics",expanded=False):
                             cols=["Rank","Rating","CPT","FLEX1","FLEX2","FLEX3","FLEX4","FLEX5","Projection","Salary","Salary Left","Construction","Coherence Score","Lineup Story","Coherence Flags","CPT Own","Dup Risk","Projection Grade","Captain Grade","Correlation Grade","Leverage Grade","Duplication Grade","Story"]
                             st.dataframe(result[[x for x in cols if x in result.columns]],hide_index=True,use_container_width=True,height=610)
