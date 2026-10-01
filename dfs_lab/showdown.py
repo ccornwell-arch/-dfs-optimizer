@@ -109,6 +109,26 @@ def contest_world_weights(entry_format, field_size, script="Neutral"):
         for name,cfg in GAME_WORLDS.items():
             if cfg.get("family")=="shootout": w[name]*=0.8
             elif cfg.get("family") in ["low","qb_ceiling"]: w[name]*=1.25
+
+    # A directional game thesis should dominate the world mix, not sit inside
+    # it as a small side bet. Lift the thesis family to a ~45% plurality; the
+    # remaining worlds stay as genuine alternatives instead of contradicting
+    # the user's pick most of the time.
+    _THESIS_FAMILY={
+        "Low-scoring game":"low",
+        "Defensive / field-goal battle":"low",
+        "Ground-and-pound":"rb_control",
+        "Shootout":"shootout",
+        "Pass-heavy shootout":"pass_ceiling",
+    }
+    fam=_THESIS_FAMILY.get(script)
+    if fam:
+        fam_names=[n for n,cfg in GAME_WORLDS.items() if cfg.get("family")==fam]
+        fam_total=sum(w[n] for n in fam_names)
+        rest_total=sum(w.values())-fam_total
+        if fam_total>0 and rest_total>0:
+            scale=(0.45/0.55)*(rest_total/fam_total)
+            for n in fam_names: w[n]*=scale
     return w
 
 def choose_game_world(rng, entry_format, field_size, script):

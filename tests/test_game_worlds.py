@@ -82,8 +82,35 @@ def test_low_script_downweights_passing_worlds():
            all(low[w] > 0 for w in ["CHI passing ceiling", "Case Keenum ceiling"]))
 
 
+def test_directional_thesis_leads_world_mix():
+    # Oct 1, 2026 (PIT@CLE): user picked "Low-scoring game" but the portfolio
+    # drew 30% Balanced shootout / 25% CLE passing ceiling and zero
+    # low-scoring worlds. A directional thesis must lead the mix (~45%
+    # plurality); other worlds stay as alternatives, never eliminated.
+    sd.configure_game_worlds(_slate_df())
+    for script, fam in [("Low-scoring game", "low"),
+                       ("Shootout", "shootout"),
+                       ("Ground-and-pound", "rb_control")]:
+        w = sd.contest_world_weights("Single Entry", 2000, script)
+        tot = sum(w.values())
+        fam_share = sum(v for n, v in w.items()
+                        if sd.GAME_WORLDS[n].get("family") == fam) / tot
+        _check(f"{script}: thesis family leads at ~45% (got {fam_share:.2f})",
+               0.40 <= fam_share <= 0.50)
+        _check(f"{script}: no world eliminated",
+               all(v > 0 for v in w.values()))
+    # Neutral keeps the old contest-driven mix (no plurality lift).
+    w = sd.contest_world_weights("Single Entry", 2000, "Neutral")
+    tot = sum(w.values())
+    low_share = sum(v for n, v in w.items()
+                    if sd.GAME_WORLDS[n].get("family") == "low") / tot
+    _check(f"Neutral: low family stays a small side bet (got {low_share:.3f})",
+           low_share < 0.10)
+
+
 if __name__ == "__main__":
     test_no_world_named_after_inactive_qb()
     test_no_active_qb_means_no_qb_world()
     test_low_script_downweights_passing_worlds()
+    test_directional_thesis_leads_world_mix()
     print("game world tests done")
