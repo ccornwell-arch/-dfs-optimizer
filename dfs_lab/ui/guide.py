@@ -10,7 +10,7 @@ def render_guide(mode="showdown"):
     with st.expander("🎬 Walkthrough videos", expanded=False):
         st.info("Video walkthroughs are coming — first build, player rules, reading your results.")
     with st.expander("Getting your DraftKings file", expanded=False):
-        st.markdown("DK app → Lobby → tap your contest → download the salaries CSV. That's the only file you need — Aytia builds its own projections and ownership estimates from it. Playing Showdown? Grab the single-game file. Playing Classic? Grab the main slate file.")
+        st.markdown("That's the only file you need — Aytia builds its own projections and ownership estimates from it. **On draftkings.com:** Lineups → Pick a Sport (NFL) → Pick a Style (Classic or Showdown Captain Mode) → Pick a Start Time for your slate → tap the download icon to save the salaries CSV. **In the DK app:** Lobby → tap your contest → download the salaries CSV.")
     with st.expander("The tabs", expanded=False):
         if is_sd:
             st.markdown("**⚡ Build** — lineup count, constructions (3-3, 4-2, 5-1), captain rules. **👤 Players** — Out / Lock / CPT / exposures (tap Apply player changes). **🔗 Relationships** — stack rules. **🧠 Game Intel** — slate notes. **⚙ Rules** — your game story: script, score, scenario influence. **📋 Lineups** — results, grades, exports. **📊 Exposure** — where the portfolio landed.")
