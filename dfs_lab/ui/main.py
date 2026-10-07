@@ -958,6 +958,10 @@ def render_main(settings):
             _sd_script_team=str(st.session_state.get("sd_script_team","None"))
             if _sd_script_team=="None": _sd_script_team=""
             auto_shape=bool(st.session_state.get("sd_auto_shape",False))
+            # World cap: nav-independent (the Rules tab widget writes sd_world_max_share
+            # via persistent_widget; the build block below runs on every run).
+            _wcap_pct=float(st.session_state.get("sd_world_max_share",0) or 0)
+            world_max_share=(_wcap_pct/100.0 if _wcap_pct>0 else None)
             effective_script=_sd_script; effective_team=_sd_script_team
             if use_score and team_scores:
                 _sd_asc,_sd_atm,_sd_sp=infer_score_script(team_scores)
@@ -1290,7 +1294,6 @@ def render_main(settings):
                 _wcap_auto=int(round(default_world_max_share(lineup_count)*100))
                 wcap_pct=persistent_widget(st.number_input,"sd_world_max_share",0,"Max % of lineups per game world",min_value=0,max_value=100,step=5,help=f"0 = auto ({_wcap_auto}% for {lineup_count} lineups). Caps how much of the portfolio any single game world can take, so big portfolios cover more outcomes instead of repeating one theory.")
                 st.caption(f"World cap: {'auto ('+str(_wcap_auto)+'%)' if not wcap_pct else str(int(wcap_pct))+'%'}")
-                world_max_share=(float(wcap_pct)/100.0 if wcap_pct else None)
                 directional=script in ["Team wins close","Team dominates","Team plays from ahead","Team passing comeback"]
                 script_team=persistent_widget(st.selectbox,"sd_script_team","None","Script team",["None"]+teams,disabled=(not directional) or script=="Auto from score")
                 if script_team=="None": script_team=""
