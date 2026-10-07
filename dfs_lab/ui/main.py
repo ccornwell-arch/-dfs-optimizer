@@ -50,6 +50,39 @@ def _classic_nav_go(tab):
     st.session_state["classic_nav"]=tab
 
 
+def persistent_widget(widget_fn, persistent_key, default, *args, **kwargs):
+    """Create a widget whose value survives tab navigation.
+
+    Only the active tab's widgets render on a run. If Streamlit drops an
+    unmounted widget's session state, a plain keyed widget reverts to its
+    default when the user returns to that tab. This helper mirrors the value
+    to a persistent (non-widget) key via on_change and re-seeds the widget
+    from it on remount, so Build/Scenario settings never silently reset.
+
+    Returns the widget's current value. Read the persistent key (not the
+    widget key) in build logic.
+    """
+    st.session_state.setdefault(persistent_key, default)
+    widget_key = f"_w_{persistent_key}"
+    # Re-seed the widget from the persistent value if its state was dropped
+    # (e.g. the tab was not rendered for a run).
+    if widget_key not in st.session_state:
+        st.session_state[widget_key] = st.session_state[persistent_key]
+    def _on_change():
+        st.session_state[persistent_key] = st.session_state[widget_key]
+    kwargs["key"] = widget_key
+    # Chain with any caller-supplied on_change.
+    _caller_on_change = kwargs.pop("on_change", None)
+    _caller_args = kwargs.pop("on_change_args", ())
+    _caller_kwargs = kwargs.pop("on_change_kwargs", {})
+    def _chained():
+        _on_change()
+        if _caller_on_change:
+            _caller_on_change(*_caller_args, **_caller_kwargs)
+    kwargs["on_change"] = _chained
+    return widget_fn(*args, **kwargs)
+
+
 def _apply_exposure_targets(ed, exp, edited_rows, strategy):
     """Apply data_editor exposure-target edits to the strategy map. Pure.
 
@@ -936,9 +969,9 @@ def render_main(settings):
                 st.markdown("#### Allowed team builds")
                 st.caption("Choose what is allowed — no percentages. 4-2 means four players from either team; 5-1 means five from either team.")
                 c1,c2,c3=st.columns(3)
-                with c1:allow_33=st.checkbox("3-3",value=True,key="sd_allow_33")
-                with c2:allow_42=st.checkbox("4-2",value=True,key="sd_allow_42")
-                with c3:allow_51=st.checkbox("5-1",value=False,key="sd_allow_51")
+                with c1:allow_33=persistent_widget(st.checkbox,"sd_allow_33",True,"3-3")
+                with c2:allow_42=persistent_widget(st.checkbox,"sd_allow_42",True,"4-2")
+                with c3:allow_51=persistent_widget(st.checkbox,"sd_allow_51",False,"5-1")
                 if not any([allow_33,allow_42,allow_51]):
                     st.warning("Choose at least one build. 3-3 will be used until you select one.")
                     allow_33=True
@@ -948,23 +981,22 @@ def render_main(settings):
                 st.caption("These settings apply only when that position is Captain — they do not control how often the position becomes Captain.")
                 a,b,c=st.columns(3)
                 with a:
-                    qb_cpt_pc_rule = st.selectbox(
+                    qb_cpt_pc_rule = persistent_widget(
+                        st.selectbox, "sd_qb_cpt_pc_rule", "No rule",
                         "When QB is CPT · pass catchers",
                         ["No rule", "Minimum 1", "Minimum 2", "No more than 1", "No more than 2"],
-                        index=0,
-                        key="sd_qb_cpt_pc_rule",
                         help="Minimum/maximum is enforced first. If that rule makes the entire slate impossible, DFS LAB keeps your other settings and falls back to its football-coherence model rather than returning zero lineups."
                     )
                     cpt_qb_pc = {"No rule":0, "Minimum 1":1, "Minimum 2":2, "No more than 1":-1, "No more than 2":-2}[qb_cpt_pc_rule]
                 pair_map={"Never":0,"Sometimes":35,"Usually":80,"Always":100}
-                with b: wrte_pair=st.selectbox("When WR/TE is CPT · pair QB",list(pair_map),index=2,key="sd_wrte_pair",
+                with b: wrte_pair=persistent_widget(st.selectbox,"sd_wrte_pair","Usually","When WR/TE is CPT · pair QB",list(pair_map),
                     help="Sometimes/Usually are SOFT portfolio preferences and will not block a legal build. Always is a hard rule.")
-                with c: rb_pair=st.selectbox("When RB is CPT · pair DST/K",list(pair_map),index=1,key="sd_rb_pair",
+                with c: rb_pair=persistent_widget(st.selectbox,"sd_rb_pair","Sometimes","When RB is CPT · pair DST/K",list(pair_map),
                     help="Sometimes/Usually are SOFT portfolio preferences and will not block a legal build. Always is a hard rule.")
                 wrte_qb=pair_map[wrte_pair]; rb_ctrl=pair_map[rb_pair]
                 d,e=st.columns(2)
-                with d:max_k=st.selectbox("Max kickers",[0,1,2],index=2,key="sd_max_k")
-                with e:max_dst=st.selectbox("Max defenses",[0,1,2],index=1,key="sd_max_dst")
+                with d:max_k=persistent_widget(st.selectbox,"sd_max_k",2,"Max kickers",[0,1,2])
+                with e:max_dst=persistent_widget(st.selectbox,"sd_max_dst",1,"Max defenses",[0,1,2])
                 build_btn=st.button(f"⚡ GENERATE {lineup_count} LINEUPS",type="primary",use_container_width=True,key="v4_sd_build")
 
             if sd_nav==_SD_TABS[1]:
@@ -1243,19 +1275,19 @@ def render_main(settings):
             if sd_nav==_SD_TABS[4]:
                 st.markdown('<div class="card-title">Scenario Engine</div><div class="card-sub">Use a football story, a predicted score, or both. Your game thesis changes projections, correlation and lineup construction. Use the 0–100 influence control to decide how strongly DFS Lab should commit to it.</div>',unsafe_allow_html=True)
                 script_options=["Neutral","Auto from score","Shootout","Pass-heavy shootout","Low-scoring game","Defensive / field-goal battle","Ground-and-pound","Team wins close","Team dominates","Team plays from ahead","Team passing comeback"]
-                script=st.selectbox("Game script",script_options,key="sd_script")
-                use_score=st.toggle("Use predicted score to adjust projections",key="sd_use_score")
+                script=persistent_widget(st.selectbox,"sd_script","Neutral","Game script",script_options)
+                use_score=persistent_widget(st.toggle,"sd_use_score",False,"Use predicted score to adjust projections")
                 team_scores={}
                 score_profile={"total":0,"margin":0,"winner":"","loser":""}
                 if len(teams)>=2:
                     sc1,sc2=st.columns(2)
-                    with sc1: score0=st.number_input(f"{teams[0]} score",0,70,key="sd_score_0",disabled=not use_score)
-                    with sc2: score1=st.number_input(f"{teams[1]} score",0,70,key="sd_score_1",disabled=not use_score)
+                    with sc1: score0=persistent_widget(st.number_input,"sd_score_0",24,f"{teams[0]} score",0,70,disabled=not use_score)
+                    with sc2: score1=persistent_widget(st.number_input,"sd_score_1",21,f"{teams[1]} score",0,70,disabled=not use_score)
                     team_scores={teams[0]:float(score0),teams[1]:float(score1)}
-                intensity=st.slider("Scenario influence",min_value=0,max_value=100,value=50,step=5,key="sd_intensity",help="0 = ignore the game thesis. 50 = standard influence. 100 = strongest bounded scenario influence.")
+                intensity=persistent_widget(st.slider,"sd_intensity",50,"Scenario influence",min_value=0,max_value=100,step=5,help="0 = ignore the game thesis. 50 = standard influence. 100 = strongest bounded scenario influence.")
                 st.caption(f"Game-thesis influence: {intensity}%")
                 directional=script in ["Team wins close","Team dominates","Team plays from ahead","Team passing comeback"]
-                script_team=st.selectbox("Script team",["None"]+teams,disabled=(not directional) or script=="Auto from score",key="sd_script_team")
+                script_team=persistent_widget(st.selectbox,"sd_script_team","None","Script team",["None"]+teams,disabled=(not directional) or script=="Auto from score")
                 if script_team=="None": script_team=""
 
                 effective_script=script
@@ -1284,7 +1316,7 @@ def render_main(settings):
                 }
                 st.info(script_text.get(script,script_text["Neutral"]))
 
-                auto_shape=st.toggle("Let the scenario shape lineup construction + correlation",key="sd_auto_shape")
+                auto_shape=persistent_widget(st.toggle,"sd_auto_shape",False,"Let the scenario shape lineup construction + correlation")
                 scenario_df=apply_showdown_scenario(df,effective_script,effective_team,use_score,team_scores,intensity)
                 effective_weights,corr_overrides=script_build_adjustments(construction_weights,effective_script,effective_team,use_score,team_scores,auto_shape)
                 if auto_shape:
