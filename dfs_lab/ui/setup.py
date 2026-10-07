@@ -67,6 +67,18 @@ def render_setup():
   <div class="lab-live"><i></i> LIVE SLATE</div>
 </div>''',unsafe_allow_html=True)
 
+    st.markdown("""
+<div style="text-align:center; padding: 1.2rem 0 0.6rem;">
+<div style="font-size:2.6rem;">🧪</div>
+<div style="font-size:1.5rem; font-weight:800; letter-spacing:0.02em;">DFS LAB</div>
+<div style="opacity:0.75; margin-top:0.3rem;">Build the story. Test the lineup. Challenge the field.</div>
+</div>
+""", unsafe_allow_html=True)
+
+    with st.expander("📖 Guide — how to use DFS LAB", expanded=False):
+        from dfs_lab.ui.guide import render_guide
+        render_guide(mode="showdown")
+
     st.markdown("""<div class="command-strip"><div><span class="command-live">⚙</span><b> BUILD CONTROL CENTER</b><span class="command-copy"> Game type · Contest · Entries · Strategy</span></div><div class="command-arrow">SETUP ↓</div></div>""", unsafe_allow_html=True)
     with st.expander("⚙  BUILD CONTROLS  ·  GAME TYPE & CONTEST", expanded=True):
         st.caption("These controls live inside DFS LAB and stay available after the slate loads.")
