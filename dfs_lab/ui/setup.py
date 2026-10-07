@@ -78,16 +78,24 @@ def render_setup():
         dfield,dpayout,dentry=defaults[preset]
         with cc2:
             field_size=st.number_input("Field size",min_value=2,value=int(dfield),step=1)
-            entry_format=st.selectbox("Entry format",["Single Entry","3-Max","20-Max","150-Max"],index=["Single Entry","3-Max","20-Max","150-Max"].index(dentry))
+            entry_format=st.selectbox("Contest max entries",["Single Entry","3-Max","20-Max","150-Max"],index=["Single Entry","3-Max","20-Max","150-Max"].index(dentry),
+                help="The contest's entry limit — NOT how many you're building. Sets how the app models the field: higher max = flatter estimated ownership (the field owns contrarian plays more) and higher ceiling requirements.")
         cc3,cc4=st.columns(2)
         with cc3: payout_style=st.selectbox("Payout",["GPP / top-heavy","Winner take all","Flatter payouts"],index=["GPP / top-heavy","Winner take all","Flatter payouts"].index(dpayout))
         with cc4:
-            lineup_choice=st.radio("Lineups to build",[20,50,100,150,"Custom"],index=2,horizontal=True,key="dfs_lineup_choice")
+            lineup_choice=st.radio("My entries — lineups to build",[5,20,50,100,150,"Custom"],index=1,horizontal=True,key="dfs_lineup_choice",
+                help="How many lineups YOU are actually entering. Keys the game-world diversification: 5 or fewer can ride one theory at 100%; larger portfolios get capped per world so they cover more outcomes.")
             if lineup_choice=="Custom":
                 lineup_count=int(st.number_input("Custom lineup count",min_value=1,max_value=500,value=int(st.session_state.get("dfs_custom_lineups",100)),step=1,key="dfs_custom_lineups"))
             else:
                 lineup_count=int(lineup_choice)
             st.markdown(f"<div class='lineup-count-readout'><b>{lineup_count}</b><span> lineups selected</span></div>",unsafe_allow_html=True)
+            if entry_format!="Single Entry":
+                _emax=int(entry_format.split("-")[0])
+                if lineup_count>_emax:
+                    st.warning(f"You're building {lineup_count} lineups but the contest allows max {_emax}. Lower your entries or pick a higher contest max.")
+                elif lineup_count<_emax:
+                    st.caption(f"Building {lineup_count} of {_emax} max entries — diversification follows your {lineup_count}, field modeling follows the {_emax}-max contest.")
         with st.expander("Advanced build settings"):
             seed=st.number_input("Random seed",min_value=1,value=42,step=1)
             st.caption("Change this only when you want a different randomized batch.")
