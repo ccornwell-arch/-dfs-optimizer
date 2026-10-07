@@ -10,10 +10,7 @@ def render_guide(mode="showdown"):
     with st.expander("🎬 Walkthrough videos", expanded=False):
         st.info("Video walkthroughs are coming — first build, player rules, reading your results.")
     with st.expander("Getting your DraftKings file", expanded=False):
-        if is_sd:
-            st.markdown("DK app → Lobby → tap your Showdown contest → download the salaries CSV (single-game Showdown file, not the main slate). That's the only required file. SaberSim is optional — without it, Aytia builds its own projections and estimated ownership.")
-        else:
-            st.markdown("DK app → Lobby → tap your contest → download the salaries CSV. That's the only required file. SaberSim is optional — without it, Aytia builds its own projections and estimated ownership.")
+        st.markdown("DK app → Lobby → tap your contest → download the salaries CSV. That's the only file you need — Aytia builds its own projections and ownership estimates from it. Playing Showdown? Grab the single-game file. Playing Classic? Grab the main slate file.")
     with st.expander("The tabs", expanded=False):
         if is_sd:
             st.markdown("**⚡ Build** — lineup count, constructions (3-3, 4-2, 5-1), captain rules. **👤 Players** — Out / Lock / CPT / exposures (tap Apply player changes). **🔗 Relationships** — stack rules. **🧠 Game Intel** — slate notes. **⚙ Rules** — your game story: script, score, scenario influence. **📋 Lineups** — results, grades, exports. **📊 Exposure** — where the portfolio landed.")
