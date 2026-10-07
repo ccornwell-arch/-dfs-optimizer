@@ -99,11 +99,11 @@ def test_nested_mutation_raises():
 def test_projection_overrides_applied():
     df = pd.DataFrame({
         "ID": ["1", "2", "3"],
-        "DFS Lab Proj": [10.0, 20.0, 30.0],
+        "Aytia Proj": [10.0, 20.0, 30.0],
         "My Proj": [10.0, 20.0, 30.0],
     })
     out = apply_projection_overrides(df, {"2": 25.5})
-    got = dict(zip(out["ID"].astype(str), out["DFS Lab Proj"]))
+    got = dict(zip(out["ID"].astype(str), out["Aytia Proj"]))
     _check("override: user value used", abs(got["2"] - 25.5) < 1e-9)
     _check("override: others keep model", abs(got["1"] - 10.0) < 1e-9 and abs(got["3"] - 30.0) < 1e-9)
     _check("override: flag set", bool(out.loc[out["ID"] == "2", "Projection Override"].iloc[0]) is True)

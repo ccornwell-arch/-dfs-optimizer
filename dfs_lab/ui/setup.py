@@ -22,12 +22,12 @@ from dfs_lab import styles
 
 
 def _brand_logo_img():
-    """DFS LAB brand mark as an inline <img>; falls back to the alembic glyph."""
+    """Aytia brand mark as an inline <img>; falls back to the alembic glyph."""
     try:
         # setup.py is dfs_lab/ui/setup.py; the logo lives in repo-root assets/.
-        p = Path(__file__).resolve().parent.parent.parent / "assets" / "dfs-lab-logo.webp"
+        p = Path(__file__).resolve().parent.parent.parent / "assets" / "aytia-logo.webp"
         b64 = base64.b64encode(p.read_bytes()).decode("ascii")
-        return (f'<img class="lab-flask-img" alt="DFS LAB logo" '
+        return (f'<img class="lab-flask-img" alt="Aytia logo" '
                 f'src="data:image/webp;base64,{b64}"/>')
     except Exception:
         return '<span class="lab-flask">⚗</span>'
@@ -62,7 +62,7 @@ def render_setup():
     st.markdown(styles.SETUP_APPBAR_DARK_CSS, unsafe_allow_html=True)
 
     st.markdown(f'''<div class="lab-appbar">
-  <div class="lab-brand">{_brand_logo_img()}<span>DFS</span><b>LAB</b></div>
+  <div class="lab-brand">{_brand_logo_img()}<b>Aytia</b></div>
   <div class="lab-appbar-copy"><strong>NFL DFS COMMAND CENTER</strong><span>Build · Explore · Challenge</span></div>
   <div class="lab-live"><i></i> LIVE SLATE</div>
 </div>''',unsafe_allow_html=True)
@@ -70,18 +70,18 @@ def render_setup():
     st.markdown("""
 <div style="text-align:center; padding: 1.2rem 0 0.6rem;">
 <div style="font-size:2.6rem;">🧪</div>
-<div style="font-size:1.5rem; font-weight:800; letter-spacing:0.02em;">DFS LAB</div>
-<div style="opacity:0.75; margin-top:0.3rem;">Build the story. Test the lineup. Challenge the field.</div>
+<div style="font-size:1.5rem; font-weight:800; letter-spacing:0.02em;">Aytia</div>
+<div style="opacity:0.75; margin-top:0.3rem;">Start with a belief. Update it with evidence.</div>
 </div>
 """, unsafe_allow_html=True)
 
-    with st.expander("📖 Guide — how to use DFS LAB", expanded=False):
+    with st.expander("📖 Guide — how to use Aytia", expanded=False):
         from dfs_lab.ui.guide import render_guide
         render_guide(mode="showdown")
 
     st.markdown("""<div class="command-strip"><div><span class="command-live">⚙</span><b> BUILD CONTROL CENTER</b><span class="command-copy"> Game type · Contest · Entries · Strategy</span></div><div class="command-arrow">SETUP ↓</div></div>""", unsafe_allow_html=True)
     with st.expander("⚙  BUILD CONTROLS  ·  GAME TYPE & CONTEST", expanded=True):
-        st.caption("These controls live inside DFS LAB and stay available after the slate loads.")
+        st.caption("These controls live inside Aytia and stay available after the slate loads.")
         cc1,cc2=st.columns(2)
         with cc1:
             mode=st.segmented_control("Game type",["Classic","Showdown"],default="Showdown")

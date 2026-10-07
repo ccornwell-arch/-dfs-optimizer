@@ -73,13 +73,13 @@ def main():
     build_df = apply_showdown_scenario(df, "Neutral", "", False, None, 50)
     build_df = apply_context_engine(build_df, {}, "Standard")
     build_df = apply_projection_overrides(build_df, {KEENUM_ID: 12.0, ERTZ_ID: 7.5})
-    zero = pd.to_numeric(build_df["DFS Lab Proj"], errors="coerce").fillna(0.0) <= 0.01
+    zero = pd.to_numeric(build_df["Aytia Proj"], errors="coerce").fillna(0.0) <= 0.01
     build_df.loc[zero, "ActiveForBuild"] = False
 
     # Projection comparison: LAB vs SaberSim (flex basis).
     comp = build_df[["Name", "Position", "Team", "FlexSalary",
-                      "DFS Lab Proj", "SaberSim Proj", "My Own", "CPT Own"]].copy()
-    comp["Delta"] = comp["DFS Lab Proj"] - comp["SaberSim Proj"]
+                      "Aytia Proj", "SaberSim Proj", "My Own", "CPT Own"]].copy()
+    comp["Delta"] = comp["Aytia Proj"] - comp["SaberSim Proj"]
     print("\n=== LAB vs SaberSim (top deltas) ===")
     print(comp.sort_values("Delta", ascending=False).head(8).to_string(index=False))
     print(comp.sort_values("Delta").head(8).to_string(index=False))
@@ -108,7 +108,7 @@ def main():
 
     pool_sal = dict(zip(build_df["Name"],
                         zip(build_df["FlexSalary"], build_df["CaptainSalary"])))
-    pool_proj = dict(zip(build_df["Name"], build_df["DFS Lab Proj"]))
+    pool_proj = dict(zip(build_df["Name"], build_df["Aytia Proj"]))
     pool_own = dict(zip(build_df["Name"],
                         zip(build_df["My Own"], build_df["CPT Own"])))
     for i in range(6):

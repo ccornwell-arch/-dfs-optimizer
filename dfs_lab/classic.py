@@ -119,7 +119,7 @@ def slot_eligibility(df):
     }
 
 def player_objective(df, aggr, strategy_map, preferred_stack_teams, team_strategy_map, exposure_state=None, built_count=0):
-    proj_col = "DFS Lab Proj" if "DFS Lab Proj" in df.columns else ("Script Proj" if "Script Proj" in df.columns else "My Proj")
+    proj_col = "Aytia Proj" if "Aytia Proj" in df.columns else ("Script Proj" if "Script Proj" in df.columns else "My Proj")
     proj = df[proj_col].to_numpy(float)
     own = np.clip(df["My Own"].to_numpy(float), 0.05, None)
 
@@ -476,7 +476,7 @@ def classic_lineup_coherence(df, chosen):
     if "Role Confidence" in p.columns:
         bad=p[p["Role Confidence"].astype(str).isin(["Backup QB","Inactive / no usable projection"])]
         if not bad.empty:
-            hard.append("Contains a player DFS LAB marked unavailable for the current football role.")
+            hard.append("Contains a player Aytia marked unavailable for the current football role.")
 
     qbs=p[p["is_QB"]]
     if len(qbs)!=1:
@@ -1221,7 +1221,7 @@ def classic_qb_concentration_plan(df, thesis_table, entry_format):
     ids=kept["ID"].astype(str).tolist()
     names=kept["QB"].astype(str).tolist()
     label=f"{len(ids)} QB path" if len(ids)==1 else f"{len(ids)} QB paths"
-    reason=(f"{entry_format}: DFS LAB is keeping {label} because each retained QB has at least "
+    reason=(f"{entry_format}: Aytia is keeping {label} because each retained QB has at least "
             f"{rel_floor:.0f}% of the top evidence score. The cutoff is based on thesis support, "
             "projection, game environment and leverage—not a preset QB count.")
     return ids,tab,{"label":label,"reason":reason,"names":names,"relative_floor":rel_floor}
@@ -1262,7 +1262,7 @@ def classic_apply_qb_cap(qb_ids, qb_table, qb_plan, cap):
     plan["names"]=names
     plan["user_cap"]=cap
     plan["label"]=f"{len(kept)} QB path" if len(kept)==1 else f"{len(kept)} QB paths"
-    plan["reason"]=(f"User instruction: use no more than {cap} quarterbacks. DFS LAB kept the highest-ranked "
+    plan["reason"]=(f"User instruction: use no more than {cap} quarterbacks. Aytia kept the highest-ranked "
                     f"evidence-backed QB paths inside the existing slate model; this cap stays active until cleared.")
     ranked["In build pool"]=ranked["ID"].astype(str).isin(set(kept))
     return kept,ranked,plan
@@ -1424,7 +1424,7 @@ def classic_postbuild_report(packet):
             _mob_note=f" ({n_mobile} mobile-QB lineups run skinny by design and are excluded)" if n_mobile else ""
             _dbl_txt=f"None of {skinny_eligible}" if doubles==0 else f"Only {doubles} of {skinny_eligible}"
             findings.append(("Stack structure",
-                f"{_dbl_txt} non-mobile-QB lineups are QB+2 builds{_mob_note}. That is not automatically wrong, but DFS LAB should verify that skinny stacks are being chosen because the second pass catcher is weak—not just because the optimizer prefers median projection."))
+                f"{_dbl_txt} non-mobile-QB lineups are QB+2 builds{_mob_note}. That is not automatically wrong, but Aytia should verify that skinny stacks are being chosen because the second pass catcher is weak—not just because the optimizer prefers median projection."))
         elif doubles/n > .70:
             findings.append(("Stack structure",
                 f"{doubles} of {n} lineups are QB+2 builds. That is a concentrated construction bet; make sure the slate actually has enough condensed passing offenses to justify it."))
@@ -1435,7 +1435,7 @@ def classic_postbuild_report(packet):
     no_bb=bm.get("0",0)
     if str(rules.get("bringback",""))!="None" and n and no_bb/n>.65:
         findings.append(("Bring-backs",
-            f"{no_bb} of {n} lineups have no bring-back. That can be correct on a soft-pricing slate, but DFS LAB should make sure those games can still reach their stack ceiling without being pushed."))
+            f"{no_bb} of {n} lineups have no bring-back. That can be correct on a soft-pricing slate, but Aytia should make sure those games can still reach their stack ceiling without being pushed."))
 
     # Repeated cores.
     pairs=p.get("repeated_pairs",[]) or []
@@ -1616,7 +1616,7 @@ _DFS_PRO_PLAYBOOK = """DFS PRO PLAYBOOK:
 - Upside should be modeled as conditional and clustered, not independent. When a receiver reaches a slate-breaking outcome, the quarterback, opposing pass catcher, teammate or game environment
   that enabled it often has an elevated chance to hit too. Build around correlated stories rather than collecting unrelated ceiling players.
 - Each Classic lineup should be explainable as one version of Sunday: which game(s) exceed expectation, which chalk fails or succeeds, where salary value emerges, and which correlated pieces
-  benefit together. If DFS LAB cannot tell that story, the lineup is probably an optimizer artifact rather than an intentional tournament build.
+  benefit together. If Aytia cannot tell that story, the lineup is probably an optimizer artifact rather than an intentional tournament build.
 - Stacking is a consequence of the game script, not an end in itself. QB+1, QB+2, bringbacks, mini-correlations and even occasional naked rushing-QB lineups should appear at rates supported by
   scenario outcomes rather than being forced uniformly across the portfolio.
 - Field ownership is the price of an outcome, not a reason to fade it automatically. A popular player can still be correct when his ceiling probability justifies the ownership; a lower-owned
@@ -1625,7 +1625,7 @@ _DFS_PRO_PLAYBOOK = """DFS PRO PLAYBOOK:
   elite chalk can be acceptable when the rest of the lineup differentiates intelligently.
 - Portfolio diversification should spread entries across genuinely different versions of Sunday, not just different player combinations. A portfolio that has 20 unique lineups but depends on
   the same two games and the same chalk assumptions is still fragile.
-- User opinions should be translated into portfolio-level instructions. If the user says 'less of this chalk,' 'more Cincinnati stacks,' or 'I think this game shoots out,' DFS LAB should
+- User opinions should be translated into portfolio-level instructions. If the user says 'less of this chalk,' 'more Cincinnati stacks,' or 'I think this game shoots out,' Aytia should
   rebuild all affected lineups coherently instead of requiring the user to micromanage every replacement player.
 - When the user supplies a partial lineup or locks two, three or four players, treat that as a thesis seed. Complete the remaining roster spots using the best correlated and contest-appropriate
   complements for that specific story rather than simply choosing the highest remaining projections.
@@ -1637,13 +1637,13 @@ _DFS_PRO_PLAYBOOK = """DFS PRO PLAYBOOK:
   already performing well may preserve projection and correlation rather than taking unnecessary risk.
 - Post-slate review should separate process from outcome. The one Sunday that happened is only one branch; evaluate whether the pre-lock portfolio had strong ceiling coverage, sensible ownership
   leverage, coherent game scripts and reasonable exposure concentration even when variance produced a losing result.
-- When actual contest ownership, duplication and winning constructions are available after lock, compare them with DFS LAB's projections. Use those errors to recalibrate field modeling,
+- When actual contest ownership, duplication and winning constructions are available after lock, compare them with Aytia's projections. Use those errors to recalibrate field modeling,
   ownership assumptions, leverage estimates and portfolio construction instead of overreacting to individual player results.
 - Main-slate scenario generation should eventually simulate complete correlated slate worlds rather than independently perturbing player projections. The target architecture is: simulate each
   game's scoring/volume paths, combine games into full-slate worlds, solve the best lineup for each world, then diversify the final portfolio across those distinct worlds.
 - Contest-simulation ROI should remain a secondary model output rather than an oracle. Its usefulness depends on the quality of the field model and ownership assumptions; always show the user
-  simpler evidence alongside it so DFS LAB can explain why a lineup is attractive without hiding behind one EV number.
-- Tournament profitability is dominated by rare top-end finishes, so DFS LAB should never judge a process by how often it min-cashes or by the result of one slate. Favor first-place equity
+  simpler evidence alongside it so Aytia can explain why a lineup is attractive without hiding behind one EV number.
+- Tournament profitability is dominated by rare top-end finishes, so Aytia should never judge a process by how often it min-cashes or by the result of one slate. Favor first-place equity
   and repeatable decision quality over lineups engineered merely to finish above the cash line.
 - Treat variance as a normal property of DFS, not evidence that a sound process is broken. When reviewing a losing slate, ask whether the portfolio created enough credible top-1% paths before
   asking whether a specific player or rule should be changed.
@@ -1651,7 +1651,7 @@ _DFS_PRO_PLAYBOOK = """DFS PRO PLAYBOOK:
   ownership determines how much relative movement that success creates against the field.
 - Do not optimize those three levers with one universal formula. Larger and more top-heavy contests justify sacrificing more median projection for stronger correlation, lower-owned ceiling and
   uniqueness, while smaller or flatter contests should generally preserve more projection and require less aggressive differentiation.
-- Whenever DFS LAB recommends a lineup or portfolio change, explain the price being paid across those three levers. For example: 'This lowers median projection by 4 points, improves field leverage
+- Whenever Aytia recommends a lineup or portfolio change, explain the price being paid across those three levers. For example: 'This lowers median projection by 4 points, improves field leverage
   by 18 percentage points and creates a stronger two-player game correlation.' Make the tradeoff visible instead of hiding it in a grade.
 - A portfolio should be treated as a set of investments in different slate outcomes. One hundred fifty technically unique lineups built around the same core thesis are not diversified; they are
   one concentrated bet expressed 150 ways.
@@ -1667,7 +1667,7 @@ _DFS_PRO_PLAYBOOK = """DFS PRO PLAYBOOK:
   profile and scenario dependence. Two lineups that differ by three players can still be the same bet if they require the same game to shoot out and the same chalk to fail.
 - Portfolio quality should include a concentration-risk report. Surface how much of the portfolio dies if a heavily used player fails, if one game disappoints, or if one ownership assumption is
   badly wrong. This gives the user an investment-style view of where their entries are fragile.
-- DFS LAB should distinguish low-entry conviction from MME diversification. Single Entry and 3-Max can intentionally concentrate around the strongest thesis; 20-Max and especially 150-Max should
+- Aytia should distinguish low-entry conviction from MME diversification. Single Entry and 3-Max can intentionally concentrate around the strongest thesis; 20-Max and especially 150-Max should
   generally widen scenario coverage while preserving lineup quality.
 - The assistant should reinforce realistic outcome expectations without using short-term wins or losses as proof of skill. A good answer should separate process metrics from bankroll outcomes and
   avoid encouraging the user to chase losses, increase stakes after a bad slate, or overreact to one result.
@@ -1689,7 +1689,7 @@ _DFS_PRO_PLAYBOOK = """DFS PRO PLAYBOOK:
   role assumption, touchdown allocation or captain thesis.
 - When changing a captain exposure or fading a popular captain, rebuild the rest of the portfolio around that opinion instead of swapping the captain into otherwise unrelated lineups.
   The surrounding five players should be the best complements to the new captain thesis.
-- User takes should act like head-coach directions, not manual chores. If the user says 'less Puka captain, more Adams captain' or 'I think this is a defensive grind,' DFS LAB should
+- User takes should act like head-coach directions, not manual chores. If the user says 'less Puka captain, more Adams captain' or 'I think this is a defensive grind,' Aytia should
   translate that into the correlated lineup branches, exposure shifts and construction changes that logically follow.
 - When the user specifies two, three or four players they want together in Showdown, treat them as the beginning of a game story and autocomplete the remaining spots with the strongest
   correlated complements rather than merely filling salary by projection.
@@ -1703,7 +1703,7 @@ _DFS_PRO_PLAYBOOK = """DFS PRO PLAYBOOK:
   preserve those lower-frequency but valid branches instead of deleting them with hard pairing rules.
 - Process evaluation must be separated from short-term bankroll results. Showdown wins are rare and top-heavy; review whether lineups had strong simulated/estimated optimality, payout-adjusted
   value, duplication profile and scenario coverage even when the actual game did not cooperate.
-- Post-slate analysis is strongest when actual contest ownership and duplication are available. Compare projected field behavior with the real field, identify where DFS LAB misestimated
+- Post-slate analysis is strongest when actual contest ownership and duplication are available. Compare projected field behavior with the real field, identify where Aytia misestimated
   ownership or duplication, and use that error to recalibrate future Showdown builds rather than judging only by finishing position.
 - When a player's role is uncertain, favor ceiling-aware scenario analysis over blindly trusting a single median projection.
   Ask what happens if the player earns 70-80% of the work rather than the market's assumed 50-60%, and compare that outcome
@@ -1785,8 +1785,8 @@ def classic_postbuild_llm_answer(question, packet, lineups_ctx, history=None):
         if not api_key:
             return None
         instructions = (
-            "You are DFS LAB's post-build coach, an NFL DraftKings tournament strategy assistant. "
-            "The build step is done: you are reviewing a portfolio of lineups DFS LAB actually built. "
+            "You are Aytia's post-build coach, an NFL DraftKings tournament strategy assistant. "
+            "The build step is done: you are reviewing a portfolio of lineups Aytia actually built. "
             "Answer the user's EXACT question first, in direct conversational language. "
             "Ground EVERY claim in the supplied PORTFOLIO DATA (lineup ranks, rosters, projections, ceilings, "
             "game-script stories, grades, game worlds, exposures). Never invent a lineup, player, number, or game. "
@@ -1798,7 +1798,7 @@ def classic_postbuild_llm_answer(question, packet, lineups_ctx, history=None):
         )
         recent_history = (history or [])[-8:]
         history_text = "\n".join(
-            f"USER: {x[0]}\nDFS LAB: {x[1]}"
+            f"USER: {x[0]}\nAytia: {x[1]}"
             for x in recent_history if isinstance(x, (list, tuple)) and len(x) >= 2
         )
         p = packet or {}
@@ -1848,7 +1848,7 @@ def classic_postbuild_answer(question, packet, history=None, lineups_ctx=None):
     contest=packet.get("contest",{}) or {}
     players=packet.get("context_players",[]) or []
     if not p.get("built"):
-        return "Build lineups first. Post-Build Coach only answers from the portfolio DFS LAB actually created."
+        return "Build lineups first. Post-Build Coach only answers from the portfolio Aytia actually created."
 
     # Conversational LLM coach first when an API key is configured; the local
     # evidence-backed templates below are the fallback.
@@ -1892,11 +1892,11 @@ def classic_postbuild_answer(question, packet, history=None, lineups_ctx=None):
         if exp:
             my=float(exp.get("exposure_pct",0) or 0); lev=float(exp.get("leverage_pct",my-field_own) or 0)
             return (f"**{nm} is in {my:.0f}% of this portfolio versus {field_own:.1f}% projected field ownership** ({lev:+.1f} pts of leverage). "
-                    f"DFS LAB is getting there from a {proj:.1f}-point projection at ${sal:,}, plus the lineup combinations he fits. "
+                    f"Aytia is getting there from a {proj:.1f}-point projection at ${sal:,}, plus the lineup combinations he fits. "
                     "The key question is whether that exposure is supported by ceiling/correlation or is simply being repeated because he fits salary. "
                     "If you ask 'too much?' I would judge that against the repeated cores and game stories he appears in.")
         return (f"**{nm}** is projected for {proj:.1f} points at ${sal:,} with {field_own:.1f}% projected ownership, "
-                "but he is not among the portfolio's highest exposures. That means DFS LAB is not leaning heavily on him in the current build.")
+                "but he is not among the portfolio's highest exposures. That means Aytia is not leaning heavily on him in the current build.")
 
     # Winner-take-all / how different.
     if any(x in ql for x in ["winner take all","winner-take-all","how different","different do i","unique do i","first place"]):
@@ -1925,12 +1925,12 @@ def classic_postbuild_answer(question, packet, history=None, lineups_ctx=None):
     if "bring" in ql or "run back" in ql or "runback" in ql:
         bm=p.get("bringback_mix",{}) or {}
         return (f"Current bring-back mix is **{bm}**. A bring-back should exist because that opponent helps the stack keep scoring, not because a rule says every stack needs one. "
-                "On soft-pricing slates, DFS LAB should be willing to omit a weak opponent piece when a much stronger one-off preserves more ceiling.")
+                "On soft-pricing slates, Aytia should be willing to omit a weak opponent piece when a much stronger one-off preserves more ceiling.")
 
     if "flex" in ql or "construction" in ql:
         fm=p.get("flex_mix_pct",{}) or {}
         return (f"Your current FLEX construction is **{fm}**. This is one of the cleanest places to look for leverage because roster shape can be different even when individual players are not. "
-                "DFS LAB should compare median projection with ceiling here; a WR can trail an RB in median while still offering the better tournament-separating outcome.")
+                "Aytia should compare median projection with ceiling here; a WR can trail an RB in median while still offering the better tournament-separating outcome.")
 
     if any(x in ql for x in ["chalk","chalky","ownership","leverage","different"]):
         ow=p.get("most_overweight",[])[:4]; uw=p.get("most_underweight",[])[:4]
@@ -1961,7 +1961,7 @@ def classic_postbuild_answer(question, packet, history=None, lineups_ctx=None):
             "\n\nAsk me **why** about a player, QB concentration, stack mix, bring-backs, FLEX construction, ownership/leverage, repeated cores, or winner-take-all strategy.")
 
 def classic_ai_slate_answer(question, packet, history=None):
-    """Contest-aware DFS LAB assistant.
+    """Contest-aware Aytia assistant.
 
     Prefer the OpenAI model when available. If the API is unavailable, the local fallback
     still answers the user's ACTUAL question from Slate Intel instead of repeating a canned
@@ -1974,9 +1974,9 @@ def classic_ai_slate_answer(question, packet, history=None):
         try: api_key=st.secrets.get("OPENAI_API_KEY",None)
         except Exception: api_key=os.getenv("OPENAI_API_KEY")
         if api_key:
-            instructions=("""You are DFS LAB Classic Slate Intel, an NFL DraftKings strategy assistant.
+            instructions=("""You are Aytia Classic Slate Intel, an NFL DraftKings strategy assistant.
 Answer the user's exact question first. Do not dump generic recommendations unless they are relevant.
-Use the supplied slate packet and contest context. Be willing to disagree with DFS LAB's default settings
+Use the supplied slate packet and contest context. Be willing to disagree with Aytia's default settings
 when the evidence supports it. Explain tradeoffs rather than pretending there is one correct DFS answer.
 
 """ + _DFS_PRO_PLAYBOOK + """For Single Entry and 3-Max, discuss concentration and taking stands when evidence separates. For 20-Max
@@ -1989,7 +1989,7 @@ of the STORY the lineup tells, whether that story is coherent, whether ownership
 same obvious places as the field, and whether the portfolio gives enough combinations to its strongest
 theses.""")
             recent_history=(history or [])[-8:]
-            history_text="\n".join([f"USER: {x[0]}\nDFS LAB: {x[1]}" for x in recent_history if isinstance(x,(list,tuple)) and len(x)>=2])
+            history_text="\n".join([f"USER: {x[0]}\nAytia: {x[1]}" for x in recent_history if isinstance(x,(list,tuple)) and len(x)>=2])
             prompt=f"{instructions}\n\nSLATE + PORTFOLIO PACKET:\n{json.dumps(packet,default=str)}\n\nRECENT CONVERSATION:\n{history_text}\n\nUSER QUESTION:\n{q}"
             try: model_name=st.secrets.get("OPENAI_MODEL",None)
             except Exception: model_name=None
@@ -2086,7 +2086,7 @@ theses.""")
 
     # Stack questions.
     if any(k in ql for k in ["pass catcher","double stack","single stack","stack"]):
-        return (f"For **{entry}** in a {field:,}-entry field, DFS LAB currently recommends **{rec.get('qb_stack',1)} QB pass catcher(s)**. "
+        return (f"For **{entry}** in a {field:,}-entry field, Aytia currently recommends **{rec.get('qb_stack',1)} QB pass catcher(s)**. "
                 "That should be treated as a slate-driven starting point, not a universal rule. The better implementation is to let the "
                 "simulation/thesis evidence determine a mix of single and double stacks, then concentrate that mix more aggressively in "
                 "Single Entry/3-Max and spread it more in larger portfolios.")
@@ -2110,14 +2110,14 @@ theses.""")
             if hist>0: facts.append(f"**{hist:.1f} historical FPPG**")
             if abs(dvp)>=0.1: facts.append(f"**{dvp:+.1f}% opponent-vs-position adjustment**")
             evidence=", ".join(facts) if facts else "the projection and salary inputs in the uploaded slate"
-            return (f"**{nm} is projected for {own:.1f}% field ownership.** In the data DFS LAB currently has, the visible reasons are {evidence}. "
+            return (f"**{nm} is projected for {own:.1f}% field ownership.** In the data Aytia currently has, the visible reasons are {evidence}. "
                     "That explains why the field can gravitate to him, but field ownership is still a projection, not your exposure. "
-                    "DFS LAB does not currently have a live injury/news feed, so I will not invent a news or role explanation that is not in the slate packet.")
+                    "Aytia does not currently have a live injury/news feed, so I will not invent a news or role explanation that is not in the slate packet.")
         if portfolio.get("built"):
             cur=next((x for x in portfolio.get("top_exposures",[]) if str(x.get("player",""))==nm),None)
             if cur:
                 return (f"**{nm}: your exposure is {float(cur.get('exposure_pct',0)):.1f}% versus {own:.1f}% projected field ownership** "
-                        f"({float(cur.get('leverage_pct',0)):+.1f} percentage points). Tell me a max or minimum exposure if you want DFS LAB to change the build rule.")
+                        f"({float(cur.get('leverage_pct',0)):+.1f} percentage points). Tell me a max or minimum exposure if you want Aytia to change the build rule.")
         return (f"**{nm} is projected for {own:.1f}% field ownership.** There is no current portfolio exposure to compare until lineups are built.")
 
     # Game ownership / leverage questions. Use actual player ownership evidence and conversation context.
@@ -2218,7 +2218,7 @@ def classic_ai_action_plan(question, packet, history=None):
              "qb_concentration":packet.get("qb_concentration",{}),"players":players,
              "portfolio":packet.get("portfolio",{})}
         recent=(history or [])[-8:]
-        router=f"""You are the action router for DFS LAB, an NFL DFS strategist.
+        router=f"""You are the action router for Aytia, an NFL DFS strategist.
 Interpret natural language dynamically, using context and recent conversation.
 
 Classify the user's message as a question/challenge, a clear build instruction, or both.

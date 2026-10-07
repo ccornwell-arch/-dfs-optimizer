@@ -111,7 +111,7 @@ def hero_stats(res, eq):
 
 
 SORT_OPTIONS = {
-    "DFS LAB Grade": "Rating Score",
+    "Aytia Grade": "Rating Score",
     "Projection": "Projection",
     "Ceiling P90": "Ceiling P90",
     "Break Slate %": "Break Slate %",
@@ -637,7 +637,7 @@ def render_explorer(disp, df):
 
 def render_worlds_view(sim_table):
     st.markdown("<div class='rcc-section-title'>🌍 Game Worlds</div>"
-                "<div class='rcc-section-sub'>How DFS LAB's 10,000 simulated game scripts split across the slate's games.</div>",
+                "<div class='rcc-section-sub'>How Aytia's 10,000 simulated game scripts split across the slate's games.</div>",
                 unsafe_allow_html=True)
     rows = world_rows(sim_table)
     if not rows:
@@ -676,7 +676,7 @@ def _agent_ask(question, packet, lineups_ctx=None):
 
 def render_agent_view(packet, res, df=None, sim_table=None):
     st.markdown("<div class='rcc-section-title'>🧪 Lab + Agent</div>"
-                "<div class='rcc-section-sub'>Challenge the build. The agent only answers from lineups DFS LAB actually built.</div>",
+                "<div class='rcc-section-sub'>Challenge the build. The agent only answers from lineups Aytia actually built.</div>",
                 unsafe_allow_html=True)
     st.session_state.setdefault("classic_ai_chat", [])
     lineups_ctx = postbuild_lineups_context(res, df, sim_table)
@@ -701,13 +701,13 @@ def render_agent_view(packet, res, df=None, sim_table=None):
                 _agent_ask(starters[i], packet, lineups_ctx)
     for uq, ar in st.session_state["classic_ai_chat"][-6:]:
         st.markdown(f"<div class='rcc-chat-user'><b>You</b><br>{uq}</div>", unsafe_allow_html=True)
-        st.markdown(f"<div class='rcc-chat-ai'><b>DFS LAB</b><br>{ar}</div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='rcc-chat-ai'><b>Aytia</b><br>{ar}</div>", unsafe_allow_html=True)
     if st.session_state["classic_ai_chat"]:
         st.caption("Follow up")
         f1, f2, f3 = st.columns(3)
         with f1:
             if st.button("Explain the grade", key="rcc_fu_grade", use_container_width=True):
-                _agent_ask("Explain how the DFS LAB Grade is calculated and what it rewards.", packet, lineups_ctx)
+                _agent_ask("Explain how the Aytia Grade is calculated and what it rewards.", packet, lineups_ctx)
         with f2:
             if st.button("Compare #1 and #2", key="rcc_fu_cmp", use_container_width=True):
                 _agent_ask("Compare lineup #1 and lineup #2: projection, ceiling, correlation, and who each one needs.", packet, lineups_ctx)

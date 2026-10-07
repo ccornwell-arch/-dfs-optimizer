@@ -61,7 +61,7 @@ def _pool():
     df["is_K"] = pos.eq("K")
     df["is_passcatcher"] = df["is_WR"] | df["is_TE"]
     df["CPT Own"] = df["My Own"]
-    df["DFS Lab Proj"] = df["My Proj"]
+    df["Aytia Proj"] = df["My Proj"]
     df["FlexSalary"] = df["Salary"]
     df["CaptainSalary"] = (df["Salary"] * 1.5).round(-2)
     df["Opponent"] = df["Team"].map({"PHI": "CHI", "CHI": "PHI"})

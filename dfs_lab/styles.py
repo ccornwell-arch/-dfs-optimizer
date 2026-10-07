@@ -290,7 +290,7 @@ SETUP_V43_CSS = """
 # moved verbatim from streamlit_app.py line 3861
 SETUP_V5_CSS = """
 <style>
-/* DFS Lab V5 — dark iPad control deck */
+/* Aytia V5 — dark iPad control deck */
 :root{--v5-bg:#f5f5f7;--v5-panel:#ffffff;--v5-line:rgba(0,0,0,.10);--v5-text:#1d1d1f;--v5-muted:#6e6e73;}
 [data-testid="stAppViewContainer"]{background:linear-gradient(180deg,#fbfbfd 0%,#f5f5f7 52%,#f2f2f4 100%)!important;color:var(--v5-text)!important;}
 [data-testid="stHeader"]{background:transparent!important}.block-container{max-width:1480px;padding-top:1rem}
@@ -317,7 +317,7 @@ SETUP_LABEL_CSS = """<style>
 # moved verbatim from streamlit_app.py line 3886
 SETUP_V633_CSS = r"""
 <style>
-/* DFS LAB V6.3.3 — product design system */
+/* Aytia V6.3.3 — product design system */
 :root{--lab-bg:#e9edf3;--lab-canvas:#f2f4f7;--lab-panel:#ffffff;--lab-sidebar:#e3e8ef;--lab-ink:#101828;--lab-muted:#667085;--lab-line:#d6dce5;--lab-blue:#1267d6;--lab-blue2:#2f7eea;}
 [data-testid="stAppViewContainer"]{background:linear-gradient(135deg,#e6ebf2 0%,#f4f6f9 46%,#e9eef5 100%)!important;color:var(--lab-ink)!important;}
 [data-testid="stHeader"]{background:rgba(242,244,247,.82)!important;backdrop-filter:blur(18px)!important;border-bottom:1px solid rgba(16,24,40,.06)!important;}
@@ -376,7 +376,7 @@ section[data-testid="stSidebar"]{background:linear-gradient(180deg,#c8d1dd,#d8e0
 
 # moved verbatim from streamlit_app.py line 3945
 SETUP_NATIVE_CC_CSS = """<style>
-/* DFS LAB native command center — no dependency on Streamlit sidebar */
+/* Aytia native command center — no dependency on Streamlit sidebar */
 [data-testid="stSidebar"],[data-testid="stSidebarCollapsedControl"]{display:none!important;}
 .command-strip{display:flex;justify-content:space-between;align-items:center;gap:16px;margin:18px 0 8px;padding:14px 18px;border:1px solid #b8c7d9;border-radius:16px;background:linear-gradient(110deg,#f8fbff,#e7f0fb);box-shadow:0 8px 22px rgba(37,56,82,.08);color:#1a2a40;animation:slideUp .28s ease both}.command-live{font-size:.72rem;letter-spacing:.08em;color:#0b72e7;margin-right:8px}.command-copy{color:#63748a;margin-left:12px;font-size:.86rem}.command-arrow{font-size:.72rem;font-weight:850;letter-spacing:.06em;color:#0b67cf;white-space:nowrap}
 [data-testid="stExpander"]{border:1px solid #b9c7d8!important;border-radius:17px!important;background:rgba(248,250,253,.88)!important;box-shadow:0 8px 22px rgba(39,55,78,.07)!important;margin-bottom:12px!important;overflow:hidden!important}
@@ -407,7 +407,7 @@ SETUP_COUNT_READOUT_CSS = """<style>
 
 # moved verbatim from streamlit_app.py line 3973
 SETUP_IPAD_SURFACE_CSS = """<style>
-/* DFS LAB iPad surface/background pass */
+/* Aytia iPad surface/background pass */
 [data-testid="stAppViewContainer"] {
   background: linear-gradient(180deg, #dbe4ef 0%, #e7edf5 42%, #dfe8f2 100%) !important;
 }
@@ -514,7 +514,7 @@ SETUP_PRIMARY_BUTTON_CSS = """<style>
 
 # moved verbatim from streamlit_app.py line 4058
 SETUP_DARK_CC_CSS = """<style>
-/* DFS LAB DARK COMMAND CENTER · final visual cascade */
+/* Aytia DARK COMMAND CENTER · final visual cascade */
 :root{--lab-bg:#07111d;--lab-panel:#0c1a29;--lab-panel2:#102235;--lab-border:#243b53;--lab-blue:#087cff;--lab-text:#f4f8fc;--lab-muted:#9db0c5;--lab-green:#18c96e}
 html,body,[data-testid="stAppViewContainer"]{background:radial-gradient(circle at 72% -10%,#102a46 0%,#081522 34%,#050d17 100%)!important;color:var(--lab-text)!important}
 [data-testid="stHeader"]{background:rgba(5,13,23,.88)!important;border-bottom:1px solid rgba(74,112,151,.22)!important;backdrop-filter:blur(16px)!important}
@@ -640,7 +640,7 @@ SHOWDOWN_SHELL_CSS = """
 # moved verbatim from streamlit_app.py line 5708
 MAIN_V634_SHELL_CSS = r"""
 <style>
-/* DFS LAB V6.3.4 — iPad-first product shell */
+/* Aytia V6.3.4 — iPad-first product shell */
 :root{--shell:#171c24;--shell2:#202733;--surface:#272f3c;--surface2:#303947;--surface3:#394454;--ink:#f6f8fb;--muted:#b5bfcd;--line:rgba(255,255,255,.10);--blue:#2f80ff;--blue2:#5a9cff;}
 [data-testid="stAppViewContainer"]{background:linear-gradient(145deg,#171c24 0%,#202733 55%,#252d39 100%)!important;color:var(--ink)!important;}
 [data-testid="stHeader"]{background:rgba(23,28,36,.88)!important;border-bottom:1px solid var(--line)!important;backdrop-filter:blur(18px)!important;}
@@ -696,7 +696,7 @@ hr{border-color:rgba(255,255,255,.10)!important;}
 # moved verbatim from streamlit_app.py line 5766
 MAIN_DYNAMIC_SHELL_CSS = r"""
 <style>
-/* DFS LAB Dynamic Shell — final cascade */
+/* Aytia Dynamic Shell — final cascade */
 :root{--page:#d8e0ea;--page2:#cdd7e4;--navy:#15243a;--navy2:#173f6d;--card:#f7f9fc;--card2:#edf2f7;--ink:#172235;--muted:#52647a;--line:#b8c5d5;--blue:#1473e6;--cyan:#4aa3ff;--good:#167c65;--warn:#8a5b00;}
 html,body,.stApp,[data-testid="stAppViewContainer"],[data-testid="stMain"]{background:linear-gradient(145deg,var(--page) 0%,#e8edf3 46%,var(--page2) 100%)!important;color:var(--ink)!important;}
 [data-testid="stHeader"]{background:#263243!important;border-bottom:1px solid rgba(255,255,255,.10)!important;}
@@ -753,7 +753,7 @@ section[data-testid="stSidebar"] [data-baseweb="select"]>div,section[data-testid
 
 # moved verbatim from streamlit_app.py line 5814
 MAIN_UNIFORM_THEME_CSS = """<style>
-/* DFS LAB UNIFORM PAGE THEME */
+/* Aytia UNIFORM PAGE THEME */
 html, body,
 .stApp,
 [data-testid="stApp"],
@@ -1016,7 +1016,7 @@ MAIN_WHY_STRIP_CSS = """<style>
 @media(max-width:900px){.why-grid{grid-template-columns:1fr 1fr}.why-drawer{padding:15px 16px}.why-watch{display:block}.why-watch b{display:block;margin-bottom:4px}}
 </style>"""
 
-# DFS LAB Results Command Center — dark theme lock (final cascade).
+# Aytia Results Command Center — dark theme lock (final cascade).
 # Dark gray surfaces (~#121212, elevated panels slightly lighter), off-white
 # primary text, muted secondary text, desaturated accents, tabular numerals.
 # Injected last in render_main so it wins over the older light layers, and it
@@ -1384,7 +1384,7 @@ html body #root .lineup-count-readout b{color:var(--rcc-accent2)!important;-webk
 </style>
 """
 
-# Banner dark-mode guarantee: the DFS LAB appbar must never render as a light
+# Banner dark-mode guarantee: the Aytia appbar must never render as a light
 # band inside the dark app. Injected dead-last in render_setup so it wins the
 # light/dark stylesheet tug-of-war (incl. -webkit-text-fill-color on iPad).
 SETUP_APPBAR_DARK_CSS = """<style>

@@ -1,6 +1,6 @@
 """Tests for Game Intel auto-fill (dfs_lab/auto_intel.py).
 
-The feature: DFS LAB researches defensive matchups, usage trends, rest
+The feature: Aytia researches defensive matchups, usage trends, rest
 edges and travel from nflverse and pre-fills Game Intel; the user only
 overrides. All builders are pure -- synthetic dataframes, no network.
 

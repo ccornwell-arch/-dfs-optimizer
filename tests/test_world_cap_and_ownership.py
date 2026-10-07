@@ -153,7 +153,7 @@ def _build_pool():
     df["is_passcatcher"] = df["is_WR"] | df["is_TE"]
     df["My Own"] = 20.0
     df["CPT Own"] = 4.0
-    df["DFS Lab Proj"] = df["My Proj"]
+    df["Aytia Proj"] = df["My Proj"]
     df["CaptainSalary"] = (df["FlexSalary"] * 1.5).round(-2).astype(int)
     df["Opponent"] = df["Team"].map({"DAL": "TB", "TB": "DAL"})
     df["ActiveForBuild"] = True

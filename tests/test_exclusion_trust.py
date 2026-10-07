@@ -54,7 +54,7 @@ def _pool():
         "FlexSalary": sals,
         "CaptainSalary": [int(s * 1.5) for s in sals],
         "My Proj": projs,
-        "DFS Lab Proj": projs,
+        "Aytia Proj": projs,
         "My Own": owns,
         "CPT Own": [o * 0.5 for o in owns],
         "Game Info": ["TB@DAL"] * len(names),

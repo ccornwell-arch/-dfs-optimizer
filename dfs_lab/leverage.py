@@ -1,4 +1,4 @@
-"""Leverage Lane: ownership-aware leverage constructions for DFS LAB Classic.
+"""Leverage Lane: ownership-aware leverage constructions for Aytia Classic.
 
 Ideas sourced from Ship It Nation strategy content (Sep 2026, "Leverage Lane"
 and "Sunday Shippers" episodes), implemented as data-driven rules — never
@@ -28,7 +28,7 @@ hardcoded player names:
    worlds where that chalk busts (bottom quartile of his own world
    distribution).
 
-Ownership is always DFS LAB's estimate unless a SaberSim file supplied it;
+Ownership is always Aytia's estimate unless a SaberSim file supplied it;
 callers must keep the "estimated" label wherever it is displayed.
 """
 import numpy as np

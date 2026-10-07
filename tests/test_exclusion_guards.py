@@ -1,4 +1,4 @@
-"""Repro for DFS LAB exclusion-guard bugs.
+"""Repro for Aytia exclusion-guard bugs.
 
 Covers the real user reports:
   1. Backup QBs must be auto-excluded (ActiveForBuild == False).

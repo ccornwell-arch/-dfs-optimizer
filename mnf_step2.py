@@ -64,13 +64,13 @@ def main():
     build_df = apply_projection_overrides(build_df, {KEENUM_ID: 11.0, ERTZ_ID: 7.5})
 
     # Final safety gate (mirrors UI): zero-proj players are unavailable.
-    zero = pd.to_numeric(build_df["DFS Lab Proj"], errors="coerce").fillna(0.0) <= 0.01
+    zero = pd.to_numeric(build_df["Aytia Proj"], errors="coerce").fillna(0.0) <= 0.01
     build_df.loc[zero, "ActiveForBuild"] = False
 
     active = build_df[build_df["ActiveForBuild"].astype(bool)]
     print(f"Active pool: {len(active)} players")
     print(active[["Name", "Position", "Team", "FlexSalary", "CaptainSalary",
-                  "DFS Lab Proj"]].sort_values("DFS Lab Proj", ascending=False)
+                  "Aytia Proj"]].sort_values("Aytia Proj", ascending=False)
           .head(18).to_string(index=False))
 
     configure_game_worlds(build_df)

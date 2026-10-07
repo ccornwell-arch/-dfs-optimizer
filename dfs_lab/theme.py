@@ -1,4 +1,4 @@
-"""House theme for DFS LAB: Midnight Ice.
+"""House theme for Aytia: Midnight Ice.
 
 A single dynamic <style> block, injected last in the cascade, that paints the
 app's brand touchpoints (primary buttons, selected nav pill, selected tabs,
@@ -205,7 +205,7 @@ def theme_css(team_abbr=None):
                         "rcc_line", "rcc_line2", "rcc_text", "rcc_muted",
                         "rcc_accent", "rcc_accent2", "rcc_accent_dim"))
     return f"""<style>
-/* DFS LAB dynamic team theme · {t["name"]} — single brand source, injected last.
+/* Aytia dynamic team theme · {t["name"]} — single brand source, injected last.
    Every selector carries the `html body` prefix: several legacy theme blocks use it,
    and without it they outrank this layer on specificity despite loading earlier.
    Full takeover: the legacy --rcc-* surface vars are redefined here, so every

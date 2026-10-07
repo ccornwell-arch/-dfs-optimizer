@@ -216,7 +216,7 @@ def render_main(settings):
 
     _has_cached_slate=bool(st.session_state.get("dfs_lab_dk_bytes"))
     with st.expander("✓ SLATE LOADED · Change files" if _has_cached_slate else "＋ LOAD SLATE FILES", expanded=not _has_cached_slate):
-        st.markdown('<div class="card-sub">DraftKings is required. Without a SaberSim file, DFS Lab builds its own projections and estimated ownership.</div>',unsafe_allow_html=True)
+        st.markdown('<div class="card-sub">DraftKings is required. Without a SaberSim file, Aytia builds its own projections and estimated ownership.</div>',unsafe_allow_html=True)
         u1,u2=st.columns(2)
         with u1: dk_file=st.file_uploader("DraftKings salaries/template · required",type=["csv"],key="dfs_lab_dk_upload")
         with u2: ss_file=st.file_uploader("SaberSim · optional comparison",type=["csv"],key="dfs_lab_ss_upload")
@@ -235,14 +235,14 @@ def render_main(settings):
         ss_file=io.BytesIO(st.session_state["dfs_lab_ss_bytes"]); ss_file.name=st.session_state.get("dfs_lab_ss_name","SaberSim.csv")
 
     if dk_file is None:
-        st.info("Upload the DraftKings slate to open DFS LAB.")
+        st.info("Upload the DraftKings slate to open Aytia.")
         st.stop()
 
     if mode=="Classic":
         try:
             df=prepare_player_pool(dk_file,ss_file); teams=sorted(df["Team"].dropna().unique().tolist())
             if bool(df.get("Own Estimated",pd.Series([False])).any()):
-                st.info("Using DFS Lab projections — no SaberSim file uploaded. Ownership shown is DFS Lab's estimate, built from projection, salary value and position baselines.")
+                st.info("Using Aytia projections — no SaberSim file uploaded. Ownership shown is Aytia's estimate, built from projection, salary value and position baselines.")
             st.session_state.setdefault("strategy_master",{}); st.session_state.setdefault("team_strategy_master",{})
             st.session_state.setdefault("classic_projection_overrides",{})
             df["Base Proj"]=pd.to_numeric(df["My Proj"],errors="coerce").fillna(0.0)
@@ -382,7 +382,7 @@ def render_main(settings):
             # Exposure / Lineups after a build. The bar is pinned via CSS on its
             # keyed container (.st-key-classic_nav) so it stays visible on iPad.
             st.session_state.setdefault("classic_nav",_CLASSIC_TABS[0])
-            classic_nav=st.segmented_control("DFS LAB workspace",_CLASSIC_TABS,key="classic_nav",label_visibility="collapsed")
+            classic_nav=st.segmented_control("Aytia workspace",_CLASSIC_TABS,key="classic_nav",label_visibility="collapsed")
 
             # --- Nav-independent build inputs (Classic) ---
             # The generate handler below runs on every run, but build_btn and
@@ -391,9 +391,9 @@ def render_main(settings):
             build_btn=False
             preferred_stack_teams=list(st.session_state.get("classic_pref_stack",[]))
             if classic_nav==_CLASSIC_TABS[0]:
-                st.markdown('<div class="card-title">DFS LAB Slate Intel</div><div class="card-sub">Study the slate first. Then decide which optimizer rules deserve to be used for this contest.</div>',unsafe_allow_html=True)
+                st.markdown('<div class="card-title">Aytia Slate Intel</div><div class="card-sub">Study the slate first. Then decide which optimizer rules deserve to be used for this contest.</div>',unsafe_allow_html=True)
                 contest_desc=f"{entry_format} · {int(field_size):,} entries · {payout_style}"
-                st.markdown(f"<div class='intel-card'><div class='intel-kicker'>Contest lens</div><div class='intel-big'>{contest_desc}</div><div class='intel-copy'>DFS LAB changes its recommendations with field size, entry format and payout shape. The same slate should not be built the same way in Single Entry and 150-Max.</div></div>",unsafe_allow_html=True)
+                st.markdown(f"<div class='intel-card'><div class='intel-kicker'>Contest lens</div><div class='intel-big'>{contest_desc}</div><div class='intel-copy'>Aytia changes its recommendations with field size, entry format and payout shape. The same slate should not be built the same way in Single Entry and 150-Max.</div></div>",unsafe_allow_html=True)
 
                 # Leverage Lane: one highest-leverage play per slate — projection
                 # edge over salary-implied expectation, per unit of ownership.
@@ -414,7 +414,7 @@ def render_main(settings):
                         st.dataframe(_ps,hide_index=True,use_container_width=True,height=420)
 
                 st.markdown("#### Context evidence")
-                st.caption("DFS LAB blends the uploaded slate with multi-year player results and opponent-vs-position evidence. Current day/night is shown when DraftKings Game Info exposes kickoff time. Travel, weather and injury/news are not invented when the current data feed does not supply them.")
+                st.caption("Aytia blends the uploaded slate with multi-year player results and opponent-vs-position evidence. Current day/night is shown when DraftKings Game Info exposes kickoff time. Travel, weather and injury/news are not invented when the current data feed does not supply them.")
                 intel_view=intel.copy()
                 if not intel_view.empty:
                     intel_view["Proj"]=intel_view["My Proj"].round(2)
@@ -424,7 +424,7 @@ def render_main(settings):
                     st.dataframe(intel_view[[x for x in cols if x in intel_view.columns]].sort_values("Proj",ascending=False).head(80),hide_index=True,use_container_width=True,height=430)
 
                 st.markdown("#### Strategy theses")
-                st.markdown(f"<div class='intel-card'><div class='intel-kicker'>DFS LAB stance</div><div class='intel-big'>{thesis_state['label']}</div><div class='intel-copy'>{thesis_state['reason']}</div></div>",unsafe_allow_html=True)
+                st.markdown(f"<div class='intel-card'><div class='intel-kicker'>Aytia stance</div><div class='intel-big'>{thesis_state['label']}</div><div class='intel-copy'>{thesis_state['reason']}</div></div>",unsafe_allow_html=True)
                 st.caption("A thesis can start with a game, QB, receiver, or RB. Using one adds weight to that route — it does not lock the portfolio to that game.")
                 if thesis_table is not None and not thesis_table.empty:
                     thesis_cols=["Type","Thesis","Attention %","Team","Game","Paired QB","Why"]
@@ -457,7 +457,7 @@ def render_main(settings):
                                 st.session_state["team_strategy_master"][tm]="Like"
 
                         st.session_state["classic_thesis_applied"]=str(top_thesis["Thesis"])
-                        st.success("Top thesis added as a soft lean. DFS LAB can still build through other games and quarterbacks.")
+                        st.success("Top thesis added as a soft lean. Aytia can still build through other games and quarterbacks.")
                     if st.session_state.get("classic_thesis_applied"):
                         st.caption("Active thesis lean: "+str(st.session_state["classic_thesis_applied"]))
 
@@ -471,17 +471,17 @@ def render_main(settings):
                         column_config={"In build pool":st.column_config.CheckboxColumn("In build pool",help="Uncheck to remove this QB from the build pool.")},
                         key=_qb_editor_key)
                     if _qb_pool_kept_one:
-                        st.info("You unchecked every QB, so DFS LAB kept the top-ranked option — the pool can't be empty. Re-check any QB to widen it.")
+                        st.info("You unchecked every QB, so Aytia kept the top-ranked option — the pool can't be empty. Re-check any QB to widen it.")
                 st.caption("Uncheck a QB to remove them from the build pool. Exclusions apply to the next build and reset when you upload a new slate. Single Entry and 3-Max intentionally narrow weak QB paths so candidate lineups express a stance. 150-Max keeps a much wider evidence band for portfolio coverage.")
 
-                st.markdown("#### DFS LAB recommended setup")
+                st.markdown("#### Aytia recommended setup")
                 rr1,rr2,rr3,rr4=st.columns(4)
                 rr1.metric("QB pass catchers",rec["qb_stack"])
                 rr2.metric("Bring-back",rec["bringback"])
                 rr3.metric("Salary floor","$"+f"{int(rec['min_salary']):,}")
                 rr4.metric("Max from one game",rec["max_game"])
                 st.caption(f"Built for {entry_format} in a {int(field_size):,}-entry {payout_style.lower()} contest. Top simulated game ceiling share: {rec['top_game_share']:.1f}%. Recommendations are staged only when you choose Apply.")
-                if st.button("APPLY DFS LAB RECOMMENDED RULES",type="primary",use_container_width=True,key="classic_apply_intel"):
+                if st.button("APPLY Aytia RECOMMENDED RULES",type="primary",use_container_width=True,key="classic_apply_intel"):
                     st.session_state["classic_qb_stack"]=int(rec["qb_stack"])
                     st.session_state["classic_bringback"]=str(rec["bringback"])
                     st.session_state["classic_min_salary"]=int(rec["min_salary"])
@@ -491,7 +491,7 @@ def render_main(settings):
                     st.session_state["classic_no_dst"]=bool(rec["no_dst"])
                     st.session_state["classic_no_off"]=bool(rec["no_off"])
                     st.session_state["classic_allow_qb_rb"]=bool(rec["allow_qb_rb"])
-                    st.success("DFS LAB recommendations staged in Rules. Review them before building.")
+                    st.success("Aytia recommendations staged in Rules. Review them before building.")
 
 
                 if portfolio.get("built"):
@@ -505,7 +505,7 @@ def render_main(settings):
                     st.caption("QB portfolio · "+(_qbtxt or "No QB usage available"))
 
                 st.markdown("#### Post-Build Coach")
-                st.caption(f"Build: {APP_BUILD} · The coach only evaluates lineups DFS LAB actually built. It does not change rules or pretend to know evidence that is not in the portfolio.")
+                st.caption(f"Build: {APP_BUILD} · The coach only evaluates lineups Aytia actually built. It does not change rules or pretend to know evidence that is not in the portfolio.")
 
                 if not portfolio.get("built"):
                     st.info("Generate lineups to unlock the Post-Build Coach. Slate Intel stays focused on pre-build research.")
@@ -526,7 +526,7 @@ def render_main(settings):
                     if st.session_state["classic_ai_chat"]:
                         for uq,ar in st.session_state["classic_ai_chat"][-6:]:
                             st.markdown(f"<div class='dfs-chat-user'><b>You</b><br>{uq}</div>",unsafe_allow_html=True)
-                            st.markdown(f"<div class='dfs-chat-ai'><b>DFS LAB</b><br>{ar}</div>",unsafe_allow_html=True)
+                            st.markdown(f"<div class='dfs-chat-ai'><b>Aytia</b><br>{ar}</div>",unsafe_allow_html=True)
 
                     with st.form("classic_postbuild_coach_form",clear_on_submit=True):
                         _coach_q=st.text_input("Ask why",placeholder="Why so much Purdy? Why only 2 double stacks? Are these lineups too chalky?")
@@ -552,7 +552,7 @@ def render_main(settings):
                 preferred_stack_teams=st.multiselect("Preferred QB stack teams",teams,key="classic_pref_stack",
                     help="Hard control: if you select teams here, the optimizer must use a QB from one of them. Strategy Theses no longer populate this automatically.")
                 team_df=pd.DataFrame({"Team":teams,"Priority":[st.session_state["team_strategy_master"].get(t,"Neutral") for t in teams]})
-                st.caption("Your inputs, not the sim's verdict — tell DFS LAB which teams you want more or less of. The sim's own reads live in Slate Intel → Strategy Theses.")
+                st.caption("Your inputs, not the sim's verdict — tell Aytia which teams you want more or less of. The sim's own reads live in Slate Intel → Strategy Theses.")
                 team_edit=st.data_editor(team_df,hide_index=True,use_container_width=True,disabled=["Team"],column_config={"Priority":st.column_config.SelectboxColumn("Your lean",options=["Core","Like","Neutral","Fade","Exclude"])},key="v4_classic_team")
                 for _,r in team_edit.iterrows(): st.session_state["team_strategy_master"][r["Team"]]=r["Priority"]
                 if st.session_state.get("classic_thesis_applied"):
@@ -562,12 +562,12 @@ def render_main(settings):
                 if int(st.session_state.get("classic_qb_cap",0) or 0)>0:
                     st.info("User QB cap · no more than "+str(int(st.session_state["classic_qb_cap"]))+" quarterbacks · applies to the next build")
                 st.info("Current rule set · QB + "+str(st.session_state["classic_qb_stack"])+" pass catcher(s) · Bring-back "+str(st.session_state["classic_bringback"])+" · Min salary $"+f"{int(st.session_state['classic_min_salary']):,}"+" · Max "+str(st.session_state["classic_max_game"])+" from one game")
-                # "How can we know this beforehand": who DFS LAB auto-excluded and
+                # "How can we know this beforehand": who Aytia auto-excluded and
                 # why, shown BEFORE the Generate button. Reuses the guard's own
                 # Auto Excluded Reason column — no new plumbing.
                 _auto=df[~df["ActiveForBuild"].astype(bool)].copy()
                 _auto=_auto[_auto["Auto Excluded Reason"].astype(str).str.strip().ne("")]
-                with st.expander(f"Auto-excluded by DFS LAB ({len(_auto)}) — who's out before you build",expanded=False):
+                with st.expander(f"Auto-excluded by Aytia ({len(_auto)}) — who's out before you build",expanded=False):
                     if _auto.empty:
                         st.caption("Nothing auto-excluded. The full player pool is available for this build.")
                     else:
@@ -586,7 +586,7 @@ def render_main(settings):
                 build_btn=st.button(f"⚡ GENERATE {lineup_count} RATED LINEUPS",type="primary",use_container_width=True,key="v4_classic_build")
 
             if classic_nav==_CLASSIC_TABS[2]:
-                st.markdown('<div class="card-title">Players</div><div class="card-sub">Edit your own projection when you disagree with the model. Your projection becomes the number DFS LAB uses for simulations and lineup building until you reset it.</div>',unsafe_allow_html=True)
+                st.markdown('<div class="card-title">Players</div><div class="card-sub">Edit your own projection when you disagree with the model. Your projection becomes the number Aytia uses for simulations and lineup building until you reset it.</div>',unsafe_allow_html=True)
                 view=df.copy(); team_filter=st.multiselect("Teams",teams,key="v4_cteam"); pos_filter=st.multiselect("Positions",["QB","RB","WR","TE","DST"],key="v4_cpos")
                 if team_filter:view=view[view["Team"].isin(team_filter)]
                 if pos_filter:view=view[view["Position"].isin(pos_filter)]
@@ -630,7 +630,7 @@ def render_main(settings):
                             "Team":st.column_config.TextColumn("Team",width=70),"Opponent":st.column_config.TextColumn("Opponent",width=82),
                             "Salary":st.column_config.NumberColumn("Salary",width=85,format="$%d"),
                             "Base Proj":st.column_config.NumberColumn("Base Proj",width=85,format="%.2f",help="Original uploaded/model projection."),
-                            "Proj":st.column_config.NumberColumn("My Proj",width=85,format="%.2f",min_value=0.0,step=0.25,help="Editable. DFS LAB uses this value everywhere after you apply changes."),
+                            "Proj":st.column_config.NumberColumn("My Proj",width=85,format="%.2f",min_value=0.0,step=0.25,help="Editable. Aytia uses this value everywhere after you apply changes."),
                             "Own":st.column_config.NumberColumn("Own %",width=70,format="%.1f"),
                             "Priority":st.column_config.SelectboxColumn("Lean",options=PRIORITY_OPTIONS,width=95),"Lock":st.column_config.CheckboxColumn("Lock",width=65),
                             "Exclude":st.column_config.CheckboxColumn("Out",width=60),"Min Exposure":st.column_config.NumberColumn("Min %",min_value=0,max_value=100,step=5,width=75),
@@ -715,7 +715,7 @@ def render_main(settings):
                             f"{round(_n*int(flex_rb)/100)} RB · {round(_n*int(flex_wr)/100)} WR · {round(_n*int(flex_te)/100)} TE in FLEX."
                         )
                 else:
-                    st.caption("Automatic: DFS LAB chooses the FLEX position independently for each lineup.")
+                    st.caption("Automatic: Aytia chooses the FLEX position independently for each lineup.")
 
                 st.markdown("#### Correlation + defense")
                 no_dst=st.toggle("No defense from my QB's game",key="classic_no_dst",help="Blocks either defense from the game containing your rostered QB.")
@@ -887,10 +887,10 @@ def render_main(settings):
             nonzero_proj=int((pd.to_numeric(df["My Proj"],errors="coerce").fillna(0)>0.05).sum())
             nonzero_own=int((pd.to_numeric(df["My Own"],errors="coerce").fillna(0)>0).sum())
             if nonzero_proj==0:
-                st.error("DFS Lab could not create usable projections for this slate.")
+                st.error("Aytia could not create usable projections for this slate.")
                 st.stop()
             elif nonzero_proj < 6: st.warning(f"Projection check · Only {nonzero_proj} players have usable projections. The slate may be incomplete.")
-            else: st.success(f"DFS Lab projection engine ready · {nonzero_proj} players have usable projections." + (" · SaberSim comparison loaded." if ss_file else " · No SaberSim file used."))
+            else: st.success(f"Aytia projection engine ready · {nonzero_proj} players have usable projections." + (" · SaberSim comparison loaded." if ss_file else " · No SaberSim file used."))
             if nonzero_own==0: st.warning("Ownership not populated yet · Lineups can be built, but leverage and duplication ratings that depend on ownership are provisional.")
             st.session_state.setdefault("showdown_strategy",{})
             st.session_state.setdefault("showdown_context",{})
@@ -914,9 +914,9 @@ def render_main(settings):
                 st.session_state.setdefault("sd_score_0", 24)
                 st.session_state.setdefault("sd_score_1", 21)
             q1,q2,q3,q4=st.columns(4); q1.metric("Players",len(df)); q2.metric("Teams",len(teams)); q3.metric("Field",f"{int(field_size):,}"); q4.metric("Pool",lineup_count)
-            if bool(df["CPT Own Estimated"].any()): st.warning("Your SaberSim file does not appear to include Captain ownership. DFS Lab is using a neutral fallback for CPT leverage. Overall ownership is still used normally.")
+            if bool(df["CPT Own Estimated"].any()): st.warning("Your SaberSim file does not appear to include Captain ownership. Aytia is using a neutral fallback for CPT leverage. Overall ownership is still used normally.")
 
-            # Slate-specific build controls live in the main DFS LAB workspace — never in Streamlit's sidebar.
+            # Slate-specific build controls live in the main Aytia workspace — never in Streamlit's sidebar.
             with st.expander("🏈  SLATE STRATEGY  ·  SALARY & UNIQUENESS", expanded=False):
                 sc1,sc2=st.columns(2)
                 with sc1: salary_style=st.selectbox("Salary strategy",["Optimal","Balanced","GPP","Unique","Custom"],index=2)
@@ -934,7 +934,7 @@ def render_main(settings):
             # session state, so post-build buttons can jump straight to Players /
             # Exposure. Pinned via CSS on the keyed container (.st-key-sd_nav).
             st.session_state.setdefault("sd_nav",_SD_TABS[0])
-            sd_nav=st.segmented_control("DFS LAB workspace",_SD_TABS,key="sd_nav",label_visibility="collapsed")
+            sd_nav=st.segmented_control("Aytia workspace",_SD_TABS,key="sd_nav",label_visibility="collapsed")
             # --- Nav-independent build inputs (Showdown) ---
             # Only the active section's widgets render on a run, but every widget
             # value persists in session state under its key. The build block below
@@ -994,7 +994,7 @@ def render_main(settings):
                         st.selectbox, "sd_qb_cpt_pc_rule", "No rule",
                         "When QB is CPT · pass catchers",
                         ["No rule", "Minimum 1", "Minimum 2", "No more than 1", "No more than 2"],
-                        help="Minimum/maximum is enforced first. If that rule makes the entire slate impossible, DFS LAB keeps your other settings and falls back to its football-coherence model rather than returning zero lineups."
+                        help="Minimum/maximum is enforced first. If that rule makes the entire slate impossible, Aytia keeps your other settings and falls back to its football-coherence model rather than returning zero lineups."
                     )
                     cpt_qb_pc = {"No rule":0, "Minimum 1":1, "Minimum 2":2, "No more than 1":-1, "No more than 2":-2}[qb_cpt_pc_rule]
                 pair_map={"Never":0,"Sometimes":35,"Usually":80,"Always":100}
@@ -1036,7 +1036,7 @@ def render_main(settings):
                     sd_sort_by=st.selectbox("Sort players by",["Salary","Projection","Ownership","Name"],index=0,key="sd_player_sort")
                 with _ss2:
                     sd_sort_dir=st.segmented_control("Order",["High → Low","Low → High"],default="High → Low",key="sd_player_sort_dir")
-                _sd_sort_col={"Salary":"FlexSalary","Projection":"DFS Lab Proj","Ownership":"My Own","Name":"Name"}[sd_sort_by]
+                _sd_sort_col={"Salary":"FlexSalary","Projection":"Aytia Proj","Ownership":"My Own","Name":"Name"}[sd_sort_by]
                 view=view.sort_values(_sd_sort_col,ascending=(sd_sort_dir=="Low → High"),kind="mergesort").reset_index(drop=True)
 
                 # Live status strip: always show who's Out/Locked from SAVED settings,
@@ -1097,7 +1097,7 @@ def render_main(settings):
                             st.session_state["showdown_strategy"].pop(qid,None); st.rerun()
                     st.caption("Lock = every lineup • CPT = Captain every lineup • Out = never use")
 
-                ed=pd.DataFrame({"ID":view["ID"].astype(str),"Name":view["Name"],"Pos":view["Position"],"Team":view["Team"],"Flex $":view["FlexSalary"],"DFS Base":view["My Proj"].round(2),"Availability":view.get("Live Status",pd.Series("Not verified",index=view.index)),"Hist G":view.get("History Games",pd.Series(0,index=view.index)),"Matchup %":view.get("Matchup Adj %",pd.Series(0.0,index=view.index)),"Model":view["Model Proj"].round(2),"Your Proj":view["DFS Lab Proj"].round(2),"Δ%":view["Proj Change %"].round(1),"Own":view["My Own"].round(1),"CPT Own":view["CPT Own"].round(1),"Lock":False,"CPT Lock":False,"Exclude":False,"CPT Eligible":False,"Priority":"Neutral","Min Exposure":0,"Max Exposure":100,"CPT Min":0,"CPT Max":100})
+                ed=pd.DataFrame({"ID":view["ID"].astype(str),"Name":view["Name"],"Pos":view["Position"],"Team":view["Team"],"Flex $":view["FlexSalary"],"DFS Base":view["My Proj"].round(2),"Availability":view.get("Live Status",pd.Series("Not verified",index=view.index)),"Hist G":view.get("History Games",pd.Series(0,index=view.index)),"Matchup %":view.get("Matchup Adj %",pd.Series(0.0,index=view.index)),"Model":view["Model Proj"].round(2),"Your Proj":view["Aytia Proj"].round(2),"Δ%":view["Proj Change %"].round(1),"Own":view["My Own"].round(1),"CPT Own":view["CPT Own"].round(1),"Lock":False,"CPT Lock":False,"Exclude":False,"CPT Eligible":False,"Priority":"Neutral","Min Exposure":0,"Max Exposure":100,"CPT Min":0,"CPT Max":100})
                 for x,r in ed.iterrows():
                     e=st.session_state["showdown_strategy"].get(str(r["ID"]),{})
                     for c,k,d in [("Lock","Lock",False),("CPT Lock","CPT Lock",False),("Exclude","Exclude",False),("CPT Eligible","CPT Eligible",False),("Priority","Priority","Neutral"),("Min Exposure","Min Exposure",0),("Max Exposure","Max Exposure",100),("CPT Min","CPT Min",0),("CPT Max","CPT Max",100)]: ed.at[x,c]=e.get(k,d)
@@ -1136,7 +1136,7 @@ def render_main(settings):
                         "Flex $":st.column_config.NumberColumn("Flex $",width=78,format="$%d"),
                         "Proj":st.column_config.NumberColumn("Base",width=68,format="%.2f"),
                         "Script Proj":st.column_config.NumberColumn("Scenario",width=78,format="%.2f"),
-                        "DFS Lab":st.column_config.NumberColumn("DFS Lab",width=78,format="%.2f"),
+                        "Aytia":st.column_config.NumberColumn("Aytia",width=78,format="%.2f"),
                         "Δ%":st.column_config.NumberColumn("Δ%",width=58,format="%.1f"),
                         "Own":st.column_config.NumberColumn("Own",width=64,format="%.1f"),
                         "CPT Own":st.column_config.NumberColumn("CPT Own",width=78,format="%.1f"),
@@ -1181,7 +1181,7 @@ def render_main(settings):
                     st.rerun()
                 st.button("📋 Back to Lineups",key="sd_players_back_to_lineups",use_container_width=True,on_click=_sd_nav_go,args=(_SD_TABS[5],))
             if sd_nav==_SD_TABS[2]:
-                st.markdown('<div class="card-title">Relationships</div><div class="card-sub">Teach DFS Lab which players, positions and team roles belong together — or should never appear together.</div>',unsafe_allow_html=True)
+                st.markdown('<div class="card-title">Relationships</div><div class="card-sub">Teach Aytia which players, positions and team roles belong together — or should never appear together.</div>',unsafe_allow_html=True)
                 st.caption("Hard relationship rules are enforced by the optimizer. Use Player for a specific matchup or Team + Position for broader football logic.")
                 player_options={f"{r['Name']} · {r['Team']} {r['Position']}":str(r['ID']) for _,r in df.sort_values(['Team','Position','Name']).iterrows()}
                 positions=["Any"]+sorted([p for p in df["Position"].dropna().astype(str).unique().tolist() if p])
@@ -1229,17 +1229,17 @@ def render_main(settings):
                 max_one_rb=st.toggle("Max 1 RB from the same team",value=st.session_state.get("max_one_rb_team",False),key="max_one_rb_team",help="Useful when two same-team RBs are direct alternatives. Leave off when a backfield can realistically support two players together.")
 
             if sd_nav==_SD_TABS[3]:
-                st.markdown('<div class="card-title">Game View</div><div class="card-sub">The football signals DFS LAB is using for this slate. Neutral inputs stay out of the way; open Model details only when you want to audit them.</div>',unsafe_allow_html=True)
+                st.markdown('<div class="card-title">Game View</div><div class="card-sub">The football signals Aytia is using for this slate. Neutral inputs stay out of the way; open Model details only when you want to audit them.</div>',unsafe_allow_html=True)
                 st.info("Ratings are confidence-shrunk and capped. Defense and current usage carry more weight than travel or primetime splits.")
                 st.session_state.setdefault("showdown_context_auto",{})
                 st.session_state.setdefault("showdown_context_manual",set())
                 _ai1,_ai2=st.columns(2)
                 with _ai1:
                     if st.button("✨ AUTO-FILL GAME INTEL",use_container_width=True,key="auto_intel_fill",
-                                 help="DFS LAB researches defensive matchups, usage trends, rest edges and travel from nflverse and pre-fills the ratings. Anything you've typed yourself is never overwritten."):
+                                 help="Aytia researches defensive matchups, usage trends, rest edges and travel from nflverse and pre-fills the ratings. Anything you've typed yourself is never overwritten."):
                         from dfs_lab.data import _slate_season
                         from dfs_lab.auto_intel import auto_fill_game_intel
-                        with st.spinner("DFS LAB is researching matchups, usage trends, rest and travel…"):
+                        with st.spinner("Aytia is researching matchups, usage trends, rest and travel…"):
                             _sugg,_amsg=auto_fill_game_intel(df,_slate_season(df))
                         if _sugg:
                             _auto_intel_adopt_manual(st.session_state["showdown_context"],st.session_state["showdown_context_auto"],st.session_state["showdown_context_manual"])
@@ -1259,8 +1259,8 @@ def render_main(settings):
                         st.session_state["showdown_context_manual"]=set()
                         st.session_state.pop("v51_context_editor",None)
                         st.rerun()
-                st.caption("DFS LAB does the research — defensive matchups, usage trends, rest edges, travel — and pre-fills the ratings below. Type over anything you disagree with; your cells are yours.")
-                st.caption("This table is your input, not the model's output — all zeros means you are applying no adjustment. Rate players −3 to +3 wherever you have a take (e.g. Ertz's bigger role with Goedert out: Usage +2); the Context influence slider scales how strongly it moves DFS Lab Proj in the preview below, capped at ±18%.")
+                st.caption("Aytia does the research — defensive matchups, usage trends, rest edges, travel — and pre-fills the ratings below. Type over anything you disagree with; your cells are yours.")
+                st.caption("This table is your input, not the model's output — all zeros means you are applying no adjustment. Rate players −3 to +3 wherever you have a take (e.g. Ertz's bigger role with Goedert out: Usage +2); the Context influence slider scales how strongly it moves Aytia Proj in the preview below, capped at ±18%.")
                 context_strength=st.select_slider("Context influence",options=["Conservative","Standard","Aggressive"],key="context_strength")
                 rating_opts=[-3,-2,-1,0,1,2,3]
                 ced=pd.DataFrame({
@@ -1300,16 +1300,16 @@ def render_main(settings):
                 ctx_base=apply_showdown_scenario(df,ctx_script,ctx_team,ctx_use_score,ctx_scores,st.session_state.get("sd_intensity",50))
                 ctx_df=apply_context_engine(ctx_base,st.session_state["showdown_context"],context_strength)
                 st.markdown("#### Market vs. model foundation")
-                st.caption("Base is now DFS Lab's independent nflverse/DK-prior projection. Scenario + context create the model projection; Your Proj can override the final optimizer input.")
-                cp_cols=["Name","My Proj","Script Proj","Context Adj %","DFS Lab Proj"] + (["SaberSim Proj"] if "SaberSim Proj" in ctx_df.columns else [])
+                st.caption("Base is now Aytia's independent nflverse/DK-prior projection. Scenario + context create the model projection; Your Proj can override the final optimizer input.")
+                cp_cols=["Name","My Proj","Script Proj","Context Adj %","Aytia Proj"] + (["SaberSim Proj"] if "SaberSim Proj" in ctx_df.columns else [])
                 cp=ctx_df[cp_cols].copy()
-                cp.columns=["Player","Base","Scenario","Context %","DFS Lab"] + (["SaberSim"] if "SaberSim Proj" in ctx_df.columns else [])
+                cp.columns=["Player","Base","Scenario","Context %","Aytia"] + (["SaberSim"] if "SaberSim Proj" in ctx_df.columns else [])
                 cp=cp.sort_values("Context %",key=lambda x:x.abs(),ascending=False)
-                st.dataframe(cp,hide_index=True,use_container_width=True,height=390,column_config={"Player":st.column_config.TextColumn("Player",pinned=True,width=185),"Base":st.column_config.NumberColumn("Base",format="%.2f"),"Scenario":st.column_config.NumberColumn("Scenario",format="%.2f"),"Context %":st.column_config.NumberColumn("Context %",format="%.1f"),"DFS Lab":st.column_config.NumberColumn("DFS Lab",format="%.2f")})
-                st.caption("Neutral means DFS LAB found no reason to move the projection. Detailed model inputs remain available above for auditing; Lineup Lab explains what matters for each lineup.")
+                st.dataframe(cp,hide_index=True,use_container_width=True,height=390,column_config={"Player":st.column_config.TextColumn("Player",pinned=True,width=185),"Base":st.column_config.NumberColumn("Base",format="%.2f"),"Scenario":st.column_config.NumberColumn("Scenario",format="%.2f"),"Context %":st.column_config.NumberColumn("Context %",format="%.1f"),"Aytia":st.column_config.NumberColumn("Aytia",format="%.2f")})
+                st.caption("Neutral means Aytia found no reason to move the projection. Detailed model inputs remain available above for auditing; Lineup Lab explains what matters for each lineup.")
 
             if sd_nav==_SD_TABS[4]:
-                st.markdown('<div class="card-title">Scenario Engine</div><div class="card-sub">Use a football story, a predicted score, or both. Your game thesis changes projections, correlation and lineup construction. Use the 0–100 influence control to decide how strongly DFS Lab should commit to it.</div>',unsafe_allow_html=True)
+                st.markdown('<div class="card-title">Scenario Engine</div><div class="card-sub">Use a football story, a predicted score, or both. Your game thesis changes projections, correlation and lineup construction. Use the 0–100 influence control to decide how strongly Aytia should commit to it.</div>',unsafe_allow_html=True)
                 script_options=["Neutral","Auto from score","Shootout","Pass-heavy shootout","Low-scoring game","Defensive / field-goal battle","Ground-and-pound","Team wins close","Team dominates","Team plays from ahead","Team passing comeback"]
                 script=persistent_widget(st.selectbox,"sd_script","Neutral","Game script",script_options)
                 use_score=persistent_widget(st.toggle,"sd_use_score",False,"Use predicted score to adjust projections")
@@ -1370,7 +1370,7 @@ def render_main(settings):
                 preview.columns=["Player","Pos","Team","Base","Scenario","Change %"]
                 preview=preview.sort_values("Change %",key=lambda x:x.abs(),ascending=False).head(14)
                 st.dataframe(preview,hide_index=True,use_container_width=True,height=410,column_config={"Player":st.column_config.TextColumn("Player",pinned=True,width=190),"Base":st.column_config.NumberColumn("Base",format="%.2f"),"Scenario":st.column_config.NumberColumn("Scenario",format="%.2f"),"Change %":st.column_config.NumberColumn("Change %",format="%.1f")})
-                st.caption("These are bounded scenario tilts applied to the DFS Lab baseline projections. They are not a claim that a final score can precisely predict individual fantasy points.")
+                st.caption("These are bounded scenario tilts applied to the Aytia baseline projections. They are not a claim that a final score can precisely predict individual fantasy points.")
                 st.markdown("#### How V6.3 grades Showdown")
                 st.caption("Projection 29–34% • Captain quality 18% • correlation 20% • leverage 11–15% • duplication proxy 10–15% • your takes 7%. The exact weights move with contest size/payout.")
                 st.caption("The scenario engine changes projection and construction inputs before grading. When your game thesis is directional (low-scoring, shootout, ground-and-pound…), its Game World leads the portfolio at ~45% of lineups; the other worlds remain as genuine alternatives so one thesis doesn't become twenty identical teams.")
@@ -1387,13 +1387,13 @@ def render_main(settings):
             for _pid,_val in st.session_state["agent_projection_scenario"].items():
                 _mask=build_df["ID"].astype(str).eq(str(_pid)) if "ID" in build_df.columns else pd.Series(False,index=build_df.index)
                 if _mask.any():
-                    build_df.loc[_mask,"DFS Lab Proj"]=float(_val)
+                    build_df.loc[_mask,"Aytia Proj"]=float(_val)
             # Final safety gate: a projection changed to zero after pool creation must
             # become unavailable immediately. Previously ActiveForBuild could stay True.
-            _zero_final=pd.to_numeric(build_df["DFS Lab Proj"],errors="coerce").fillna(0.0)<=0.01
+            _zero_final=pd.to_numeric(build_df["Aytia Proj"],errors="coerce").fillna(0.0)<=0.01
             build_df.loc[_zero_final,"ActiveForBuild"]=False
             build_df.loc[_zero_final,"Role Confidence"]="Unavailable — zero final projection"
-            build_df.loc[_zero_final & build_df["Auto Excluded Reason"].astype(str).eq(""),"Auto Excluded Reason"]="Final DFS LAB projection is 0"
+            build_df.loc[_zero_final & build_df["Auto Excluded Reason"].astype(str).eq(""),"Auto Excluded Reason"]="Final Aytia projection is 0"
             build_weights,corr_overrides=script_build_adjustments(construction_weights,effective_script,effective_team,use_score,team_scores,auto_shape)
             # User-selected Captain pairing controls are authoritative hard rules.
             # The Scenario Engine can shape construction/projections, but it must not silently
@@ -1470,13 +1470,13 @@ def render_main(settings):
                         if _violations:
                             _shown="\n".join(f"- {v}" for v in _violations[:10])
                             _more=f"\n…plus {len(_violations)-10} more." if len(_violations)>10 else ""
-                            st.error(f"⚠️ DFS LAB caught a hard-rule violation in the built portfolio. Your player settings say one thing, but the lineups say another — re-check Players and rebuild:\n{_shown}{_more}")
+                            st.error(f"⚠️ Aytia caught a hard-rule violation in the built portfolio. Your player settings say one thing, but the lineups say another — re-check Players and rebuild:\n{_shown}{_more}")
                     if _pairing_fallback_used:
-                        st.warning("DFS LAB built the portfolio after dropping the probabilistic WR/TE→QB and RB→DST/K pairing suggestions. Your explicit QB-Captain pass-catcher rule, salary, locks, CPT pool, exposures and team-build rules were kept.")
+                        st.warning("Aytia built the portfolio after dropping the probabilistic WR/TE→QB and RB→DST/K pairing suggestions. Your explicit QB-Captain pass-catcher rule, salary, locks, CPT pool, exposures and team-build rules were kept.")
                     if _qb_rule_fallback_used:
-                        st.info("DFS LAB detected that the QB-Captain pass-catcher rule blocked the slate, so it used football-coherence scoring for QB Captain builds instead of returning no lineups. All player locks, exclusions, exposures, salary and team-build settings were kept.")
+                        st.info("Aytia detected that the QB-Captain pass-catcher rule blocked the slate, so it used football-coherence scoring for QB Captain builds instead of returning no lineups. All player locks, exclusions, exposures, salary and team-build settings were kept.")
                     if result is not None and not result.empty and len(result) < int(lineup_count):
-                        st.warning(f"Built {len(result)} of {int(lineup_count)} requested lineups. DFS LAB stopped after the optimizer stalled on the current hard rules instead of hanging indefinitely. Loosen the rule called out below or build the smaller portfolio.")
+                        st.warning(f"Built {len(result)} of {int(lineup_count)} requested lineups. Aytia stopped after the optimizer stalled on the current hard rules instead of hanging indefinitely. Loosen the rule called out below or build the smaller portfolio.")
                     if result is not None and not result.empty:
                         _exp_misses=audit_min_exposure(result,build_df,strategy_map)
                         if _exp_misses:
@@ -1484,7 +1484,7 @@ def render_main(settings):
                             _more=f"\n…plus {len(_exp_misses)-8} more." if len(_exp_misses)>8 else ""
                             st.warning(f"⚠️ Minimum-exposure targets missed:{chr(10)}{_lines}{_more}")
                     if result is None or result.empty:
-                        st.error("DFS LAB could not produce a lineup with the current rules. Running a quick feasibility check…")
+                        st.error("Aytia could not produce a lineup with the current rules. Running a quick feasibility check…")
 
                         def _diag_build(_strategy=strategy_map, _min_salary=min_salary, _weights=build_weights,
                                         _qb=eff_qb_pc, _wrte=eff_wrte_qb, _rb=eff_rb_ctrl,
@@ -1532,7 +1532,7 @@ def render_main(settings):
 
                         blockers=[name for name,works in tests if works]
                         if blockers:
-                            st.warning("**Feasibility diagnostic:** A test build succeeded when DFS LAB relaxed: **" + ", ".join(blockers) + "**. This is a clue, not proof that the setting itself is invalid. Your settings were not changed.")
+                            st.warning("**Feasibility diagnostic:** A test build succeeded when Aytia relaxed: **" + ", ".join(blockers) + "**. This is a clue, not proof that the setting itself is invalid. Your settings were not changed.")
                         else:
                             clean_strategy={}
                             for _,rr in build_df.iterrows():
@@ -1614,7 +1614,7 @@ def render_main(settings):
                                 st.markdown(_card_html,unsafe_allow_html=True)
 
                         with st.expander(f"See all {len(result)} lineups",expanded=False):
-                            st.caption("Tap a lineup row to see why DFS LAB built it and what drives the grade.")
+                            st.caption("Tap a lineup row to see why Aytia built it and what drives the grade.")
                             _quick_cols=["Rank","Rating","CPT","FLEX1","FLEX2","FLEX3","FLEX4","FLEX5","Projection","Salary","Salary Left","Construction"]
                             _quick_df=result[[x for x in _quick_cols if x in result.columns]].reset_index(drop=True)
                             try:
@@ -1637,7 +1637,7 @@ def render_main(settings):
                             _proj_grade=str(_why.get("Projection Grade","—"))
                             _cpt_grade=str(_why.get("Captain Grade","—"))
                             _world_why=str(_why.get("Game World","—"))
-                            _story=str(_why.get("Lineup Story","") or _why.get("Story","") or "DFS LAB built this lineup as a distinct path to the slate ceiling.")
+                            _story=str(_why.get("Lineup Story","") or _why.get("Story","") or "Aytia built this lineup as a distinct path to the slate ceiling.")
                             _flags=str(_why.get("Coherence Flags","")).strip()
                             _strategy_note=str(_why.get("Strategy Notes","")).strip()
                             _watch=_flags if _flags and _flags.lower() not in ["nan","none"] else (_strategy_note if _strategy_note and _strategy_note.lower() not in ["nan","none"] else "No major football-coherence warning was flagged for this build.")
@@ -1651,7 +1651,7 @@ def render_main(settings):
                                 "<span><b>%s</b> DUP</span><span><b>%s</b> CORRELATION</span>"
                                 "<span><b>%s</b> LEVERAGE</span><span><b>%.0f</b> COHERENCE</span>"
                                 "</div>"
-                                "<div class='why-section'><b>Why DFS LAB likes it</b><p>%s</p></div>"
+                                "<div class='why-section'><b>Why Aytia likes it</b><p>%s</p></div>"
                                 "<div class='why-grid'>"
                                 "<div><small>GAME WORLD</small><strong>%s</strong></div>"
                                 "<div><small>CAPTAIN</small><strong>%s · %s</strong></div>"
@@ -1683,7 +1683,7 @@ def render_main(settings):
                             st.button("📋 Back to My Lineups",key="sd_dl_back_to_lineups",use_container_width=True,on_click=_sd_nav_go,args=(_SD_TABS[5],))
 
                     with result_views[1]:
-                        st.markdown("<div class='results-view-title'>Game Worlds</div><div class='results-view-sub'>See the different ways DFS LAB thinks this slate can unfold, then isolate the lineups built for any one world.</div>",unsafe_allow_html=True)
+                        st.markdown("<div class='results-view-title'>Game Worlds</div><div class='results-view-sub'>See the different ways Aytia thinks this slate can unfold, then isolate the lineups built for any one world.</div>",unsafe_allow_html=True)
                         st.markdown("#### Game Worlds")
                         world_counts=result["Game World"].value_counts().rename_axis("World").reset_index(name="Lineups") if "Game World" in result.columns else pd.DataFrame()
                         world_filter="All worlds"
@@ -1718,12 +1718,12 @@ def render_main(settings):
                     with result_views[2]:
                         st.markdown("<div class='results-view-title'>Lineup Lab</div><div class='results-view-sub'>Pick any lineup and see the football story behind all six players — then test swaps yourself.</div>",unsafe_allow_html=True)
                         st.markdown("#### Lineup Explorer")
-                        st.caption("Highlight a lineup and DFS LAB will analyze all six players together — not just the Captain.")
+                        st.caption("Highlight a lineup and Aytia will analyze all six players together — not just the Captain.")
                         lineup_choices=[f"#{int(r['Rank'])} · {r['Captain']} CPT · {r['Construction']} · {r['Projection']:.1f} pts" for _,r in filtered_result.iterrows()]
-                        pick=st.selectbox("Choose lineup ▾",lineup_choices,key="lineup_lab_pick",help="Tap to switch the lineup DFS LAB is analyzing.")
+                        pick=st.selectbox("Choose lineup ▾",lineup_choices,key="lineup_lab_pick",help="Tap to switch the lineup Aytia is analyzing.")
                         li=lineup_choices.index(pick); lr=filtered_result.iloc[li]
                         risk = "lower" if entry_format=="Single Entry" else ("moderate" if entry_format in ["3-Max","20-Max"] else "higher")
-                        contest_reason=(f"{entry_format} with {int(field_size):,} entries. DFS Lab uses {risk} tolerance for fragile salary-relief plays and weights tournament ceiling/correlation accordingly.")
+                        contest_reason=(f"{entry_format} with {int(field_size):,} entries. Aytia uses {risk} tolerance for fragile salary-relief plays and weights tournament ceiling/correlation accordingly.")
                         st.markdown(f"**Why this lineup exists**  \n**Contest:** {entry_format} · {int(field_size):,} entries · {payout_style}  \n**Game thesis:** {effective_script} · influence {int(intensity)}%  \n**Game world:** {lr.get('Game World',effective_script)}  \n**Construction:** {lr['Construction']} · **Captain:** {lr['Captain']}  \n**Projection:** {lr['Projection']:.2f} · **Salary left:** ${int(lr['Salary Left']):,}")
                         st.write(contest_reason)
                         st.write(f"**World thesis:** {lr.get('World Thesis','')}")
@@ -1735,14 +1735,14 @@ def render_main(settings):
                         for j,nm in enumerate(roster_names):
                             pr=build_df[build_df['Name'].astype(str).eq(nm)]
                             if pr.empty: continue
-                            pr=pr.iloc[0]; role="Captain / ceiling engine" if j==0 else ("Primary projection piece" if float(pr.get('DFS Lab Proj',0))>=12 else "Salary relief / secondary path")
-                            detail_rows.append({"Slot":"CPT" if j==0 else f"FLEX {j}","Player":nm,"Pos":pr.get('Position',''),"Team":pr.get('Team',''),"DFS Lab":round(float(pr.get('DFS Lab Proj',0)),2),"Salary":int(pr.get('FlexSalary',0)) if j else int(pr.get('CaptainSalary',pr.get('CPTSalary',0))),"Purpose":role})
+                            pr=pr.iloc[0]; role="Captain / ceiling engine" if j==0 else ("Primary projection piece" if float(pr.get('Aytia Proj',0))>=12 else "Salary relief / secondary path")
+                            detail_rows.append({"Slot":"CPT" if j==0 else f"FLEX {j}","Player":nm,"Pos":pr.get('Position',''),"Team":pr.get('Team',''),"Aytia":round(float(pr.get('Aytia Proj',0)),2),"Salary":int(pr.get('FlexSalary',0)) if j else int(pr.get('CaptainSalary',pr.get('CPTSalary',0))),"Purpose":role})
                         if detail_rows:
                             st.dataframe(pd.DataFrame(detail_rows),hide_index=True,use_container_width=True,column_config={"Player":st.column_config.TextColumn("Player",pinned=True),"Salary":st.column_config.NumberColumn("Salary",format="$%d")})
-                            low=min(detail_rows,key=lambda x:x["DFS Lab"])
-                            st.write(f"**Weakest projection link:** {low['Player']} ({low['DFS Lab']:.2f}). DFS LAB is using this spot as {low['Purpose'].lower()} within the six-player construction.")
+                            low=min(detail_rows,key=lambda x:x["Aytia"])
+                            st.write(f"**Weakest projection link:** {low['Player']} ({low['Aytia']:.2f}). Aytia is using this spot as {low['Purpose'].lower()} within the six-player construction.")
 
-                        st.write(f"DFS Lab selected **{lr['Captain']} at Captain** while preserving the {lr['Construction']} game construction because this combination ranked strongly under the current projection, correlation, salary and contest-risk settings. {lr.get('Strategy Notes','')}")
+                        st.write(f"Aytia selected **{lr['Captain']} at Captain** while preserving the {lr['Construction']} game construction because this combination ranked strongly under the current projection, correlation, salary and contest-risk settings. {lr.get('Strategy Notes','')}")
                         if float(lr.get('Scenario Delta',0))!=0: st.write(f"Your game thesis moved this lineup by **{float(lr['Scenario Delta']):+.2f} projected DK points** versus the unadjusted baseline.")
                         st.markdown("##### Manual swap check (optional)")
                         st.caption("Inspect a specific one-for-one swap. Only salary-cap-legal replacements are shown.")
@@ -1755,12 +1755,12 @@ def render_main(settings):
                             max_in_salary=50000-(int(lr['Salary'])-old_sal)
                             legal_pool=build_df[~build_df['Name'].astype(str).isin(roster_names)].copy()
                             legal_pool=legal_pool[pd.to_numeric(legal_pool[out_sal_col],errors='coerce').fillna(999999)<=max_in_salary]
-                            legal_pool=legal_pool.sort_values('DFS Lab Proj',ascending=False)
+                            legal_pool=legal_pool.sort_values('Aytia Proj',ascending=False)
                             pool_names=legal_pool['Name'].astype(str).tolist()
                             if pool_names:
                                 in_player=st.selectbox("With",pool_names,key="lab_in")
                                 pi=legal_pool[legal_pool['Name'].astype(str).eq(in_player)].iloc[0]
-                                dproj=float(pi['DFS Lab Proj'])-float(po['DFS Lab Proj']); dsal=int(pi[out_sal_col])-old_sal
+                                dproj=float(pi['Aytia Proj'])-float(po['Aytia Proj']); dsal=int(pi[out_sal_col])-old_sal
                                 st.write(f"**Legal direct swap:** projection {dproj:+.2f} · salary {dsal:+,} · new salary ${int(lr['Salary'])+dsal:,}.")
                             else:
                                 st.info("No one-for-one replacement fits the salary cap.")
@@ -1843,4 +1843,4 @@ def render_main(settings):
 
 
 
-    st.caption(f"DFS LAB · Build the story. Test the lineup. Challenge the field. · build {git_build_stamp()}")
+    st.caption(f"Aytia · Build the story. Test the lineup. Challenge the field. · build {git_build_stamp()}")

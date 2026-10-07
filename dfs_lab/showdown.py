@@ -390,12 +390,12 @@ def apply_context_engine(df, context_map=None, strength="Standard"):
         reasons.append(reason)
     out["Context Adj %"]=(np.array(adjs)*100).round(1)
     base_col="Script Proj" if "Script Proj" in out.columns else "My Proj"
-    out["DFS Lab Proj"]=(out[base_col].astype(float)*(1.0+np.array(adjs))).round(3)
+    out["Aytia Proj"]=(out[base_col].astype(float)*(1.0+np.array(adjs))).round(3)
     out["Context Why"]=reasons
     return out
 
 def showdown_base_objective(df, aggr, strategy_map, script, script_team, exposure_state=None, cpt_exposure_state=None, built_count=0, game_world=None, world_influence=50):
-    proj_col = "DFS Lab Proj" if "DFS Lab Proj" in df.columns else ("Script Proj" if "Script Proj" in df.columns else "My Proj")
+    proj_col = "Aytia Proj" if "Aytia Proj" in df.columns else ("Script Proj" if "Script Proj" in df.columns else "My Proj")
     proj = df[proj_col].to_numpy(float)
     own = np.clip(df["My Own"].to_numpy(float), 0.1, None)
     objective = proj.copy()
@@ -462,7 +462,7 @@ def solve_showdown_one(
                 ub[vidx(i,j)] = 0
             if slot == "CPT":
                 cpt_own = max(float(r["CPT Own"]), 0.1)
-                cpt_proj = float(r["DFS Lab Proj"] if "DFS Lab Proj" in r.index else (r["Script Proj"] if "Script Proj" in r.index else r["My Proj"]))
+                cpt_proj = float(r["Aytia Proj"] if "Aytia Proj" in r.index else (r["Script Proj"] if "Script Proj" in r.index else r["My Proj"]))
                 cpt_lev = math.log((1.5*cpt_proj+2)/(cpt_own+1.5))
                 val = 1.5*base[i] + (0.5 + 1.5*aggr)*cpt_lev
                 # Position priors are soft, never hard rules.
@@ -718,7 +718,7 @@ def showdown_lineup_coherence(df, chosen, game_world=None):
     if "Role Confidence" in p.columns:
         bad=p[p["Role Confidence"].astype(str).isin(["Backup QB","Inactive / no usable projection"])]
         if not bad.empty:
-            hard.append("Contains a player DFS LAB marked unavailable for the current football role.")
+            hard.append("Contains a player Aytia marked unavailable for the current football role.")
 
     # Defense cannot reasonably be a ceiling piece while the lineup also needs a
     # full opposing passing stack to smash.
@@ -796,7 +796,7 @@ def showdown_lineup_details(df, chosen, strategy_map, script, script_team, game_
     cpt=df.loc[cpt_i]
     flex_idxs=[i for slot,i in chosen if slot!="CPT"]
     p=df.loc[idxs]
-    proj_col = "DFS Lab Proj" if "DFS Lab Proj" in df.columns else ("Script Proj" if "Script Proj" in df.columns else "My Proj")
+    proj_col = "Aytia Proj" if "Aytia Proj" in df.columns else ("Script Proj" if "Script Proj" in df.columns else "My Proj")
     projection=1.5*float(cpt[proj_col])+float(df.loc[flex_idxs,proj_col].sum())
     base_projection=1.5*float(cpt["My Proj"])+float(df.loc[flex_idxs,"My Proj"].sum())
     salary=int(cpt["CaptainSalary"])+int(df.loc[flex_idxs,"FlexSalary"].sum())
@@ -927,7 +927,7 @@ def generate_showdown_lineups(df, field_size, payout_style, count, attempts, min
     V6.5 reliability change: every attempt now tries every user-allowed team construction
     (and both 4-2 / 5-1 orientations) before declaring that attempt infeasible. This keeps
     Game Worlds as preference/ordering, but a single impossible sampled construction can no
-    longer make DFS LAB report "no legal lineup" when another allowed construction is legal.
+    longer make Aytia report "no legal lineup" when another allowed construction is legal.
 
     world_max_share: max fraction of the portfolio any single game world may take
         (0-1). None = smart default from lineup count via default_world_max_share().

@@ -1,4 +1,4 @@
-"""Runtime UI contrast shim for DFS LAB.
+"""Runtime UI contrast shim for Aytia.
 
 Python imports ``sitecustomize`` automatically during startup when it is on
 sys.path. Streamlit Cloud runs the app from the repository root, so this lets
@@ -13,7 +13,7 @@ try:
 
     _CONTRAST_FIX = r"""
 <style>
-/* DFS LAB accessibility contrast override */
+/* Aytia accessibility contrast override */
 
 /* Main-workspace field labels/captions live on light surfaces. */
 [data-testid="stAppViewContainer"] label,

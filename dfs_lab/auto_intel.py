@@ -1,6 +1,6 @@
 """Auto-fill Game Intel from nflverse data.
 
-The vision: DFS LAB does the research, the user only overrides. Every
+The vision: Aytia does the research, the user only overrides. Every
 suggestion carries a moderate Confidence (60 -- a data heuristic, not a take)
 and a Note starting with "Auto:" so the audit trail shows what the machine
 believed. The UI never overwrites a cell the user has touched (see
@@ -312,7 +312,7 @@ def suggest_game_intel(df, player_stats, schedules, season):
         if any(s[c] for c in ("Defense", "Usage", "Home/Rest", "Travel", "Time/Split")):
             s["Note"] = "Auto: " + " • ".join(notes)
             suggestions[pid] = s
-    msg = f"DFS LAB researched {len(suggestions)} players from nflverse (wk {week} {away}@ {home})."
+    msg = f"Aytia researched {len(suggestions)} players from nflverse (wk {week} {away}@ {home})."
     return suggestions, msg
 
 

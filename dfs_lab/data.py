@@ -127,7 +127,7 @@ def apply_football_reality_guard(df, salary_col, projection_col, active_col="Act
                 continue
             out.loc[i,active_col]=False
             out.loc[i,"Role Confidence"]="Backup QB"
-            out.loc[i,"Auto Excluded Reason"]="Backup QB — DFS LAB keeps only the primary QB active by default"
+            out.loc[i,"Auto Excluded Reason"]="Backup QB — Aytia keeps only the primary QB active by default"
 
     # Anything already inactive without an explanation (e.g. a pool pre-filter
     # band) gets one, so the pre-build auto-excluded list is complete.
@@ -349,13 +349,13 @@ def prepare_player_pool(dk_file, ss_file=None):
         df["My Proj"] = df["My Proj"].fillna(0.0)
         df["My Own"] = df["My Own"].fillna(0.0)
     else:
-        # DFS Lab independent projections: no SaberSim file required.
+        # Aytia independent projections: no SaberSim file required.
         # The engine output preserves DK row order (left merge), but merge on
         # Name explicitly so alignment never depends on that assumption.
         proj_df = dfs_lab_projection_engine(dk)
-        proj_cols=["Name","DFS Lab Base Proj","Projection Why","Sim Vol","Matchup Adj %","Rush Share"]
+        proj_cols=["Name","Aytia Base Proj","Projection Why","Sim Vol","Matchup Adj %","Rush Share"]
         df = dk.merge(proj_df[[c for c in proj_cols if c in proj_df.columns]], on="Name", how="left")
-        df["My Proj"] = pd.to_numeric(df["DFS Lab Base Proj"], errors="coerce").fillna(0.0)
+        df["My Proj"] = pd.to_numeric(df["Aytia Base Proj"], errors="coerce").fillna(0.0)
         df["My Own"] = estimate_ownership(df)
         df["Projection Why"] = df["Projection Why"].fillna("DK slate prior fallback")
         df["Sim Vol"] = pd.to_numeric(df["Sim Vol"], errors="coerce").fillna(0.45)
@@ -582,8 +582,8 @@ def dfs_lab_projection_engine(dk):
         m=re.search(r"(20\d{2})", " ".join(out["Game Info"].astype(str).tolist()))
         if m: season=int(m.group(1))
     except Exception: pass
-    out["DFS Lab Data"]="DK prior fallback"
-    out["DFS Lab Base Proj"]=pd.to_numeric(out.get("AvgPointsPerGame",0),errors="coerce").fillna(0.0)
+    out["Aytia Data"]="DK prior fallback"
+    out["Aytia Base Proj"]=pd.to_numeric(out.get("AvgPointsPerGame",0),errors="coerce").fillna(0.0)
     out["History Games"]=0; out["Current Games"]=0; out["Role Signal"]=0.0; out["Matchup Adj %"]=0.0
     out["Projection Why"]="DK slate prior fallback"
     out["Sim Vol"]=0.45
@@ -749,27 +749,27 @@ def dfs_lab_projection_engine(dk):
                 _cv=emp_vol/max(base,1.5)
                 _sig=float(min(0.9,max(0.15,_math.sqrt(_math.log1p(_cv*_cv)))))
             sigs.append(round(0.5*_sig+0.5*_pos_default_vol.get(pos_u,0.45),3))
-        out["DFS Lab Base Proj"]=vals; out["History Games"]=out["HistoryGames"].astype(int); out["Current Games"]=out["CurrentGames"].astype(int)
+        out["Aytia Base Proj"]=vals; out["History Games"]=out["HistoryGames"].astype(int); out["Current Games"]=out["CurrentGames"].astype(int)
         out["Role Signal"]=out["RoleSignal"].round(2); out["Matchup Adj %"]=np.round(madjs,1); out["Projection Why"]=reasons
         out["Sim Vol"]=sigs
-        out["DFS Lab Data"]="2023-2026 history + role + matchup"
+        out["Aytia Data"]="2023-2026 history + role + matchup"
     except Exception as e:
-        out.attrs["projection_warning"]=f"Live nflverse evidence could not load ({e}). DFS Lab used the DK slate prior for this run."
+        out.attrs["projection_warning"]=f"Live nflverse evidence could not load ({e}). Aytia used the DK slate prior for this run."
     return out
 
 def apply_projection_overrides(df, override_map=None):
     out=df.copy(); override_map=override_map or {}
-    out["Model Proj"]=pd.to_numeric(out.get("DFS Lab Proj",out.get("My Proj",0)),errors="coerce").fillna(0.0)
+    out["Model Proj"]=pd.to_numeric(out.get("Aytia Proj",out.get("My Proj",0)),errors="coerce").fillna(0.0)
     finals=[]; flags=[]
     for _,r in out.iterrows():
         val=override_map.get(str(r["ID"]),None)
         if val is None or float(val)<0: finals.append(float(r["Model Proj"])); flags.append(False)
         else: finals.append(float(val)); flags.append(True)
-    out["DFS Lab Proj"]=np.array(finals).round(3); out["Projection Override"]=flags
+    out["Aytia Proj"]=np.array(finals).round(3); out["Projection Override"]=flags
     return out
 
 def prepare_showdown_pool(dk_file, ss_file=None, entry_format=None):
-    """Create the Showdown pool. DFS Lab projections work with DK alone; SaberSim is optional comparison data.
+    """Create the Showdown pool. Aytia projections work with DK alone; SaberSim is optional comparison data.
 
     entry_format: contest entry format ("Single Entry", "3-Max", "20-Max", "150-Max").
         Used only to set the dispersion of the estimated ownership (flatter field
@@ -804,8 +804,8 @@ def prepare_showdown_pool(dk_file, ss_file=None, entry_format=None):
             df=df[base_cols].merge(ss,on="Name",how="left")
             for c in ["SaberSim Proj","My Own","CPT Own"]: df[c]=pd.to_numeric(df[c],errors="coerce").fillna(0.0)
             df["CPT Own Estimated"]=df["CPT Own Estimated"].fillna(True).astype(bool)
-    # Compatibility: My Proj is now DFS Lab's independent baseline, not SaberSim.
-    df["My Proj"]=pd.to_numeric(df["DFS Lab Base Proj"],errors="coerce").fillna(0.0)
+    # Compatibility: My Proj is now Aytia's independent baseline, not SaberSim.
+    df["My Proj"]=pd.to_numeric(df["Aytia Base Proj"],errors="coerce").fillna(0.0)
     _estimate_showdown_ownership(df, entry_format)
     away=[];home=[];matchup=[]
     for g in df["Game Info"]:

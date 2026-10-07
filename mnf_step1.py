@@ -1,6 +1,6 @@
 """Headless MNF Showdown build: PHI @ CHI, 2026-09-28.
 
-Step 1: parse the DK slate, build DFS LAB projections, print the sanity table.
+Step 1: parse the DK slate, build Aytia projections, print the sanity table.
 Step 2 (after review): apply inactives + overrides, generate the portfolio.
 """
 import io
