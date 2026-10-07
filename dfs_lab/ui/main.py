@@ -1634,6 +1634,8 @@ def render_main(settings):
                             _qd1,_qd2=st.columns(2)
                             with _qd1: st.download_button("Download analysis CSV",result.to_csv(index=False),"showdown_lineups_v6_4.csv","text/csv",use_container_width=True,key="quick_analysis_download")
                             with _qd2: st.download_button("Download DK-format CSV",showdown_upload_csv(result),"showdown_dk_upload_v6_4.csv","text/csv",use_container_width=True,key="quick_dk_download")
+                            st.caption("Tip: on iPhone, downloading opens the Files preview — use the app switcher to come back here. Your lineups stay on this tab.")
+                            st.button("📋 Back to My Lineups",key="sd_dl_back_to_lineups",use_container_width=True,on_click=_sd_nav_go,args=(_SD_TABS[5],))
 
                     with result_views[1]:
                         st.markdown("<div class='results-view-title'>Game Worlds</div><div class='results-view-sub'>See the different ways DFS LAB thinks this slate can unfold, then isolate the lineups built for any one world.</div>",unsafe_allow_html=True)
@@ -1777,6 +1779,7 @@ def render_main(settings):
                                 st.warning("Min exposure can't be met while a player is Out or inactive: "+", ".join(sorted(set(_excl_warn)))+". Uncheck Out in the Players tab first.")
                             st.rerun()
                     st.download_button("Download exposure CSV",exp.to_csv(index=False),"showdown_exposure_v6_1.csv","text/csv",use_container_width=True)
+                    st.caption("Tip: on iPhone, downloading opens the Files preview — use the app switcher to come back here.")
                     st.button("📋 Back to Lineups",key="sd_exposure_back_to_lineups",use_container_width=True,on_click=_sd_nav_go,args=(_SD_TABS[5],))
         except Exception as e:
             st.error(f"Showdown build error: {e}")
