@@ -27,8 +27,9 @@ MAIN = "dfs_lab/ui/main.py"
 # showdown analyses cannot pollute each other.
 _BRANCHES = [
     # branch, nav var, tabs var, first line, last line (exclusive)
-    ("classic", "classic_nav", "_CLASSIC_TABS", 242, 790),
-    ("sd", "sd_nav", "_SD_TABS", 790, 1798),
+    # NOTE: update these if render_main() shifts (e.g. helpers added above it).
+    ("classic", "classic_nav", "_CLASSIC_TABS", 376, 926),
+    ("sd", "sd_nav", "_SD_TABS", 926, 1789),
 ]
 
 _SKIP = {
