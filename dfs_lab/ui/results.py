@@ -675,7 +675,7 @@ def _agent_ask(question, packet, lineups_ctx=None):
 
 
 def render_agent_view(packet, res, df=None, sim_table=None):
-    st.markdown("<div class='rcc-section-title'>🧪 Lab + Agent</div>"
+    st.markdown("<div class='rcc-section-title'><span style=\"font-family:Georgia,'Times New Roman',serif;\">α</span> Aytia + Agent</div>"
                 "<div class='rcc-section-sub'>Challenge the build. The agent only answers from lineups Aytia actually built.</div>",
                 unsafe_allow_html=True)
     st.session_state.setdefault("classic_ai_chat", [])

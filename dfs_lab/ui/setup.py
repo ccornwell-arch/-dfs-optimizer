@@ -21,16 +21,16 @@ from scipy.sparse import lil_matrix
 from dfs_lab import styles
 
 
-def _brand_logo_img():
-    """Aytia brand mark as an inline <img>; falls back to the alembic glyph."""
+def _brand_logo_img(cls="lab-flask-img"):
+    """Aytia brand mark as an inline <img>; falls back to a serif alpha glyph."""
     try:
         # setup.py is dfs_lab/ui/setup.py; the logo lives in repo-root assets/.
         p = Path(__file__).resolve().parent.parent.parent / "assets" / "aytia-logo.webp"
         b64 = base64.b64encode(p.read_bytes()).decode("ascii")
-        return (f'<img class="lab-flask-img" alt="Aytia logo" '
+        return (f'<img class="{cls}" alt="Aytia logo" '
                 f'src="data:image/webp;base64,{b64}"/>')
     except Exception:
-        return '<span class="lab-flask">⚗</span>'
+        return '<span class="lab-flask">α</span>'
 
 
 def render_setup():
@@ -67,10 +67,10 @@ def render_setup():
   <div class="lab-live"><i></i> LIVE SLATE</div>
 </div>''',unsafe_allow_html=True)
 
-    st.markdown("""
+    st.markdown(f"""
 <div style="text-align:center; padding: 1.2rem 0 0.6rem;">
-<div style="font-size:2.6rem;">🧪</div>
-<div style="font-size:1.5rem; font-weight:800; letter-spacing:0.02em;">Aytia</div>
+<div>{_brand_logo_img("lab-hero-img")}</div>
+<div style="font-family:Georgia,'Times New Roman',serif; font-size:2rem; font-weight:500; letter-spacing:0.01em; margin-top:0.6rem;">Aytia</div>
 <div style="opacity:0.75; margin-top:0.3rem;">Start with a belief. Update it with evidence.</div>
 </div>
 """, unsafe_allow_html=True)

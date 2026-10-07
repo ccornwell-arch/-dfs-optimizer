@@ -175,7 +175,7 @@ def test_headless_stacked_order():
     i_banner = full.find("rcc-banner")
     i_card = full.find("rcc-card")
     i_worlds = full.find("rcc-world-board")
-    i_agent = full.find("Lab + Agent")
+    i_agent = full.find("Aytia + Agent")
     i_explorer = full.find("Lineup Explorer")
     _check("apptest: order banner < cards", 0 <= i_banner < i_card)
     _check("apptest: order cards < worlds", i_card < i_worlds)
