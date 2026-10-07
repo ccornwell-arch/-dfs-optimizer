@@ -586,7 +586,10 @@ def render_main(settings):
                 with st.form("classic_player_editor_form",clear_on_submit=False):
                     edited=st.data_editor(ed,hide_index=True,use_container_width=True,height=620,
                         disabled=["ID","Name","Pos","Team","Opponent","Salary","Base Proj","Own"],
-                        column_order=["Name","Pos","Team","Opponent","Salary","Base Proj","Proj","Own","Lock","Exclude","Priority","Min Exposure","Max Exposure"],
+                        # iOS Safari ignores Streamlit's pinned columns, so Out/Lock sit
+                        # directly beside the player name — no horizontal scroll needed
+                        # to see which row is being edited.
+                        column_order=["Name","Exclude","Lock","Pos","Team","Opponent","Salary","Base Proj","Proj","Own","Priority","Min Exposure","Max Exposure"],
                         column_config={
                             "Name":st.column_config.TextColumn("Player",width=190,pinned=True),"Pos":st.column_config.TextColumn("Pos",width=60),
                             "Team":st.column_config.TextColumn("Team",width=70),"Opponent":st.column_config.TextColumn("Opponent",width=82),
@@ -1052,7 +1055,10 @@ def render_main(settings):
                     use_container_width=True,
                     height=650,
                     disabled=["ID","Name","Pos","Team","Flex $","DFS Base","Availability","Hist G","Matchup %","Model","Δ%","Own","CPT Own"],
-                    column_order=["Name","CPT Eligible","CPT Lock","Lock","Exclude","Priority","Availability","Pos","Team","Flex $","DFS Base","Hist G","Matchup %","Model","Your Proj","Δ%","Own","CPT Own","Min Exposure","Max Exposure","CPT Min","CPT Max"],
+                    # iOS Safari ignores Streamlit's pinned columns, so Out sits
+                    # directly beside the player name — inside the first screen
+                    # of the table with no horizontal scroll needed.
+                    column_order=["Name","Exclude","CPT Eligible","CPT Lock","Lock","Priority","Availability","Pos","Team","Flex $","DFS Base","Hist G","Matchup %","Model","Your Proj","Δ%","Own","CPT Own","Min Exposure","Max Exposure","CPT Min","CPT Max"],
                     column_config={
                         "ID":None,
                         "Name":st.column_config.TextColumn("Player",width=190,pinned=True),
