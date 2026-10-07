@@ -83,19 +83,21 @@ def render_setup():
         cc3,cc4=st.columns(2)
         with cc3: payout_style=st.selectbox("Payout",["GPP / top-heavy","Winner take all","Flatter payouts"],index=["GPP / top-heavy","Winner take all","Flatter payouts"].index(dpayout))
         with cc4:
-            lineup_choice=st.radio("My entries — lineups to build",[5,20,50,100,150,"Custom"],index=1,horizontal=True,key="dfs_lineup_choice",
-                help="How many lineups YOU are actually entering. Keys the game-world diversification: 5 or fewer can ride one theory at 100%; larger portfolios get capped per world so they cover more outcomes.")
+            lineup_choice=st.radio("Lineups to build",[5,20,50,100,150,"Custom"],index=1,horizontal=True,key="dfs_lineup_choice",
+                help="How many lineups the optimizer generates for you to review. Build more than you'll enter to have options — the game-world cap keeps this candidate pool diverse.")
             if lineup_choice=="Custom":
                 lineup_count=int(st.number_input("Custom lineup count",min_value=1,max_value=500,value=int(st.session_state.get("dfs_custom_lineups",100)),step=1,key="dfs_custom_lineups"))
             else:
                 lineup_count=int(lineup_choice)
-            st.markdown(f"<div class='lineup-count-readout'><b>{lineup_count}</b><span> lineups selected</span></div>",unsafe_allow_html=True)
+            my_entries=int(st.number_input("My entries — how many I'm actually playing",min_value=1,max_value=500,value=min(int(st.session_state.get("dfs_my_entries",lineup_count)),lineup_count),step=1,key="dfs_my_entries",
+                help="How many you'll actually enter in the contest. Used for the final export — download just your entries, not the full candidate pool."))
+            st.markdown(f"<div class='lineup-count-readout'><b>{lineup_count}</b><span> lineups built</span> · <b>{my_entries}</b><span> entered</span></div>",unsafe_allow_html=True)
             if entry_format!="Single Entry":
                 _emax=int(entry_format.split("-")[0])
-                if lineup_count>_emax:
-                    st.warning(f"You're building {lineup_count} lineups but the contest allows max {_emax}. Lower your entries or pick a higher contest max.")
-                elif lineup_count<_emax:
-                    st.caption(f"Building {lineup_count} of {_emax} max entries — diversification follows your {lineup_count}, field modeling follows the {_emax}-max contest.")
+                if my_entries>_emax:
+                    st.warning(f"You're entering {my_entries} lineups but the contest allows max {_emax}.")
+                elif lineup_count>_emax:
+                    st.caption(f"Building {lineup_count} candidates for review ({_emax}-max contest) — export your top {my_entries} when you're done.")
         with st.expander("Advanced build settings"):
             seed=st.number_input("Random seed",min_value=1,value=42,step=1)
             st.caption("Change this only when you want a different randomized batch.")
@@ -105,5 +107,6 @@ def render_setup():
         "entry_format": entry_format,
         "payout_style": payout_style,
         "lineup_count": lineup_count,
+        "my_entries": my_entries,
         "seed": seed,
     }

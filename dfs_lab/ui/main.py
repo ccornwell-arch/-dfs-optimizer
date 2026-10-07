@@ -182,6 +182,7 @@ def render_main(settings):
     entry_format = settings["entry_format"]
     payout_style = settings["payout_style"]
     lineup_count = settings["lineup_count"]
+    my_entries = int(settings.get("my_entries", lineup_count))
     seed = settings["seed"]
 
     # House theme first: inject every style block before any UI renders, so the
@@ -1644,6 +1645,10 @@ def render_main(settings):
                             _qd1,_qd2=st.columns(2)
                             with _qd1: st.download_button("Download analysis CSV",result.to_csv(index=False),"showdown_lineups_v6_4.csv","text/csv",use_container_width=True,key="quick_analysis_download")
                             with _qd2: st.download_button("Download DK-format CSV",showdown_upload_csv(result),"showdown_dk_upload_v6_4.csv","text/csv",use_container_width=True,key="quick_dk_download")
+                            if my_entries < len(result):
+                                _top_n = result.head(my_entries)
+                                st.download_button(f"Download my {my_entries} entries (top {my_entries} by grade)",showdown_upload_csv(_top_n),f"showdown_my_{my_entries}_entries.csv","text/csv",use_container_width=True,key="quick_my_entries_download")
+                                st.caption(f"Top {my_entries} by grade — review the full {len(result)} above and reorder if you prefer different ones.")
                             st.caption("Tip: on iPhone, downloading opens the Files preview — use the app switcher to come back here. Your lineups stay on this tab.")
                             st.button("📋 Back to My Lineups",key="sd_dl_back_to_lineups",use_container_width=True,on_click=_sd_nav_go,args=(_SD_TABS[5],))
 
