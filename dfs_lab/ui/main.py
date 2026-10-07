@@ -215,6 +215,64 @@ def render_main(settings):
         st.session_state["dfs_lab_ss_name"] = _cached.get("ss_name", "SaberSim.csv")
 
     _has_cached_slate=bool(st.session_state.get("dfs_lab_dk_bytes"))
+    if not _has_cached_slate:
+        st.markdown("""
+<div style="text-align:center; padding: 1.2rem 0 0.6rem;">
+<div style="font-size:2.6rem;">🧪</div>
+<div style="font-size:1.5rem; font-weight:800; letter-spacing:0.02em;">DFS LAB</div>
+<div style="opacity:0.75; margin-top:0.3rem;">Build the story. Test the lineup. Challenge the field.</div>
+</div>
+""", unsafe_allow_html=True)
+        st.markdown("""
+**What this does in 30 seconds:** you upload a DraftKings salary file, tell DFS LAB your game story
+(who wins, shootout or grind), and it builds optimized lineups with grades, game-world stories,
+and one-tap export back to DraftKings.
+
+**Your first build in 3 steps:**
+1. **Get your file** — DraftKings app → contest lobby → tap your contest → download the salaries CSV.
+   (Showdown: use the single-game "Showdown" CSV, not the main slate.)
+2. **Upload it below** — SaberSim is optional; without it DFS LAB builds its own projections.
+3. **Hit Generate** — review your lineups, then export the CSV straight to DraftKings.
+""")
+        with st.expander("📖 New here? Full user guide", expanded=False):
+            st.markdown("""
+### Getting your DraftKings file
+- **Showdown (single game):** DK app → Lobby → find your Showdown contest (e.g. "TB @ DAL Showdown") → tap it → look for the download/export salaries option → save the CSV.
+- **Classic (multi-game slate):** Same flow, but pick a main-slate contest (e.g. "NFL $500K Sunday").
+- Upload the CSV below. That's the only required file.
+
+### The tabs (Showdown)
+- **⚡ Build** — How many lineups, allowed team constructions (3-3, 4-2, 5-1), captain pairing rules, max kickers/defenses.
+- **👤 Players** — The roster table. Check **Out** to exclude, **Lock** for every lineup, **CPT** to captain-lock, **CPT?** to allow captain. Set target exposures. Tap **Apply player changes** when done.
+- **🔗 Relationships** — Stack rules (QB+pass catcher minimums, bring-backs).
+- **🧠 Game Intel** — Slate notes and matchup context.
+- **⚙ Rules** — Your game story: game script (shootout, blowout…), predicted score, scenario influence, world cap.
+- **📋 Lineups** — Your built portfolios, grades, stories, and exports.
+- **📊 Exposure** — Where your portfolio actually landed vs your targets.
+
+### Player rules, plain English
+- **Out** = never in any lineup. Use for injuries and inactives.
+- **Lock** = in every lineup. Use for your highest-conviction plays.
+- **CPT** = captain in every lineup. The strongest statement.
+- **CPT?** = allowed to captain (unchecked = never captains).
+- **Min/Max %** = target exposure across the portfolio.
+
+### Reading your results
+- **Grade (A+ … F):** overall lineup quality — projection, ceiling, correlation, leverage.
+- **Story:** the game script this lineup is built for.
+- **Game World:** which outcome bucket it belongs to (used for diversification).
+- **Dup Risk:** how likely other players have a similar lineup.
+
+### Exporting
+- **DK-format CSV** uploads directly to DraftKings (contest → "Upload lineups").
+- **My entries CSV** exports just your top N by grade when you built more than you're playing.
+
+### FAQ
+- **A player I marked Out is in my lineups?** You tapped the checkbox but not **Apply player changes** — the strip above the table warns you when edits are unsaved.
+- **"No captain-eligible players"?** Every CPT? box is unchecked. Check at least one, Apply, rebuild.
+- **Build failed with no lineups?** Your rules may be impossible together (e.g. too many locks + exclusions). Loosen one and retry.
+- **App went blank after a deploy?** Close the tab and reopen the URL fresh — your phone clings to the dead session.
+""")
     with st.expander("✓ SLATE LOADED · Change files" if _has_cached_slate else "＋ LOAD SLATE FILES", expanded=not _has_cached_slate):
         st.markdown('<div class="card-sub">DraftKings is required. Without a SaberSim file, DFS Lab builds its own projections and estimated ownership.</div>',unsafe_allow_html=True)
         u1,u2=st.columns(2)
@@ -972,6 +1030,23 @@ def render_main(settings):
                 effective_script="Neutral"; effective_team=""
             if sd_nav==_SD_TABS[0]:
                 st.markdown('<div class="card-title">Showdown Build</div><div class="card-sub">Control how the six-man portfolio is shaped before the optimizer starts solving.</div>',unsafe_allow_html=True)
+                with st.expander("📖 How to use DFS LAB (quick guide)", expanded=False):
+                    st.markdown("""
+**1. Set your contest** (setup screen): contest max, how many to build, how many you're playing.
+
+**2. Set your story** (⚙ Rules tab): pick a game script (shootout, blowout…), optionally enter a
+predicted score. This tilts projections and constructions toward your thesis.
+
+**3. Set player rules** (👤 Players tab): **Out** excludes, **Lock** = every lineup, **CPT** =
+captain every lineup, **CPT?** = may captain. Always tap **Apply player changes**.
+
+**4. Generate** (this tab): hit the big button. Review grades, stories, and game worlds in 📋 Lineups.
+
+**5. Export**: DK-format CSV uploads straight to DraftKings. "My entries" exports just your top N.
+
+**Glossary:** Grade = overall quality. Story = game script. Dup Risk = how chalky. World = outcome bucket.
+**Stuck?** "No captain-eligible" → check a CPT? box. "No lineups" → loosen a rule. Blank app → close tab, reopen.
+""")
                 st.markdown("#### Allowed team builds")
                 st.caption("Choose what is allowed — no percentages. 4-2 means four players from either team; 5-1 means five from either team.")
                 c1,c2,c3=st.columns(3)
