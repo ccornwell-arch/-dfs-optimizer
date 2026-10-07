@@ -896,20 +896,48 @@ def choose_construction_target(rng, teams, weights, script, script_team):
     heavy_team=script_team if directional else (teams[0] if rng.random()<0.5 else teams[1])
     return (heavy_team,max(a,b))
 
+def default_world_max_share(count):
+    """Smart default for the game-world diversification cap, keyed off how many
+    lineups the user is actually building (not the contest max).
+
+    A 5-lineup portfolio should be allowed to ride one theory; a 50-lineup
+    portfolio paying 50 entry fees should cover the outcome space instead of
+    making the same correlated bet 50 times.
+    """
+    count=int(count)
+    if count<=5: return 1.0
+    if count<=20: return 0.60
+    if count<=50: return 0.40
+    return 0.30
+
+def world_share_capped(world_counts, world, count, cap):
+    """True when `world` has already reached its allowed share of `count` lineups."""
+    if cap is None or cap>=1.0: return False
+    limit=max(1,int(math.ceil(float(cap)*int(count))))
+    return int(world_counts.get(world,0))>=limit
+
 def generate_showdown_lineups(df, field_size, payout_style, count, attempts, min_salary, max_salary,
                               construction_weights, script, script_team, strategy_map,
                               entry_format,
                               cpt_qb_passcatchers, wrte_cpt_qb_pair_pct, rb_cpt_dst_k_pct,
                               max_k, max_dst, min_unique, seed, relationship_rules=None, world_influence=50,
-                              show_progress=True):
+                              show_progress=True, world_max_share=None):
     """Generate a Showdown portfolio without wasting attempts on one randomly chosen build shape.
 
     V6.5 reliability change: every attempt now tries every user-allowed team construction
     (and both 4-2 / 5-1 orientations) before declaring that attempt infeasible. This keeps
     Game Worlds as preference/ordering, but a single impossible sampled construction can no
     longer make DFS LAB report "no legal lineup" when another allowed construction is legal.
+
+    world_max_share: max fraction of the portfolio any single game world may take
+        (0-1). None = smart default from lineup count via default_world_max_share().
+        The cap can never make a build infeasible: it is floored at 1/#worlds.
     """
     aggr=showdown_aggression(field_size,payout_style,entry_format); rng=np.random.default_rng(seed)
+    _wcap=float(world_max_share) if world_max_share else default_world_max_share(count)
+    _n_worlds=len(GAME_WORLDS) if GAME_WORLDS else 1
+    _wcap=min(1.0,max(_wcap,1.0/max(1,_n_worlds)))
+    world_counts=defaultdict(int)
     teams=[t for t in df["Team"].dropna().unique().tolist() if t]
     rows=[]; exposure=defaultdict(int); cpt_exp=defaultdict(int); previous=[]; seen=set()
 
@@ -938,6 +966,14 @@ def generate_showdown_lineups(df, field_size, payout_style, count, attempts, min
             break
 
         game_world=choose_game_world(rng,entry_format,field_size,script)
+        # World diversification cap: no single game world may exceed its share of
+        # the portfolio. Resample a few times; if the cap still binds, skip the
+        # attempt (the cap is floored at 1/#worlds, so it can never deadlock).
+        _wtries=0
+        while world_share_capped(world_counts,game_world,count,_wcap) and _wtries<12:
+            game_world=choose_game_world(rng,entry_format,field_size,script); _wtries+=1
+        if world_share_capped(world_counts,game_world,count,_wcap):
+            continue
         world_weights=world_construction_weights(construction_weights,game_world,entry_format)
         preferred=choose_construction_target(rng,teams,world_weights,script,script_team)
 
@@ -998,6 +1034,7 @@ def generate_showdown_lineups(df, field_size, payout_style, count, attempts, min
             continue
 
         seen.add(key)
+        world_counts[game_world]+=1
         detail=showdown_lineup_details(df,chosen,strategy_map,script,script_team,game_world)
         detail.update({
             "Coherence Score":coherence["Coherence Score"],

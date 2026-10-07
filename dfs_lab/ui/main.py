@@ -29,6 +29,7 @@ from dfs_lab.classic import (generate_lineups, classic_apply_qb_cap, classic_app
     calculate_exposure_table)
 from dfs_lab.showdown import (apply_context_engine, apply_showdown_scenario,
     audit_min_exposure, audit_showdown_portfolio, captain_pool_ids,
+    default_world_max_share,
     generate_showdown_lineups, infer_score_script, script_build_adjustments,
     showdown_exposure_table, showdown_upload_csv)
 from dfs_lab.theme import theme_css
@@ -877,7 +878,7 @@ def render_main(settings):
             st.error(f"Classic build error: {e}")
     else:
         try:
-            df=prepare_showdown_pool(dk_file,ss_file); teams=[t for t in df["Team"].dropna().unique().tolist() if t]
+            df=prepare_showdown_pool(dk_file,ss_file,entry_format=entry_format); teams=[t for t in df["Team"].dropna().unique().tolist() if t]
             if len(teams)!=2: st.warning(f"Showdown is one game (2 teams), but this file has {len(teams)}: {', '.join(teams[:8])}. Lineups will be built from the wrong player pool — re-upload the single-game DK Showdown salaries for the game you're playing.")
             nonzero_proj=int((pd.to_numeric(df["My Proj"],errors="coerce").fillna(0)>0.05).sum())
             nonzero_own=int((pd.to_numeric(df["My Own"],errors="coerce").fillna(0)>0).sum())
@@ -1286,6 +1287,10 @@ def render_main(settings):
                     team_scores={teams[0]:float(score0),teams[1]:float(score1)}
                 intensity=persistent_widget(st.slider,"sd_intensity",50,"Scenario influence",min_value=0,max_value=100,step=5,help="0 = ignore the game thesis. 50 = standard influence. 100 = strongest bounded scenario influence.")
                 st.caption(f"Game-thesis influence: {intensity}%")
+                _wcap_auto=int(round(default_world_max_share(lineup_count)*100))
+                wcap_pct=persistent_widget(st.number_input,"sd_world_max_share",0,"Max % of lineups per game world",min_value=0,max_value=100,step=5,help=f"0 = auto ({_wcap_auto}% for {lineup_count} lineups). Caps how much of the portfolio any single game world can take, so big portfolios cover more outcomes instead of repeating one theory.")
+                st.caption(f"World cap: {'auto ('+str(_wcap_auto)+'%)' if not wcap_pct else str(int(wcap_pct))+'%'}")
+                world_max_share=(float(wcap_pct)/100.0 if wcap_pct else None)
                 directional=script in ["Team wins close","Team dominates","Team plays from ahead","Team passing comeback"]
                 script_team=persistent_widget(st.selectbox,"sd_script_team","None","Script team",["None"]+teams,disabled=(not directional) or script=="Auto from score")
                 if script_team=="None": script_team=""
@@ -1383,7 +1388,7 @@ def render_main(settings):
                     st.error("No captain-eligible players — every CPT? box is unchecked (or excluded). Check **CPT?** for at least one player in 👤 Players (checking the **CPT** lock column counts too), tap **Apply player changes**, then generate again.")
                     st.session_state["showdown_result_v4"]=None
                 else:
-                    result=generate_showdown_lineups(build_df,field_size,payout_style,lineup_count,max(120,lineup_count*5),min_salary,max_salary,build_weights,effective_script,effective_team,strategy_map,entry_format,eff_qb_pc,eff_wrte_qb,eff_rb_ctrl,max_k,max_dst,min_unique,seed,relationship_rules=active_relationships,world_influence=intensity)
+                    result=generate_showdown_lineups(build_df,field_size,payout_style,lineup_count,max(120,lineup_count*5),min_salary,max_salary,build_weights,effective_script,effective_team,strategy_map,entry_format,eff_qb_pc,eff_wrte_qb,eff_rb_ctrl,max_k,max_dst,min_unique,seed,relationship_rules=active_relationships,world_influence=intensity,world_max_share=world_max_share)
                     # If percentage-based Captain pairing happens to over-constrain every sampled
                     # path, retry once with only the deterministic user rule for QB Captain and
                     # no probabilistic WR/TE/RB pairing. This is a targeted feasibility fallback,
@@ -1394,7 +1399,8 @@ def render_main(settings):
                             build_df,field_size,payout_style,lineup_count,max(80,lineup_count*3),
                             min_salary,max_salary,build_weights,effective_script,effective_team,
                             strategy_map,entry_format,eff_qb_pc,0,0,max_k,max_dst,min_unique,seed+17,
-                            relationship_rules=active_relationships,world_influence=intensity
+                            relationship_rules=active_relationships,world_influence=intensity,
+                            world_max_share=world_max_share
                         )
                         if _fallback is not None and not _fallback.empty:
                             result=_fallback
@@ -1412,7 +1418,8 @@ def render_main(settings):
                             build_df,field_size,payout_style,lineup_count,max(100,lineup_count*4),
                             min_salary,max_salary,build_weights,effective_script,effective_team,
                             strategy_map,entry_format,0,eff_wrte_qb,eff_rb_ctrl,max_k,max_dst,min_unique,seed+29,
-                            relationship_rules=active_relationships,world_influence=intensity
+                            relationship_rules=active_relationships,world_influence=intensity,
+                            world_max_share=world_max_share
                         )
                         if _qb_fallback is not None and not _qb_fallback.empty:
                             result=_qb_fallback

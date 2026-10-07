@@ -283,19 +283,26 @@ def _slate_season(df, fallback=2026):
     except Exception:
         return int(fallback)
 
-def estimate_ownership(df, proj_col="My Proj", salary_col="Salary", pos_col="Position"):
+def estimate_ownership(df, proj_col="My Proj", salary_col="Salary", pos_col="Position",
+                       total=900.0, dispersion=0.0, by_position=True):
     """V1 estimated field ownership.
 
     Combines projection, salary-implied value, and position baselines into a
-    self-consistent ownership estimate. The values are normalized to sum to 900
-    (9 roster spots x 100%), which is the accounting identity for any contest:
-    the field's total ownership across the slate must equal 900%.
+    self-consistent ownership estimate.
+
+    total: accounting target for the pool. 900 = classic 9 roster spots x 100%,
+        the identity that the field's total ownership must equal. 600 = showdown
+        6 roster spots x 100%.
+    by_position: when True, enforce per-position-group slot accounting
+        (classic: QB/DST groups + RB/WR/TE skill pool). When False, normalize
+        globally across the pool (showdown, where any position can fill FLEX,
+        including kickers).
+    dispersion: 0 = as-estimated. Higher blends toward uniform, modeling the
+        flatter field ownership of high-max-entry contests (a 150-Max field
+        owns the "contrarian" plays more than a single-entry field does).
 
     This is a directional estimate for leverage, NOT a proprietary projection.
     Callers should label it as estimated wherever it is displayed.
-
-    Position-group totals respect roster-slot accounting: QB 100 (one QB slot),
-    DST 100 (one DST slot), and RB/WR/TE share 700 (2 RB + 3 WR + 1 TE + 1 FLEX).
     """
     proj=pd.to_numeric(df[proj_col],errors="coerce").fillna(0.0).clip(lower=0.0)
     sal=pd.to_numeric(df[salary_col],errors="coerce").fillna(0.0)
@@ -305,14 +312,22 @@ def estimate_ownership(df, proj_col="My Proj", salary_col="Salary", pos_col="Pos
     base=pos.map(pos_base).fillna(0.9)
     vp=value.rank(pct=True); pp=proj.rank(pct=True)
     raw=base*(0.25+0.75*vp)*(0.45+0.55*pp)
-    raw=raw*(proj>0.05)
+    active=proj>0.05
+    raw=raw*active
     own=pd.Series(0.0,index=df.index)
-    groups={"QB":("QB",100.0),"DST":("DST",100.0)}
-    for grp,target in groups.values():
-        m=pos.eq(grp); tot=float(raw[m].sum())
-        if tot>0: own[m]=target*raw[m]/tot
-    skill=pos.isin(["RB","WR","TE"]); stot=float(raw[skill].sum())
-    if stot>0: own[skill]=700.0*raw[skill]/stot
+    if by_position:
+        groups={"QB":("QB",total/9.0),"DST":("DST",total/9.0)}
+        for grp,target in groups.values():
+            m=pos.eq(grp); tot=float(raw[m].sum())
+            if tot>0: own[m]=target*raw[m]/tot
+        skill=pos.isin(["RB","WR","TE"]); stot=float(raw[skill].sum())
+        if stot>0: own[skill]=(total*7.0/9.0)*raw[skill]/stot
+    else:
+        tot=float(raw.sum())
+        if tot>0: own=total*raw/tot
+    if dispersion>0 and bool(active.any()):
+        uniform=float(total)/float(active.sum())
+        own=own*(1.0-dispersion)+dispersion*uniform*active.astype(float)
     return own.round(1)
 
 def prepare_player_pool(dk_file, ss_file=None):
@@ -753,8 +768,14 @@ def apply_projection_overrides(df, override_map=None):
     out["DFS Lab Proj"]=np.array(finals).round(3); out["Projection Override"]=flags
     return out
 
-def prepare_showdown_pool(dk_file, ss_file=None):
-    """Create the Showdown pool. DFS Lab projections work with DK alone; SaberSim is optional comparison data."""
+def prepare_showdown_pool(dk_file, ss_file=None, entry_format=None):
+    """Create the Showdown pool. DFS Lab projections work with DK alone; SaberSim is optional comparison data.
+
+    entry_format: contest entry format ("Single Entry", "3-Max", "20-Max", "150-Max").
+        Used only to set the dispersion of the estimated ownership (flatter field
+        ownership in high-max-entry contests). SaberSim ownership, when present,
+        always wins and is never overwritten.
+    """
     dk=load_showdown_dk_template(dk_file)
     dk=dk.drop_duplicates(subset=["ID"],keep="first").drop_duplicates(subset=["Name","Team"],keep="first")
     df=dfs_lab_projection_engine(dk)
@@ -785,6 +806,26 @@ def prepare_showdown_pool(dk_file, ss_file=None):
             df["CPT Own Estimated"]=df["CPT Own Estimated"].fillna(True).astype(bool)
     # Compatibility: My Proj is now DFS Lab's independent baseline, not SaberSim.
     df["My Proj"]=pd.to_numeric(df["DFS Lab Base Proj"],errors="coerce").fillna(0.0)
+    _estimate_showdown_ownership(df, entry_format)
+def _estimate_showdown_ownership(df, entry_format=None):
+    """Fill My Own / CPT Own for a showdown pool when no SaberSim ownership exists.
+
+    SaberSim values always win when present. Otherwise estimate directionally:
+    showdown normalizes to 600 (6 roster spots x 100%), globally across the pool
+    (any position can fill FLEX, including kickers). CPT ownership falls back to
+    ~18% of FLEX, the same convention used when SaberSim lacks captain data.
+    Dispersion models flatter field ownership in high-max-entry contests.
+    Returns True when values were estimated.
+    """
+    _dispersion={"Single Entry":0.0,"3-Max":0.10,"20-Max":0.20,"150-Max":0.30}.get(entry_format,0.0)
+    _has_own=bool(pd.to_numeric(df["My Own"],errors="coerce").fillna(0.0).max()>0.01)
+    if not _has_own:
+        df["My Own"]=estimate_ownership(df,proj_col="My Proj",salary_col="FlexSalary",
+                                        pos_col="Position",total=600.0,
+                                        dispersion=_dispersion,by_position=False)
+        df["CPT Own"]=(pd.to_numeric(df["My Own"],errors="coerce").fillna(0.0)*0.18).clip(lower=0.1).round(1)
+    df["Own Estimated"]=bool(not _has_own)
+    return bool(not _has_own)
     away=[];home=[];matchup=[]
     for g in df["Game Info"]:
         a,h,m=parse_matchup(g);away.append(a);home.append(h);matchup.append(m)
