@@ -807,6 +807,24 @@ def prepare_showdown_pool(dk_file, ss_file=None, entry_format=None):
     # Compatibility: My Proj is now DFS Lab's independent baseline, not SaberSim.
     df["My Proj"]=pd.to_numeric(df["DFS Lab Base Proj"],errors="coerce").fillna(0.0)
     _estimate_showdown_ownership(df, entry_format)
+    away=[];home=[];matchup=[]
+    for g in df["Game Info"]:
+        a,h,m=parse_matchup(g);away.append(a);home.append(h);matchup.append(m)
+    df["Away"]=away;df["Home"]=home;df["Matchup"]=matchup
+    teams=[t for t in df["Team"].dropna().unique().tolist() if t]
+    if len(teams)==2:
+        opp={teams[0]:teams[1],teams[1]:teams[0]};df["Opponent"]=df["Team"].map(opp).fillna("")
+    else: df["Opponent"]=np.where(df["Team"]==df["Away"],df["Home"],df["Away"])
+    pos=df["Position"].astype(str).str.upper();df["is_QB"]=pos.eq("QB");df["is_RB"]=pos.eq("RB");df["is_WR"]=pos.eq("WR");df["is_TE"]=pos.eq("TE");df["is_DST"]=pos.isin(["DST","D/ST"]);df["is_K"]=pos.isin(["K","PK"]);df["is_passcatcher"]=df["is_WR"]|df["is_TE"]
+    df["ActiveForBuild"]=(df["My Proj"]>0.01)&(df["FlexSalary"]>0)
+
+    # Shared with Classic: apply the same football-reality gate before optimization.
+    df=apply_football_reality_guard(df,"FlexSalary","My Proj","ActiveForBuild")
+    df=apply_live_availability_guard(df,"ActiveForBuild",_slate_season(df))
+
+    configure_game_worlds(df)
+    return df.reset_index(drop=True)
+
 def _estimate_showdown_ownership(df, entry_format=None):
     """Fill My Own / CPT Own for a showdown pool when no SaberSim ownership exists.
 
@@ -826,20 +844,3 @@ def _estimate_showdown_ownership(df, entry_format=None):
         df["CPT Own"]=(pd.to_numeric(df["My Own"],errors="coerce").fillna(0.0)*0.18).clip(lower=0.1).round(1)
     df["Own Estimated"]=bool(not _has_own)
     return bool(not _has_own)
-    away=[];home=[];matchup=[]
-    for g in df["Game Info"]:
-        a,h,m=parse_matchup(g);away.append(a);home.append(h);matchup.append(m)
-    df["Away"]=away;df["Home"]=home;df["Matchup"]=matchup
-    teams=[t for t in df["Team"].dropna().unique().tolist() if t]
-    if len(teams)==2:
-        opp={teams[0]:teams[1],teams[1]:teams[0]};df["Opponent"]=df["Team"].map(opp).fillna("")
-    else: df["Opponent"]=np.where(df["Team"]==df["Away"],df["Home"],df["Away"])
-    pos=df["Position"].astype(str).str.upper();df["is_QB"]=pos.eq("QB");df["is_RB"]=pos.eq("RB");df["is_WR"]=pos.eq("WR");df["is_TE"]=pos.eq("TE");df["is_DST"]=pos.isin(["DST","D/ST"]);df["is_K"]=pos.isin(["K","PK"]);df["is_passcatcher"]=df["is_WR"]|df["is_TE"]
-    df["ActiveForBuild"]=(df["My Proj"]>0.01)&(df["FlexSalary"]>0)
-
-    # Shared with Classic: apply the same football-reality gate before optimization.
-    df=apply_football_reality_guard(df,"FlexSalary","My Proj","ActiveForBuild")
-    df=apply_live_availability_guard(df,"ActiveForBuild",_slate_season(df))
-
-    configure_game_worlds(df)
-    return df.reset_index(drop=True)
