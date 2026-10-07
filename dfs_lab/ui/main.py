@@ -1036,6 +1036,33 @@ def render_main(settings):
                 _sd_sort_col={"Salary":"FlexSalary","Projection":"DFS Lab Proj","Ownership":"My Own","Name":"Name"}[sd_sort_by]
                 view=view.sort_values(_sd_sort_col,ascending=(sd_sort_dir=="Low → High"),kind="mergesort").reset_index(drop=True)
 
+                # Live status strip: always show who's Out/Locked from SAVED settings,
+                # plus a warning if the table has unsaved edits. This is the trust
+                # anchor — the user should never wonder "did my Out tap register?"
+                _strat = st.session_state.get("showdown_strategy", {}) or {}
+                _id_to_nm = {str(r["ID"]): str(r["Name"]) for _, r in view.iterrows()}
+                _out_nms = sorted(_id_to_nm.get(pid, pid) for pid, s in _strat.items()
+                                  if isinstance(s, dict) and (s.get("Exclude") or s.get("Priority") == "Exclude"))
+                _lock_nms = sorted(_id_to_nm.get(pid, pid) for pid, s in _strat.items()
+                                   if isinstance(s, dict) and s.get("Lock") and not s.get("Exclude"))
+                _cpt_nms = sorted(_id_to_nm.get(pid, pid) for pid, s in _strat.items()
+                                   if isinstance(s, dict) and s.get("CPT Lock") and not s.get("Exclude"))
+                _sed_key_now = st.session_state.get("v4_sdplayers_key")
+                _pending = False
+                if _sed_key_now:
+                    _wstate = st.session_state.get(_sed_key_now, {})
+                    if isinstance(_wstate, dict) and _wstate.get("edited_rows"):
+                        _pending = True
+                if _out_nms or _lock_nms or _cpt_nms:
+                    _bits = []
+                    if _out_nms: _bits.append(f"🚫 Out ({len(_out_nms)}): " + ", ".join(_out_nms[:6]) + ("…" if len(_out_nms) > 6 else ""))
+                    if _lock_nms: _bits.append(f"🔒 Locked ({len(_lock_nms)}): " + ", ".join(_lock_nms[:6]) + ("…" if len(_lock_nms) > 6 else ""))
+                    if _cpt_nms: _bits.append(f"👑 CPT ({len(_cpt_nms)}): " + ", ".join(_cpt_nms[:6]) + ("…" if len(_cpt_nms) > 6 else ""))
+                    st.info(" · ".join(_bits))
+                else:
+                    st.caption("No players marked Out or Locked. Check Out to exclude a player from every lineup.")
+                if _pending:
+                    st.warning("⚠️ You have unsaved table changes — tap **Apply player changes** below so the build uses them.")
                 st.markdown("##### Quick lock")
                 _reset_col1,_reset_col2=st.columns([1,2])
                 with _reset_col1:
@@ -1797,7 +1824,16 @@ def render_main(settings):
                     st.caption("Tip: on iPhone, downloading opens the Files preview — use the app switcher to come back here.")
                     st.button("📋 Back to Lineups",key="sd_exposure_back_to_lineups",use_container_width=True,on_click=_sd_nav_go,args=(_SD_TABS[5],))
         except Exception as e:
-            st.error(f"Showdown build error: {e}")
+            _msg = str(e)
+            # Translate common failure modes into actionable guidance.
+            if "NoneType" in _msg and "subscriptable" in _msg:
+                st.error("Showdown build failed: the player pool didn't load correctly. Re-upload your DK salaries file and try again. If it persists, the file may be the wrong slate format.")
+            elif "captain" in _msg.lower() and "eligible" in _msg.lower():
+                st.error("Showdown build failed: no captain-eligible players. Check CPT? for at least one player in 👤 Players, tap Apply, and rebuild.")
+            elif "salary" in _msg.lower() or "infeasible" in _msg.lower():
+                st.error("Showdown build failed: no valid lineup fits your rules. Try loosening a lock, exclusion, or the QB-captain pass-catcher rule, then rebuild.")
+            else:
+                st.error(f"Showdown build hit a problem: {_msg}. Try rebuilding — if it keeps happening, screenshot this and send it over.")
 
 
 
