@@ -1,18 +1,19 @@
 """Regression tests for Game Worlds correctness.
 
-Two user-reported bugs (Sep 28, 2026, PHI@CHI slate):
+User-reported issues (TB@DAL slate, Oct 7, 2026):
 
-1. A "Caleb Williams ceiling" world was generated even though Williams is OUT
-   (inactive). Root cause: configure_game_worlds() picked the "primary QB"
-   from the nflverse depth-chart flag, which still pointed at the inactive
-   starter. Worlds must only be named after active (ActiveForBuild) players.
+1. Duplicate ceiling worlds: every slate generated both "{TEAM} passing ceiling"
+   and "{QB NAME} ceiling" worlds for the same team -- the same story twice,
+   eating ~20% of the portfolio. Worse, the QB-named world could go stale: a
+   "Baker Mayfield ceiling" world survived after Mayfield was ruled OUT
+   (Sep 28 had the same bug with Caleb Williams). QB-named worlds were removed
+   entirely; one team-named passing-ceiling world per team. Teams can't be
+   inactive, so the stale-name class is gone.
 
 2. Under a "Low-scoring game" scenario the portfolio still drew ~16% from the
    inactive QB's ceiling world and ~14% each from both passing-ceiling worlds:
-   only the "shootout" family was downweighted, while pass_ceiling/qb_ceiling
-   kept full weight -- nearly contradicting the user's thesis. Low-scoring
-   scripts now downweight those families too (kept as rare alternatives, not
-   removed).
+   only the "shootout" family was downweighted. Low-scoring scripts now
+   downweight passing families too (kept as rare alternatives, not removed).
 
 Run from repo root:  python3 tests/test_game_worlds.py
 """
@@ -48,22 +49,19 @@ def _slate_df():
     })
 
 
-def test_no_world_named_after_inactive_qb():
+def test_no_qb_named_worlds():
+    # QB-named ceiling worlds were removed: they duplicated the team's
+    # passing-ceiling world and could name an inactive player (Baker Mayfield,
+    # Oct 7 2026; Caleb Williams, Sep 28 2026). Only team-named worlds remain.
     sd.configure_game_worlds(_slate_df())
     names = list(sd.GAME_WORLDS.keys())
     _check("no Caleb Williams ceiling world", "Caleb Williams ceiling" not in names)
-    _check("active backup gets the ceiling world instead",
-           "Case Keenum ceiling" in names)
-    _check("active PHI QB keeps his world", "Jalen Hurts ceiling" in names)
-
-
-def test_no_active_qb_means_no_qb_world():
-    df = _slate_df()
-    df.loc[df["Team"].eq("CHI"), "ActiveForBuild"] = False
-    sd.configure_game_worlds(df)
-    names = list(sd.GAME_WORLDS.keys())
-    _check("no CHI qb-ceiling world when no active CHI QB",
-           "Case Keenum ceiling" not in names and "Caleb Williams ceiling" not in names)
+    _check("no Case Keenum ceiling world", "Case Keenum ceiling" not in names)
+    _check("no Jalen Hurts ceiling world", "Jalen Hurts ceiling" not in names)
+    _check("no world named after any rostered QB",
+           not any(n.endswith("ceiling") and "passing" not in n for n in names))
+    _check("team passing-ceiling worlds still exist",
+           "CHI passing ceiling" in names and "PHI passing ceiling" in names)
 
 
 def test_low_script_downweights_passing_worlds():
@@ -71,7 +69,6 @@ def test_low_script_downweights_passing_worlds():
     neutral = sd.contest_world_weights("20-Max", 50000, "Neutral")
     low = sd.contest_world_weights("20-Max", 50000, "Low-scoring game")
     for fam, world in [("pass_ceiling", "CHI passing ceiling"),
-                       ("qb_ceiling", "Case Keenum ceiling"),
                        ("comeback", "PHI leads / CHI comeback")]:
         _check(f"{fam} world downweighted under low-scoring script",
                low[world] < neutral[world])
@@ -79,7 +76,7 @@ def test_low_script_downweights_passing_worlds():
            low["Low-scoring game"] > neutral["Low-scoring game"])
     # Alternatives survive: nothing is zeroed out entirely.
     _check("passing worlds remain possible (not eliminated)",
-           all(low[w] > 0 for w in ["CHI passing ceiling", "Case Keenum ceiling"]))
+           low["CHI passing ceiling"] > 0)
 
 
 def test_directional_thesis_leads_world_mix():
@@ -109,8 +106,7 @@ def test_directional_thesis_leads_world_mix():
 
 
 if __name__ == "__main__":
-    test_no_world_named_after_inactive_qb()
-    test_no_active_qb_means_no_qb_world()
+    test_no_qb_named_worlds()
     test_low_script_downweights_passing_worlds()
     test_directional_thesis_leads_world_mix()
     print("game world tests done")

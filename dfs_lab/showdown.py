@@ -40,23 +40,10 @@ def configure_game_worlds(df):
         if t in teams and t not in ordered: ordered.append(t)
     a,b=ordered[:2]
 
-    def primary_qb(team):
-        q=df[df["Team"].eq(team)&df["is_QB"]].copy()
-        if q.empty: return ""
-        # Never name a world after a quarterback who is not playing: the
-        # depth-chart "Primary QB" flag can still point at an inactive player
-        # (e.g. an OUT starter), which produced nonsense like a
-        # "Caleb Williams ceiling" world for a game he is not playing in.
-        if "ActiveForBuild" in q.columns:
-            q_active=q[q["ActiveForBuild"].fillna(True).astype(bool)]
-            if q_active.empty: return ""
-            q=q_active
-        marked=q[q.get("Primary QB",False).astype(bool)] if "Primary QB" in q.columns else pd.DataFrame()
-        if not marked.empty: return str(marked.iloc[0]["Name"])
-        q=q.sort_values(["FlexSalary","AvgPointsPerGame","My Proj"],ascending=False)
-        return str(q.iloc[0]["Name"])
-
-    qa,qb=primary_qb(a),primary_qb(b)
+    # One ceiling world per team, named for the team. A separate "{QB} ceiling"
+    # world duplicated the team's passing-ceiling story (same QB, same outcome)
+    # and could go stale when a starter was ruled out mid-week, so QB-named
+    # worlds were removed entirely.
     worlds={
         "Balanced shootout":{"family":"shootout","desc":f"{a} and {b} both produce; scoring is spread across primary pieces."},
         f"{a} passing ceiling":{"family":"pass_ceiling","team":a,"desc":f"{a} scoring concentrates through its primary quarterback and pass catchers."},
@@ -67,10 +54,6 @@ def configure_game_worlds(df):
         f"{b} leads / {a} comeback":{"family":"comeback","lead":b,"trail":a,"desc":f"{b} plays from ahead while {a} answers with elevated passing volume."},
         "Low-scoring game":{"family":"low","desc":"Scoring disappoints; kickers, defenses and concentrated touchdown paths gain importance."},
     }
-    if qa:
-        worlds[f"{qa} ceiling"]={"family":"qb_ceiling","team":a,"player":qa,"desc":f"{qa} captures an outsized share of {a}'s fantasy production."}
-    if qb:
-        worlds[f"{qb} ceiling"]={"family":"qb_ceiling","team":b,"player":qb,"desc":f"{qb} captures an outsized share of {b}'s fantasy production."}
     GAME_WORLDS=worlds
     return GAME_WORLDS
 
@@ -82,10 +65,10 @@ def contest_world_weights(entry_format, field_size, script="Neutral"):
     if not GAME_WORLDS:
         return {"Balanced shootout":1.0}
     family_base={
-        "Single Entry":{"shootout":36,"pass_ceiling":15,"qb_ceiling":8,"rb_control":7,"comeback":5,"low":2},
-        "3-Max":{"shootout":27,"pass_ceiling":16,"qb_ceiling":10,"rb_control":8,"comeback":6,"low":3},
-        "20-Max":{"shootout":20,"pass_ceiling":16,"qb_ceiling":11,"rb_control":9,"comeback":8,"low":3},
-        "150-Max":{"shootout":13,"pass_ceiling":15,"qb_ceiling":12,"rb_control":10,"comeback":10,"low":5},
+        "Single Entry":{"shootout":36,"pass_ceiling":15,"rb_control":7,"comeback":5,"low":2},
+        "3-Max":{"shootout":27,"pass_ceiling":16,"rb_control":8,"comeback":6,"low":3},
+        "20-Max":{"shootout":20,"pass_ceiling":16,"rb_control":9,"comeback":8,"low":3},
+        "150-Max":{"shootout":13,"pass_ceiling":15,"rb_control":10,"comeback":10,"low":5},
     }
     base=family_base.get(entry_format,family_base["20-Max"])
     w={name:float(base.get(cfg.get("family"),5)) for name,cfg in GAME_WORLDS.items()}
@@ -102,13 +85,12 @@ def contest_world_weights(entry_format, field_size, script="Neutral"):
             # A low-scoring thesis contradicts passing-ceiling worlds too: keep
             # them as rare alternatives, not full-weight draws.
             elif cfg.get("family")=="pass_ceiling": w[name]*=0.5
-            elif cfg.get("family")=="qb_ceiling": w[name]*=0.6
             elif cfg.get("family")=="comeback": w[name]*=0.7
 
     if field_size>=50000 and entry_format=="150-Max":
         for name,cfg in GAME_WORLDS.items():
             if cfg.get("family")=="shootout": w[name]*=0.8
-            elif cfg.get("family") in ["low","qb_ceiling"]: w[name]*=1.25
+            elif cfg.get("family")=="low": w[name]*=1.25
 
     # A directional game thesis should dominate the world mix, not sit inside
     # it as a small side bet. Lift the thesis family to a ~45% plurality; the
@@ -149,10 +131,6 @@ def game_world_bonus(row, world_name, influence=50):
         if same and row["is_passcatcher"]: b+=2.4
         if same and row["is_RB"]: b-=0.5
         if not same and (row["is_QB"] or row["is_passcatcher"]): b+=0.8
-    elif fam=="qb_ceiling":
-        if str(row["Name"])==cfg.get("player"): b+=4.2
-        elif team==cfg.get("team") and row["is_passcatcher"]: b+=0.7
-        elif team==cfg.get("team") and row["is_RB"]: b-=0.6
     elif fam=="rb_control":
         same=team==cfg.get("team")
         if same and row["is_RB"]: b+=3.0
@@ -175,7 +153,7 @@ def world_construction_weights(base_weights, world_name, entry_format):
     allowed={k:float(base_weights.get(k,0))>0 for k in ["3-3","4-2","5-1"]}
     fam=GAME_WORLDS.get(world_name,{}).get("family")
     if fam in ["shootout","comeback"]: desired={"3-3":58,"4-2":38,"5-1":4}
-    elif fam in ["pass_ceiling","qb_ceiling"]: desired={"3-3":42,"4-2":50,"5-1":8}
+    elif fam=="pass_ceiling": desired={"3-3":42,"4-2":50,"5-1":8}
     elif fam=="rb_control": desired={"3-3":30,"4-2":55,"5-1":15}
     else: desired={"3-3":34,"4-2":50,"5-1":16}
     if entry_format=="Single Entry": desired["5-1"]*=0.35; desired["3-3"]*=1.18
@@ -755,13 +733,6 @@ def showdown_lineup_coherence(df, chosen, game_world=None):
             score-=20; warnings.append(f"{game_world} is only a weak match because it lacks a {trail} passing piece")
         else:
             score+=3
-    elif fam=="qb_ceiling":
-        player=str(cfg.get("player",""))
-        if player and not p["Name"].astype(str).eq(player).any():
-            score-=24; warnings.append(f"{game_world} is only a weak match because it does not contain {player}")
-        elif player:
-            score+=4
-
     # Captain-specific sense checks. These are soft because leverage can justify
     # unconventional but still plausible structures.
     cteam=str(cpt["Team"])
