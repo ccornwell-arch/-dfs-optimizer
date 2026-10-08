@@ -275,6 +275,51 @@ def apply_live_availability_guard(df, active_col="ActiveForBuild", season=2026):
         out.attrs["availability_warning"]=f"Live availability could not be verified: {e}"
     return out
 
+def availability_freshness_note(df, today_et=None):
+    """Warn when injury news may be newer than Aytia's availability data.
+
+    nflverse injury snapshots lag the final injury reports — e.g. Baker Mayfield
+    was ruled out for TNF on Wed 10/07/2026, after that week's snapshot — and
+    they never include game-day inactives. So when a slate game is today or
+    tomorrow (ET), the guard's data may already be stale: newly-ruled-out
+    players will NOT be auto-excluded and the user must verify manually.
+
+    Returns a warning string, or None when there is nothing to warn about.
+    `today_et` overrides "today" (used by tests).
+    """
+    import re, datetime
+    try:
+        _load_live_nfl_availability(_slate_season(df))
+    except Exception:
+        return ("Aytia couldn't reach live roster/injury data, so availability was not "
+                "checked — no one was auto-excluded. Mark outs manually in Players → "
+                "Quick lock → Out, then rebuild.")
+    try:
+        et = datetime.timezone(datetime.timedelta(hours=-4))  # EDT; day-boundary precision is all we need
+        today = today_et or datetime.datetime.now(et).date()
+        soon = []
+        gi = df.get("Game Info", pd.Series(dtype=str)).astype(str) if hasattr(df, "get") else pd.Series(dtype=str)
+        for g in gi:
+            m = re.search(r"([A-Z]{2,3})\s*@\s*([A-Z]{2,3})\s+(\d{1,2})/(\d{1,2})/(20\d{2})", str(g))
+            if not m:
+                continue
+            away, home, mo, da, yr = m.groups()
+            gd = datetime.date(int(yr), int(mo), int(da))
+            if today <= gd <= today + datetime.timedelta(days=1):
+                soon.append((gd, f"{away} @ {home}"))
+        if not soon:
+            return None
+        soon.sort()
+        gd, matchup = soon[0]
+        when = "today" if gd == today else "tomorrow"
+        extra = "" if len(soon) == 1 else f" (+{len(soon)-1} more)"
+        return (f"Heads up: {matchup} kicks off {when} ({gd.strftime('%b %d')}){extra}. "
+                "Final injury news can break after Aytia's data refreshes — a player ruled "
+                "out since the last report will NOT be auto-excluded. Check the latest news, "
+                "mark any outs in Players → Quick lock → Out, then rebuild.")
+    except Exception:
+        return None
+
 def _slate_season(df, fallback=2026):
     import re
     try:

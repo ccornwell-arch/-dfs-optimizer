@@ -21,7 +21,7 @@ from dfs_lab.common import player_editor_widget_key
 from dfs_lab.config import APP_BUILD, PRIORITY_OPTIONS, ROSTER_SLOTS, git_build_stamp
 from dfs_lab.leverage import leverage_lane_pick, chalk_bust_beneficiaries
 from dfs_lab.ui.results import render_results_command_center, postbuild_lineups_context
-from dfs_lab.data import prepare_player_pool, prepare_showdown_pool, apply_projection_overrides, apply_post_edit_availability_gate
+from dfs_lab.data import prepare_player_pool, prepare_showdown_pool, apply_projection_overrides, apply_post_edit_availability_gate, availability_freshness_note
 from dfs_lab.classic import (generate_lineups, classic_apply_qb_cap, classic_apply_qb_exclusions,
     classic_contest_recommendations, classic_context_evidence,
     classic_portfolio_intelligence, classic_postbuild_answer, classic_postbuild_report,
@@ -583,6 +583,9 @@ def render_main(settings):
                             },
                         )
                     st.caption("Backup QBs, players with no usable projection, and live OUT/inactive statuses are removed before the build — no manual exclusion needed.")
+                _fresh_note = availability_freshness_note(df)
+                if _fresh_note:
+                    st.warning(_fresh_note)
                 build_btn=st.button(f"⚡ GENERATE {lineup_count} RATED LINEUPS",type="primary",use_container_width=True,key="v4_classic_build")
 
             if classic_nav==_CLASSIC_TABS[2]:
@@ -1006,6 +1009,9 @@ def render_main(settings):
                 d,e=st.columns(2)
                 with d:max_k=persistent_widget(st.selectbox,"sd_max_k",2,"Max kickers",[0,1,2])
                 with e:max_dst=persistent_widget(st.selectbox,"sd_max_dst",1,"Max defenses",[0,1,2])
+                _sd_fresh_note = availability_freshness_note(df)
+                if _sd_fresh_note:
+                    st.warning(_sd_fresh_note)
                 build_btn=st.button(f"⚡ GENERATE {lineup_count} LINEUPS",type="primary",use_container_width=True,key="v4_sd_build")
 
             if sd_nav==_SD_TABS[1]:
