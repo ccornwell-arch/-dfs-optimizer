@@ -26,4 +26,7 @@ def render_app():
     # It was accidentally indented inside the `if` above during the refactor,
     # which blanked the page on any widget-triggered rerun.
     settings = setup.render_setup()
+    # Persist for multipage: pages/*.py boot from session state instead of
+    # re-rendering the setup controls.
+    st.session_state["aytia_settings"] = settings
     main.render_main(settings)
