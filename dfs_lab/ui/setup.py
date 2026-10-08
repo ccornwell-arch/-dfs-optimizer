@@ -33,6 +33,19 @@ def _brand_logo_img(cls="lab-flask-img"):
         return '<span class="lab-flask">α</span>'
 
 
+def _disc_a_img(px=46):
+    """The logo's gold disc + alpha, cropped from the logo file, used as the
+    wordmark's 'a': [disc]ytia. Falls back to a serif alpha glyph."""
+    try:
+        # setup.py is dfs_lab/ui/setup.py; the medallion lives in repo-root assets/.
+        p = Path(__file__).resolve().parent.parent.parent / "assets" / "aytia-disc-a.png"
+        b64 = base64.b64encode(p.read_bytes()).decode("ascii")
+        return (f'<img class="lab-disc-a" alt="a" style="height:{px}px;width:{px}px;" '
+                f'src="data:image/png;base64,{b64}"/>')
+    except Exception:
+        return '<span class="lab-flask">α</span>'
+
+
 def render_setup():
     """Pre-upload setup page (moved verbatim from streamlit_app.py)."""
     st.markdown(styles.SETUP_BASE_CSS, unsafe_allow_html=True)
@@ -62,15 +75,14 @@ def render_setup():
     st.markdown(styles.SETUP_APPBAR_DARK_CSS, unsafe_allow_html=True)
 
     st.markdown(f'''<div class="lab-appbar">
-  <div class="lab-brand">{_brand_logo_img()}<b>aytia</b></div>
+  <div class="lab-brand">{_disc_a_img(46)}<b>ytia</b></div>
   <div class="lab-appbar-copy"><strong>NFL DFS COMMAND CENTER</strong><span>Build · Explore · Challenge</span></div>
   <div class="lab-live"><i></i> LIVE SLATE</div>
 </div>''',unsafe_allow_html=True)
 
     st.markdown(f"""
 <div style="text-align:center; padding: 1.2rem 0 0.6rem;">
-<div>{_brand_logo_img("lab-hero-img")}</div>
-<div style="font-family:'Source Serif 4',Georgia,'Times New Roman',serif; font-size:2.1rem; font-weight:700; letter-spacing:0.01em; margin-top:0.6rem;">aytia</div>
+<div style="display:flex;align-items:center;justify-content:center;gap:5px;font-family:'Source Serif 4',Georgia,'Times New Roman',serif; font-size:3rem; font-weight:700; letter-spacing:0.01em;">{_disc_a_img(76)}<span>ytia</span></div>
 <div style="opacity:0.75; margin-top:0.3rem;">Start with a belief. Update it with evidence.</div>
 </div>
 """, unsafe_allow_html=True)

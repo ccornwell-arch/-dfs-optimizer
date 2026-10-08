@@ -1392,7 +1392,8 @@ html body #root .lineup-count-readout b{color:var(--rcc-accent2)!important;-webk
 # light/dark stylesheet tug-of-war (incl. -webkit-text-fill-color on iPad).
 SETUP_APPBAR_DARK_CSS = """<style>
 [data-testid="stAppViewContainer"] .lab-appbar{background:linear-gradient(135deg,#0b1728 0%,#12263d 100%)!important;border:1px solid #1e3a56!important;border-radius:16px!important;padding:12px 16px 14px!important;margin-bottom:12px!important;}
-[data-testid="stAppViewContainer"] .lab-appbar .lab-brand{color:#fff!important;-webkit-text-fill-color:#fff!important;font-family:'Source Serif 4',Georgia,'Times New Roman',serif!important;}
+[data-testid="stAppViewContainer"] .lab-appbar .lab-brand{color:#fff!important;-webkit-text-fill-color:#fff!important;font-family:'Source Serif 4',Georgia,'Times New Roman',serif!important;gap:3px!important;}
+[data-testid="stAppViewContainer"] .lab-appbar .lab-brand .lab-disc-a{flex:0 0 auto;}
 [data-testid="stAppViewContainer"] .lab-appbar .lab-brand b{color:#fff!important;-webkit-text-fill-color:#fff!important;font-weight:700!important;}
 [data-testid="stAppViewContainer"] .lab-appbar .lab-appbar-copy{border-left:1px solid #294057!important;}
 [data-testid="stAppViewContainer"] .lab-appbar .lab-appbar-copy strong{color:#d8e6f5!important;-webkit-text-fill-color:#d8e6f5!important;}
