@@ -1,8 +1,8 @@
-"""House theme for Aytia: Midnight Ice.
+"""House theme for Aytia: Aytia Gold.
 
 A single dynamic <style> block, injected last in the cascade, that paints the
 app's brand touchpoints (primary buttons, selected nav pill, selected tabs,
-CPT badge, kickers, links, wordmark accent) in ice cyan over the midnight
+CPT badge, kickers, links, wordmark accent) in logo gold over the deep navy
 base. Team theming was scrapped Sep 2026; theme.py stays as the single brand
 source. Pure: no Streamlit calls.
 """
@@ -45,11 +45,12 @@ TEAM_COLORS = {
     "WAS": ("Washington Commanders", "#FFB612", "#5A1414"),
 }
 
-# The house theme: Midnight Ice (deep navy + ice cyan). Chosen Sep 2026 after
-# the neon volt yellow was rejected for readability.
-DEFAULT_NAME = "Midnight Ice"
-DEFAULT_ACCENT = "#6FD3F2"
-DEFAULT_ACCENT2 = "#4D8DFF"
+# The house theme: Aytia Gold (deep navy + logo gold). The gold is sampled
+# from assets/aytia-logo.webp (#E0A020); the secondary is bronze, its
+# analogous partner on the color wheel.
+DEFAULT_NAME = "Aytia Gold"
+DEFAULT_ACCENT = "#E0A020"
+DEFAULT_ACCENT2 = "#C99A4B"
 
 
 def _hex_to_rgb(h):
@@ -80,14 +81,16 @@ def _shade(h, amt):
     return _mix(h, "#000000", amt)
 
 
-# Legacy dark surfaces (the pre-theme values). Used when no team is picked so
-# the house Midnight Ice theme is pixel-identical to before.
+# House dark surfaces. Used when no team is picked so the house Aytia Gold
+# theme renders on the familiar deep-navy base; the accent entries carry the
+# logo gold (accent_dim is the gold darkened toward the base, matching
+# _darken(accent, 0.5)).
 LEGACY_SURFACES = {
     "rcc_bg": "#101418", "rcc_bg2": "#0b0f13",
     "rcc_panel": "#151b23", "rcc_panel2": "#1b232e", "rcc_panel3": "#222c39",
     "rcc_line": "#2b3644", "rcc_line2": "#354252",
     "rcc_text": "#eef3f8", "rcc_muted": "#94a5b8",
-    "rcc_accent": "#5b9dff", "rcc_accent2": "#7fb3ff", "rcc_accent_dim": "#274b73",
+    "rcc_accent": "#E0A020", "rcc_accent2": "#C99A4B", "rcc_accent_dim": "#75571A",
 }
 
 
@@ -145,8 +148,14 @@ def _rgba(h, a):
 
 
 def on_accent(h):
-    """Readable text color on top of the accent: near-black on bright accents."""
-    return "#11151D" if _luminance(h) > 0.42 else "#FFFFFF"
+    """Readable text color on top of the accent: near-black on bright accents.
+
+    The threshold sits at 0.30 because the logo gold (#E0A020, luminance
+    ~0.41) and its gradient midpoint (#D0951E, ~0.35) both need near-black
+    text: white on gold is only ~2.3:1 contrast. Accents darker than that
+    keep white text.
+    """
+    return "#11151D" if _luminance(h) > 0.30 else "#FFFFFF"
 
 
 def resolve_theme(team_abbr=None):

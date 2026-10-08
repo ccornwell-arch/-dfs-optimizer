@@ -1,8 +1,8 @@
 """Team-color theming: 32-team map, auto-lift for dark accents, single CSS block.
 
-The house theme must keep button text readable: the accent is ice cyan,
+The house theme must keep button text readable: the accent is logo gold,
 and text on the button gradient is judged at the gradient midpoint.
-Unknown/empty picks fall back to the Midnight Ice house theme.
+Unknown/empty picks fall back to the Aytia Gold house theme.
 """
 import re
 
@@ -48,18 +48,18 @@ def test_duotone_keys_present():
 
 
 def test_on_accent_contrast():
-    assert on_accent("#6FD3F2") == "#11151D"   # ice cyan -> dark text
+    assert on_accent("#E0A020") == "#11151D"   # logo gold -> dark text
     assert on_accent("#E31837") == "#FFFFFF"   # chiefs red -> white text
     t = resolve_theme("GB")
     assert t["on_accent"] in ("#11151D", "#FFFFFF")
 
 
-def test_default_is_midnight_ice():
+def test_default_is_aytia_gold():
     for abbr in (None, "", "XXX"):
         t = resolve_theme(abbr)
         assert t["abbr"] is None
-        assert t["name"] == "Midnight Ice"
-        assert t["accent"] == "#6FD3F2"
+        assert t["name"] == "Aytia Gold"
+        assert t["accent"] == "#E0A020"
 
 
 def test_button_gradient_text_stays_readable():
@@ -143,7 +143,7 @@ def test_css_selectors_beat_legacy_specificity():
 
 def test_team_options_default_first_and_sorted():
     opts = team_options()
-    assert opts[0] == (None, "Midnight Ice")
+    assert opts[0] == (None, "Aytia Gold")
     names = [n for _, n in opts[1:]]
     assert names == sorted(names)
     assert len(opts) == 33

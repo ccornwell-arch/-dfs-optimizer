@@ -188,7 +188,7 @@ def render_main(settings):
     # House theme first: inject every style block before any UI renders, so the
     # setup screen (which stops the script before any upload) is dark from the
     # first paint — no light-background flash that later flips to dark.
-    # Single color scheme: Midnight Ice house theme. (Team theming scrapped
+    # Single color scheme: Aytia Gold house theme. (Team theming scrapped
     # Sep 2026; dfs_lab/theme.py is kept for a future revisit.)
     st.markdown(styles.MAIN_V634_SHELL_CSS, unsafe_allow_html=True)
     st.markdown(styles.MAIN_DYNAMIC_SHELL_CSS, unsafe_allow_html=True)
