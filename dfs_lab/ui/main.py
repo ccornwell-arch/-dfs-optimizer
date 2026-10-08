@@ -622,7 +622,7 @@ def render_main(settings):
                     st.session_state.pop(_ced_prev,None)
                 st.session_state["v4_classic_players_key"]=_ced_key
                 with st.form("classic_player_editor_form",clear_on_submit=False):
-                    apply_classic_players_top=st.form_submit_button("APPLY PLAYER EDITS",type="primary",use_container_width=True)
+                    apply_classic_players_top=st.form_submit_button("APPLY PLAYER EDITS",type="primary",use_container_width=True,key="classic_apply_top")
                     edited=st.data_editor(ed,hide_index=True,use_container_width=True,height=620,
                         disabled=["ID","Name","Pos","Team","Opponent","Salary","Base Proj","Own"],
                         # iOS Safari ignores Streamlit's pinned columns, so Out/Lock sit
@@ -1125,7 +1125,7 @@ def render_main(settings):
                     st.session_state.pop(_sed_prev,None)
                 st.session_state["v4_sdplayers_key"]=_sed_key
                 with st.form("showdown_player_editor_form", clear_on_submit=False):
-                    apply_player_changes_top=st.form_submit_button("Apply player changes",type="primary",use_container_width=True)
+                    apply_player_changes_top=st.form_submit_button("Apply player changes",type="primary",use_container_width=True,key="sd_apply_top")
                     edited=st.data_editor(
                         ed,
                     hide_index=True,
