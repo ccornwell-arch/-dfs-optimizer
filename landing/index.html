@@ -1,0 +1,662 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#0D0B29" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%230D0B29'/%3E%3Ccircle cx='32' cy='32' r='22' fill='%23E0A020' stroke='white' stroke-width='5'/%3E%3Ctext x='32' y='42' text-anchor='middle' font-family='Georgia,serif' font-size='34' font-weight='700' fill='white'%3Eα%3C/text%3E%3C/svg%3E" />
+    <title>Aytia — NFL DFS Lineup Builder</title>
+    <meta name="description" content="Build NFL DFS lineups around your game story, test them across 10,000 simulated worlds, and export straight to DraftKings." />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,700&display=swap" rel="stylesheet" />
+    <style>
+      :root {
+        --ink: #ffffff;
+        --muted: #c7c4d5;
+        --subtle: #9691ab;
+        --page: #0d0b29;
+        --page-2: #101418;
+        --panel: #17152f;
+        --panel-2: #211e3b;
+        --line: #35314f;
+        --line-strong: #514b6d;
+        --gold: #e0a020;
+        --gold-ink: #161009;
+        --bronze: #c99a4b;
+        --shadow: rgba(0, 0, 0, 0.38);
+        --max: 1180px;
+      }
+
+      @media (prefers-color-scheme: light) {
+        :root {
+          --ink: #ffffff;
+          --muted: #d1cedd;
+          --subtle: #a49fb6;
+          --page: #0d0b29;
+          --page-2: #121620;
+          --panel: #1b1835;
+          --panel-2: #242140;
+          --line: #3b3657;
+          --line-strong: #5a5375;
+          --gold: #e0a020;
+          --gold-ink: #161009;
+          --bronze: #c99a4b;
+          --shadow: rgba(0, 0, 0, 0.34);
+        }
+      }
+
+      * { box-sizing: border-box; }
+      html { scroll-behavior: smooth; }
+      body {
+        margin: 0;
+        min-width: 320px;
+        background:
+          linear-gradient(90deg, color-mix(in srgb, var(--line) 27%, transparent) 1px, transparent 1px) center / 84px 84px,
+          linear-gradient(color-mix(in srgb, var(--line) 27%, transparent) 1px, transparent 1px) center / 84px 84px,
+          var(--page);
+        color: var(--ink);
+        font-family: "IBM Plex Sans", sans-serif;
+        line-height: 1.55;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      a { color: inherit; }
+      button, a { -webkit-tap-highlight-color: transparent; }
+
+      .skip-link {
+        position: fixed;
+        left: 16px;
+        top: -80px;
+        z-index: 30;
+        padding: 10px 14px;
+        background: var(--gold);
+        color: var(--gold-ink);
+        font-weight: 700;
+        text-decoration: none;
+      }
+      .skip-link:focus { top: 12px; }
+
+      .site-nav {
+        position: sticky;
+        top: 0;
+        z-index: 20;
+        border-bottom: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
+        background: color-mix(in srgb, var(--page) 90%, transparent);
+        backdrop-filter: blur(14px);
+      }
+      .nav-inner {
+        max-width: var(--max);
+        margin: 0 auto;
+        min-height: 66px;
+        padding: 0 28px;
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 30px;
+      }
+      .nav-links {
+        display: flex;
+        gap: 26px;
+        align-items: center;
+      }
+      .nav-links a {
+        color: var(--muted);
+        font-size: 14px;
+        font-weight: 600;
+        text-decoration: none;
+      }
+      .nav-links a:hover, .nav-links a:focus-visible { color: var(--ink); }
+
+      .button {
+        display: inline-flex;
+        min-height: 52px;
+        align-items: center;
+        justify-content: center;
+        gap: 11px;
+        padding: 0 22px;
+        border: 1px solid var(--gold);
+        border-radius: 6px;
+        background: var(--gold);
+        color: var(--gold-ink);
+        font-weight: 700;
+        text-decoration: none;
+        box-shadow: 0 8px 28px color-mix(in srgb, var(--gold) 12%, transparent);
+        transition: transform 160ms ease, background 160ms ease, box-shadow 160ms ease;
+      }
+      .button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 12px 34px color-mix(in srgb, var(--gold) 18%, transparent);
+      }
+      .button:focus-visible, .nav-links a:focus-visible {
+        outline: 3px solid color-mix(in srgb, var(--bronze) 60%, transparent);
+        outline-offset: 4px;
+      }
+      .button.compact {
+        min-height: 40px;
+        padding: 0 17px;
+        font-size: 14px;
+      }
+      .arrow { font-family: "IBM Plex Mono", monospace; font-size: 16px; }
+
+      main { overflow: hidden; }
+      .hero {
+        position: relative;
+        max-width: var(--max);
+        margin: 0 auto;
+        padding: 108px 28px 102px;
+        display: grid;
+        grid-template-columns: minmax(0, 1.02fr) minmax(420px, .98fr);
+        gap: 72px;
+        align-items: center;
+      }
+      .hero::before {
+        content: "";
+        position: absolute;
+        width: 330px;
+        height: 330px;
+        right: 0;
+        top: 90px;
+        border-radius: 50%;
+        background: var(--gold);
+        filter: blur(160px);
+        opacity: .08;
+        pointer-events: none;
+      }
+      .hero-copy { position: relative; z-index: 1; }
+      .brand-lockup {
+        display: inline-flex;
+        align-items: center;
+        gap: 1px;
+        color: var(--ink);
+        font-family: "Source Serif 4", Georgia, serif;
+        font-size: clamp(48px, 6vw, 72px);
+        font-weight: 700;
+        line-height: 1;
+        letter-spacing: -.055em;
+      }
+      .alpha-disc {
+        width: .94em;
+        height: .94em;
+        display: inline-grid;
+        place-items: center;
+        flex: 0 0 auto;
+        border: .075em solid #ffffff;
+        border-radius: 50%;
+        background: var(--gold);
+        color: #ffffff;
+        font-family: Georgia, "Times New Roman", serif;
+        font-size: 1em;
+        line-height: 1;
+        letter-spacing: 0;
+        text-indent: 0;
+        box-shadow: 0 0 0 1px color-mix(in srgb, var(--gold) 35%, transparent);
+      }
+      .alpha-disc > span { transform: translateY(-.05em); }
+      .brand-name { transform: translateY(-.025em); }
+      .brand-tagline {
+        margin: 18px 0 34px;
+        color: var(--bronze);
+        font-family: "IBM Plex Mono", monospace;
+        font-size: clamp(13px, 1.45vw, 16px);
+        font-weight: 600;
+        letter-spacing: -.02em;
+      }
+      h1 {
+        max-width: 720px;
+        margin: 0;
+        font-size: clamp(48px, 6.4vw, 84px);
+        line-height: .99;
+        letter-spacing: -.055em;
+        font-weight: 700;
+      }
+      .hero-lede {
+        max-width: 600px;
+        margin: 28px 0 0;
+        color: var(--muted);
+        font-size: clamp(18px, 2vw, 22px);
+        line-height: 1.55;
+      }
+      .hero-actions {
+        margin-top: 38px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 16px;
+        align-items: center;
+      }
+      .microcopy {
+        color: var(--subtle);
+        font-family: "IBM Plex Mono", monospace;
+        font-size: 12px;
+      }
+
+      .product-window {
+        position: relative;
+        z-index: 1;
+        border: 1px solid var(--line-strong);
+        border-radius: 12px;
+        background: var(--panel);
+        box-shadow: 0 28px 80px var(--shadow);
+        overflow: hidden;
+      }
+      .window-bar {
+        height: 42px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 15px;
+        border-bottom: 1px solid var(--line);
+        background: var(--page-2);
+      }
+      .window-dots { display: flex; gap: 6px; }
+      .window-dots span { width: 7px; height: 7px; border-radius: 50%; background: var(--line-strong); }
+      .window-label { color: var(--subtle); font-family: "IBM Plex Mono", monospace; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+      .window-body { padding: 20px; }
+      .state-label {
+        margin-bottom: 10px;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 600;
+      }
+      .story-card {
+        padding: 17px 18px;
+        border-left: 3px solid var(--gold);
+        background: var(--panel-2);
+      }
+      .story-top {
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        align-items: center;
+      }
+      .story-title { font-weight: 700; }
+      .signal {
+        color: var(--gold);
+        font-family: "IBM Plex Mono", monospace;
+        font-size: 11px;
+        font-weight: 600;
+      }
+      .story-copy { margin-top: 7px; color: var(--muted); font-size: 13px; }
+      .flow {
+        display: grid;
+        grid-template-columns: 1fr auto 1fr auto 1fr;
+        align-items: center;
+        gap: 9px;
+        margin: 18px 0;
+      }
+      .flow-node {
+        min-width: 0;
+        min-height: 70px;
+        padding: 12px;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        border: 1px solid var(--line);
+        background: var(--page-2);
+      }
+      .flow-node span { color: var(--subtle); font-family: "IBM Plex Mono", monospace; font-size: 9px; text-transform: uppercase; }
+      .flow-node b { margin-top: 8px; font-size: 12px; line-height: 1.25; }
+      .flow-arrow { color: var(--gold); font-family: "IBM Plex Mono", monospace; font-size: 13px; }
+      .result-strip {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 1px;
+        border: 1px solid var(--line);
+        background: var(--line);
+      }
+      .result-cell { padding: 12px; background: var(--page-2); }
+      .result-cell span { display: block; color: var(--subtle); font-family: "IBM Plex Mono", monospace; font-size: 9px; text-transform: uppercase; }
+      .result-cell strong { display: block; margin-top: 5px; font-size: 12px; }
+      .result-cell.highlight strong { color: var(--gold); }
+
+      .section-shell {
+        background: color-mix(in srgb, var(--page-2) 92%, transparent);
+        border-top: 1px solid var(--line);
+        border-bottom: 1px solid var(--line);
+      }
+      .section {
+        max-width: var(--max);
+        margin: 0 auto;
+        padding: 108px 28px;
+      }
+      .section-heading {
+        display: grid;
+        grid-template-columns: .42fr 1fr;
+        gap: 48px;
+        align-items: start;
+        margin-bottom: 64px;
+      }
+      .section-number {
+        color: var(--gold);
+        font-family: "IBM Plex Mono", monospace;
+        font-size: 13px;
+      }
+      h2 {
+        margin: 0;
+        max-width: 760px;
+        font-size: clamp(34px, 4.5vw, 58px);
+        line-height: 1.06;
+        letter-spacing: -.045em;
+      }
+      .section-intro {
+        max-width: 650px;
+        margin: 20px 0 0;
+        color: var(--muted);
+        font-size: 18px;
+      }
+
+      .steps {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        border-top: 1px solid var(--line-strong);
+      }
+      .step {
+        min-width: 0;
+        padding: 28px 28px 0 0;
+      }
+      .step + .step { padding-left: 28px; border-left: 1px solid var(--line); }
+      .step-index {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 34px;
+        color: var(--gold);
+        font-family: "IBM Plex Mono", monospace;
+        font-size: 13px;
+      }
+      .step-index svg { width: 27px; height: 27px; stroke: currentColor; }
+      .step h3 { margin: 0; font-size: 23px; line-height: 1.25; }
+      .step p { margin: 14px 0 0; color: var(--muted); font-size: 15px; }
+
+      .features .section-heading { margin-bottom: 42px; }
+      .feature-list { border-top: 1px solid var(--line-strong); }
+      .feature {
+        display: grid;
+        grid-template-columns: 66px minmax(240px, .7fr) 1fr;
+        gap: 28px;
+        align-items: start;
+        padding: 30px 0;
+        border-bottom: 1px solid var(--line);
+      }
+      .feature-id { color: var(--gold); font-family: "IBM Plex Mono", monospace; font-size: 12px; padding-top: 4px; }
+      .feature h3 { margin: 0; font-size: 22px; line-height: 1.25; }
+      .feature p { margin: 0; max-width: 620px; color: var(--muted); }
+
+      .proof-band {
+        max-width: var(--max);
+        margin: 0 auto;
+        padding: 38px 28px;
+        display: grid;
+        grid-template-columns: .9fr 1.4fr;
+        gap: 50px;
+        align-items: center;
+        border-bottom: 1px solid var(--line);
+      }
+      .proof-big {
+        color: var(--gold);
+        font-family: "IBM Plex Mono", monospace;
+        font-size: clamp(38px, 5vw, 72px);
+        font-weight: 600;
+        letter-spacing: -.06em;
+      }
+      .proof-copy { color: var(--muted); font-size: 17px; }
+      .proof-copy strong { color: var(--ink); }
+
+      .final-cta {
+        max-width: var(--max);
+        margin: 0 auto;
+        padding: 118px 28px 64px;
+      }
+      .cta-panel {
+        position: relative;
+        padding: clamp(34px, 6vw, 72px);
+        border: 1px solid var(--line-strong);
+        background: var(--panel);
+        overflow: hidden;
+      }
+      .cta-panel::after {
+        content: "α";
+        position: absolute;
+        right: -12px;
+        bottom: -55px;
+        color: color-mix(in srgb, var(--gold) 8%, transparent);
+        font-family: "IBM Plex Mono", monospace;
+        font-size: clamp(150px, 25vw, 320px);
+        font-weight: 600;
+        line-height: 1;
+        pointer-events: none;
+      }
+      .cta-panel h2 { position: relative; z-index: 1; max-width: 700px; }
+      .cta-panel p { position: relative; z-index: 1; max-width: 590px; margin: 20px 0 30px; color: var(--muted); font-size: 18px; }
+      .cta-panel .button { position: relative; z-index: 1; }
+
+      footer {
+        max-width: var(--max);
+        margin: 0 auto;
+        padding: 0 28px calc(34px + env(safe-area-inset-bottom));
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 24px;
+        color: var(--subtle);
+        font-size: 13px;
+      }
+      .footer-brand {
+        display: inline-flex;
+        align-items: center;
+        gap: 1px;
+        color: var(--ink);
+        font-family: "Source Serif 4", Georgia, serif;
+        font-size: 21px;
+        font-weight: 700;
+        letter-spacing: -.04em;
+      }
+      .footer-brand .alpha-disc { width: 25px; height: 25px; border-width: 2px; font-size: 25px; }
+      footer a { color: var(--muted); text-decoration-color: var(--line-strong); text-underline-offset: 3px; }
+      footer a:hover { color: var(--ink); }
+
+      @media (max-width: 900px) {
+        .hero { grid-template-columns: 1fr; gap: 58px; padding-top: 76px; }
+        .hero-copy { max-width: 700px; }
+        .product-window { max-width: 680px; }
+        .section-heading { grid-template-columns: 120px 1fr; }
+        .steps { grid-template-columns: 1fr; }
+        .step { padding: 28px 0 34px; }
+        .step + .step { padding-left: 0; border-left: 0; border-top: 1px solid var(--line); }
+        .step-index { margin-bottom: 18px; }
+        .proof-band { grid-template-columns: 1fr 1.2fr; }
+      }
+
+      @media (max-width: 640px) {
+        .site-nav { position: static; }
+        .nav-inner { min-height: 60px; padding: 0 18px; }
+        .nav-links { display: none; }
+        .hero { padding: 68px 20px 76px; gap: 44px; }
+        h1 { font-size: clamp(46px, 14vw, 66px); }
+        .hero-lede { margin-top: 22px; font-size: 18px; }
+        .hero-actions { align-items: stretch; }
+        .hero-actions .button { width: 100%; }
+        .microcopy { width: 100%; text-align: center; }
+        .window-body { padding: 14px; }
+        .flow { grid-template-columns: 1fr; }
+        .flow-arrow { transform: rotate(90deg); justify-self: center; }
+        .flow-node { min-height: 62px; }
+        .result-strip { grid-template-columns: 1fr; }
+        .section { padding: 78px 20px; }
+        .section-heading { grid-template-columns: 1fr; gap: 18px; margin-bottom: 42px; }
+        .feature { grid-template-columns: 48px 1fr; gap: 14px; }
+        .feature p { grid-column: 2; }
+        .proof-band { grid-template-columns: 1fr; gap: 14px; padding: 32px 20px; }
+        .final-cta { padding: 76px 20px 44px; }
+        .cta-panel { padding: 30px 24px 38px; }
+        .cta-panel .button { width: 100%; }
+        footer { padding-left: 20px; padding-right: 20px; flex-direction: column; align-items: flex-start; }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        html { scroll-behavior: auto; }
+        .button { transition: none; }
+      }
+    </style>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <nav class="site-nav" aria-label="Primary navigation">
+      <div class="nav-inner">
+        <div class="nav-links">
+          <a href="#how">How it works</a>
+          <a href="#features">Features</a>
+        </div>
+        <a class="button compact" href="https://m4lqs6zsoensqzpf.streamlit.app" target="_blank" rel="noopener noreferrer">
+          Launch the App <span class="arrow" aria-hidden="true">↗</span>
+        </a>
+      </div>
+    </nav>
+
+    <main id="main">
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="hero-copy">
+          <div class="brand-lockup" aria-label="Aytia, pronounced eye-TEE-uh">
+            <span class="alpha-disc" aria-hidden="true"><span>α</span></span><span class="brand-name">ytia</span>
+          </div>
+          <p class="brand-tagline">Start with a belief. Update it with evidence.</p>
+          <h1 id="hero-title">If you're right about the game, what lineup wins?</h1>
+          <p class="hero-lede">An NFL DFS lineup optimizer built around the way games actually unfold—not just a list of median projections.</p>
+          <div class="hero-actions">
+            <a class="button" href="https://m4lqs6zsoensqzpf.streamlit.app" target="_blank" rel="noopener noreferrer">
+              Launch the App <span class="arrow" aria-hidden="true">↗</span>
+            </a>
+            <span class="microcopy">DraftKings NFL · CSV in, CSV out</span>
+          </div>
+        </div>
+
+        <div class="product-window" aria-label="Aytia workflow preview">
+          <div class="window-bar">
+            <div class="window-dots" aria-hidden="true"><span></span><span></span><span></span></div>
+            <span class="window-label">Lineup command center</span>
+          </div>
+          <div class="window-body">
+            <div class="state-label">Your game thesis</div>
+            <div class="story-card">
+              <div class="story-top">
+                <span class="story-title">Home offense controls the slate</span>
+                <span class="signal">ACTIVE</span>
+              </div>
+              <div class="story-copy">Fast pace · concentrated targets · opponent forced to answer</div>
+            </div>
+            <div class="flow" aria-hidden="true">
+              <div class="flow-node"><span>Input</span><b>Salary slate</b></div>
+              <div class="flow-arrow">→</div>
+              <div class="flow-node"><span>Build</span><b>Story + rules</b></div>
+              <div class="flow-arrow">→</div>
+              <div class="flow-node"><span>Stress test</span><b>10K worlds</b></div>
+            </div>
+            <div class="result-strip">
+              <div class="result-cell"><span>Output</span><strong>Ranked lineups</strong></div>
+              <div class="result-cell highlight"><span>Review</span><strong>Why it works</strong></div>
+              <div class="result-cell"><span>Finish</span><strong>DK export</strong></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div class="section-shell">
+        <section class="section" id="how" aria-labelledby="how-title">
+          <div class="section-heading">
+            <span class="section-number">01 / HOW IT WORKS</span>
+            <div>
+              <h2 id="how-title">From salary file to tournament-ready lineups.</h2>
+              <p class="section-intro">Three steps. Your assumptions stay in control from the first upload to the final export.</p>
+            </div>
+          </div>
+
+          <div class="steps">
+            <article class="step">
+              <div class="step-index">
+                <span>STEP 01</span>
+                <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 16V4m0 0L7 9m5-5 5 5M5 14v5h14v-5" stroke-width="1.7" stroke-linecap="square" stroke-linejoin="miter"/></svg>
+              </div>
+              <h3>Upload your DraftKings salaries CSV.</h3>
+              <p>Start with the official contest file. Aytia reads the player pool, positions, teams, and salaries.</p>
+            </article>
+            <article class="step">
+              <div class="step-index">
+                <span>STEP 02</span>
+                <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h2m4 0h10M14 4v6M10 14v6" stroke-width="1.7" stroke-linecap="square"/></svg>
+              </div>
+              <h3>Set your game story and player rules.</h3>
+              <p>Choose who wins, whether the game shoots out or grinds, then lock, fade, or exclude players as needed.</p>
+            </article>
+            <article class="step">
+              <div class="step-index">
+                <span>STEP 03</span>
+                <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 4h14v16H5zM8 9h8M8 13h8M8 17h5M15 4v3H9V4" stroke-width="1.7" stroke-linecap="square" stroke-linejoin="miter"/></svg>
+              </div>
+              <h3>Generate, review, and export.</h3>
+              <p>Compare lineup grades and game-world stories, then download a DraftKings-format CSV when the build feels right.</p>
+            </article>
+          </div>
+        </section>
+      </div>
+
+      <section class="section features" id="features" aria-labelledby="features-title">
+        <div class="section-heading">
+          <span class="section-number">02 / BUILT FOR GPPs</span>
+          <div>
+            <h2 id="features-title">An optimizer that understands your thesis.</h2>
+            <p class="section-intro">Aytia turns football logic into lineup construction, then shows you how each build holds up.</p>
+          </div>
+        </div>
+
+        <div class="feature-list">
+          <article class="feature">
+            <span class="feature-id">A —</span>
+            <h3>Game-script engine</h3>
+            <p>Build around a specific path through the game—shootout, grind, comeback, or one-sided control—so your lineup tells a coherent story.</p>
+          </article>
+          <article class="feature">
+            <span class="feature-id">B —</span>
+            <h3>Leverage and ownership fade</h3>
+            <p>Balance projected strength with the risk of duplicated, over-owned builds. Find the places where a different roster construction can matter.</p>
+          </article>
+          <article class="feature">
+            <span class="feature-id">C —</span>
+            <h3>10,000 simulated worlds</h3>
+            <p>Every finished lineup is scored across 10,000 possible outcomes, with grades and game-world context that make the result easier to judge.</p>
+          </article>
+          <article class="feature">
+            <span class="feature-id">D —</span>
+            <h3>DraftKings-ready export</h3>
+            <p>Move from analysis to entry without rebuilding the roster by hand. Export your selected lineups in DraftKings CSV format.</p>
+          </article>
+        </div>
+      </section>
+
+      <div class="section-shell">
+        <div class="proof-band">
+          <div class="proof-big">10,000</div>
+          <div class="proof-copy"><strong>possible game worlds per lineup.</strong> Not to predict one perfect outcome, but to see whether your roster survives more than one version of Sunday.</div>
+        </div>
+      </div>
+
+      <section class="final-cta" aria-labelledby="cta-title">
+        <div class="cta-panel">
+          <h2 id="cta-title">Your slate. Your story. Your edge.</h2>
+          <p>Upload a DraftKings salary file and turn your read on the games into a lineup portfolio you can explain.</p>
+          <a class="button" href="https://m4lqs6zsoensqzpf.streamlit.app" target="_blank" rel="noopener noreferrer">
+            Launch the App <span class="arrow" aria-hidden="true">↗</span>
+          </a>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <span class="footer-brand" aria-label="Aytia">
+        <span class="alpha-disc" aria-hidden="true"><span>α</span></span><span class="brand-name">ytia</span>
+      </span>
+      <a href="https://m4lqs6zsoensqzpf.streamlit.app" target="_blank" rel="noopener noreferrer">Open the lineup builder <span aria-hidden="true">↗</span></a>
+    </footer>
+  </body>
+</html>
