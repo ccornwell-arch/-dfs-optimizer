@@ -70,7 +70,7 @@ def render_setup():
     st.markdown(f"""
 <div style="text-align:center; padding: 1.2rem 0 0.6rem;">
 <div>{_brand_logo_img("lab-hero-img")}</div>
-<div style="font-family:'EB Garamond',Georgia,'Times New Roman',serif; font-size:2.1rem; font-weight:700; letter-spacing:0.01em; margin-top:0.6rem;">aytia</div>
+<div style="font-family:'Source Serif 4',Georgia,'Times New Roman',serif; font-size:2.1rem; font-weight:700; letter-spacing:0.01em; margin-top:0.6rem;">aytia</div>
 <div style="opacity:0.75; margin-top:0.3rem;">Start with a belief. Update it with evidence.</div>
 </div>
 """, unsafe_allow_html=True)
