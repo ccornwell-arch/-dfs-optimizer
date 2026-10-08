@@ -75,14 +75,14 @@ def render_setup():
     st.markdown(styles.SETUP_APPBAR_DARK_CSS, unsafe_allow_html=True)
 
     st.markdown(f'''<div class="lab-appbar">
-  <div class="lab-brand">{_disc_a_img(46)}<b>ytia</b></div>
+  <div class="lab-brand">{_disc_a_img(42)}<b>ytia</b></div>
   <div class="lab-appbar-copy"><strong>NFL DFS COMMAND CENTER</strong><span>Build · Explore · Challenge</span></div>
   <div class="lab-live"><i></i> LIVE SLATE</div>
 </div>''',unsafe_allow_html=True)
 
     st.markdown(f"""
 <div style="text-align:center; padding: 1.2rem 0 0.6rem;">
-<div style="display:flex;align-items:center;justify-content:center;gap:5px;font-family:'Source Serif 4',Georgia,'Times New Roman',serif; font-size:3rem; font-weight:700; letter-spacing:0.01em;">{_disc_a_img(76)}<span>ytia</span></div>
+<div style="display:flex;align-items:center;justify-content:center;gap:5px;font-family:'Source Serif 4',Georgia,'Times New Roman',serif; font-size:3rem; font-weight:700; letter-spacing:0.01em;">{_disc_a_img(70)}<span>ytia</span></div>
 <div style="opacity:0.75; margin-top:0.3rem;">Start with a belief. Update it with evidence.</div>
 </div>
 """, unsafe_allow_html=True)
