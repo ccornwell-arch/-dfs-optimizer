@@ -84,6 +84,21 @@ def persistent_widget(widget_fn, persistent_key, default, *args, **kwargs):
     return widget_fn(*args, **kwargs)
 
 
+def resolve_saved_priority(excluded, table_priority):
+    """Single source of truth for the saved Priority value.
+
+    Never persist the contradictory state {Exclude: False, Priority: "Exclude"}:
+    the status strip and the solver both treat Priority="Exclude" as an
+    exclusion, so a stale "Exclude" lean kept a player out of builds after the
+    user unchecked the Out box (Oct 8, 2026: Dak Prescott showed unchecked in
+    the table while the strip listed him Out and the solver excluded him).
+    """
+    tp = str(table_priority or "Neutral")
+    if excluded:
+        return "Exclude"
+    return "Neutral" if tp == "Exclude" else tp
+
+
 def _apply_exposure_targets(ed, exp, edited_rows, strategy):
     """Apply data_editor exposure-target edits to the strategy map. Pure.
 
@@ -657,7 +672,7 @@ def render_main(settings):
                     changed=False
                     for _,r in edited.iterrows():
                         pid=str(r["ID"]); ex=bool(r["Exclude"])
-                        new_entry={"Lock":bool(r["Lock"]) and not ex,"Exclude":ex,"Priority":"Exclude" if ex else str(r["Priority"]),"Min Exposure":float(r["Min Exposure"]),"Max Exposure":float(r["Max Exposure"])}
+                        new_entry={"Lock":bool(r["Lock"]) and not ex,"Exclude":ex,"Priority":resolve_saved_priority(ex, r["Priority"]),"Min Exposure":float(r["Min Exposure"]),"Max Exposure":float(r["Max Exposure"])}
                         if st.session_state["strategy_master"].get(pid,{}) != new_entry:
                             changed=True
                         st.session_state["strategy_master"][pid]=new_entry
@@ -1093,10 +1108,16 @@ def render_main(settings):
                     if qid not in st.session_state["showdown_strategy"]: st.session_state["showdown_strategy"][qid]={}
                     with q2:
                         if st.button("Lock",use_container_width=True,key="sd_quick_lock"):
-                            st.session_state["showdown_strategy"][qid].update({"Lock":True,"CPT Lock":False,"Exclude":False}); st.toast(f"🔒 {quick_player} locked — applied"); st.rerun()
+                            _qe=st.session_state["showdown_strategy"][qid]
+                            _qe.update({"Lock":True,"CPT Lock":False,"Exclude":False})
+                            _qe["Priority"]=resolve_saved_priority(False,_qe.get("Priority"))
+                            st.toast(f"🔒 {quick_player} locked — applied"); st.rerun()
                     with q3:
                         if st.button("CPT",use_container_width=True,key="sd_quick_cpt"):
-                            st.session_state["showdown_strategy"][qid].update({"Lock":False,"CPT Lock":True,"Exclude":False,"CPT Eligible":True}); st.toast(f"👑 {quick_player} captained — applied"); st.rerun()
+                            _qe=st.session_state["showdown_strategy"][qid]
+                            _qe.update({"Lock":False,"CPT Lock":True,"Exclude":False,"CPT Eligible":True})
+                            _qe["Priority"]=resolve_saved_priority(False,_qe.get("Priority"))
+                            st.toast(f"👑 {quick_player} captained — applied"); st.rerun()
                     with q4:
                         if st.button("Out",use_container_width=True,key="sd_quick_out"):
                             st.session_state["showdown_strategy"][qid].update({"Lock":False,"CPT Lock":False,"Exclude":True,"CPT Eligible":False,"Priority":"Exclude"}); st.toast(f"🚫 {quick_player} marked Out — applied"); st.rerun()
@@ -1173,7 +1194,7 @@ def render_main(settings):
                         # alone must put the player in the captain pool (it did before the
                         # CPT? opt-in change, and the lock is the stronger intent).
                         cpt_elig=(bool(r["CPT Eligible"]) or cptlock) and not ex
-                        st.session_state["showdown_strategy"][str(r["ID"]) ]={"Lock":bool(r["Lock"]) and not ex and not cptlock,"CPT Lock":cptlock,"Exclude":ex,"CPT Eligible":cpt_elig,"Priority":"Exclude" if ex else str(r["Priority"]),"Min Exposure":float(r["Min Exposure"]),"Max Exposure":float(r["Max Exposure"]),"CPT Min":float(r["CPT Min"]),"CPT Max":float(r["CPT Max"])}
+                        st.session_state["showdown_strategy"][str(r["ID"]) ]={"Lock":bool(r["Lock"]) and not ex and not cptlock,"CPT Lock":cptlock,"Exclude":ex,"CPT Eligible":cpt_elig,"Priority":resolve_saved_priority(ex, r["Priority"]),"Min Exposure":float(r["Min Exposure"]),"Max Exposure":float(r["Max Exposure"]),"CPT Min":float(r["CPT Min"]),"CPT Max":float(r["CPT Max"])}
                     # Drop the widget's pending-edit state (pop the key: mutating
                     # nested widget state is forbidden by Streamlit) so a later
                     # sort/filter change doesn't warn about "unapplied" edits that
