@@ -300,6 +300,13 @@ def render_main(settings):
 
             st.markdown(styles.MAIN_TABS_CSS, unsafe_allow_html=True)
 
+            # Story detour: the Story page sets this flag and calls render_main;
+            # render only the story (no nav, no sections) and return.
+            if st.session_state.pop("_story_detour", None) == "classic":
+                from dfs_lab.ui.story import render_classic_story
+                render_classic_story(df, teams)
+                return
+
             # Pool summary cards live above the tabs only pre-build. Post-build the
             # Lineups tab leads with the results banner, so these cards would just
             # push lineups down the page for no reason.
@@ -394,12 +401,12 @@ def render_main(settings):
                 "portfolio":portfolio,
                 "limitations":["No injury/news feed in this Classic build","No weather/travel feed in this Classic build","Day/night history is not inferred when unavailable"]
             }
-            _CLASSIC_TABS=["💡 Story","🧠 Slate Intel","⚡ Build","👤 Players","⚙ Rules","📋 Lineups","📊 Exposure","📖 Guide"]
+            _CLASSIC_TABS=["🧠 Slate Intel","⚡ Build","👤 Players","⚙ Rules","📋 Lineups","📊 Exposure","📖 Guide"]
             # Multipage nav: the segmented control switches real Streamlit pages
             # (pages/*.py) via st.switch_page, so each section is its own screen
             # instead of a tab on one long scrolling page. The bar is pinned via
             # CSS on its keyed container (.st-key-classic_nav) so it stays visible.
-            st.session_state.setdefault("classic_nav","💡 Story")
+            st.session_state.setdefault("classic_nav","🧠 Slate Intel")
             def _classic_nav_changed():
                 from dfs_lab.ui import nav as _navmod
                 _navmod.goto_page("Classic", st.session_state.get("classic_nav"))
@@ -416,11 +423,7 @@ def render_main(settings):
             # session state so builds and exposure rebuilds work from any tab.
             build_btn=False
             preferred_stack_teams=list(st.session_state.get("classic_pref_stack",[]))
-            # --- Story (belief-first entry) ---
             if classic_nav==_CLASSIC_TABS[0]:
-                from dfs_lab.ui.story import render_classic_story
-                render_classic_story(df, teams)
-            if classic_nav==_CLASSIC_TABS[1]:
                 st.markdown('<div class="card-title">Aytia Slate Intel</div><div class="card-sub">Study the slate first. Then decide which optimizer rules deserve to be used for this contest.</div>',unsafe_allow_html=True)
                 contest_desc=f"{entry_format} · {int(field_size):,} entries · {payout_style}"
                 st.markdown(f"<div class='intel-card'><div class='intel-kicker'>Contest lens</div><div class='intel-big'>{contest_desc}</div><div class='intel-copy'>Aytia changes its recommendations with field size, entry format and payout shape. The same slate should not be built the same way in Single Entry and 150-Max.</div></div>",unsafe_allow_html=True)
@@ -577,8 +580,13 @@ def render_main(settings):
                         st.session_state["classic_ai_chat"]=[]
                         st.rerun()
 
-            if classic_nav==_CLASSIC_TABS[2]:
+            if classic_nav==_CLASSIC_TABS[1]:
                 st.markdown('<div class="card-title">Build</div><div class="card-sub">Choose team preferences after reviewing Slate Intel, then generate the portfolio with your Rules settings.</div>',unsafe_allow_html=True)
+                # Optional story detour: not a required step, just a different way in.
+                with st.expander("💡 Tell the story first (optional)", expanded=False):
+                    st.caption("Have a take on this slate? Tell it as a story and Aytia will translate it into build settings. Or ignore this and build the usual way — nothing here is required.")
+                    if st.button("Tell the story →", key="classic_goto_story", use_container_width=True):
+                        st.switch_page("pages/classic_story.py")
                 preferred_stack_teams=st.multiselect("Preferred QB stack teams",teams,key="classic_pref_stack",
                     help="Hard control: if you select teams here, the optimizer must use a QB from one of them. Strategy Theses no longer populate this automatically.")
                 team_df=pd.DataFrame({"Team":teams,"Priority":[st.session_state["team_strategy_master"].get(t,"Neutral") for t in teams]})
@@ -618,7 +626,7 @@ def render_main(settings):
                     st.warning(_fresh_note)
                 build_btn=st.button(f"⚡ GENERATE {lineup_count} RATED LINEUPS",type="primary",use_container_width=True,key="v4_classic_build")
 
-            if classic_nav==_CLASSIC_TABS[3]:
+            if classic_nav==_CLASSIC_TABS[2]:
                 st.markdown('<div class="card-title">Players</div><div class="card-sub">Edit your own projection when you disagree with the model. Your projection becomes the number Aytia uses for simulations and lineup building until you reset it.</div>',unsafe_allow_html=True)
                 view=df.copy(); team_filter=st.multiselect("Teams",teams,key="v4_cteam"); pos_filter=st.multiselect("Positions",["QB","RB","WR","TE","DST"],key="v4_cpos")
                 if team_filter:view=view[view["Team"].isin(team_filter)]
@@ -713,7 +721,7 @@ def render_main(settings):
                     else:
                         st.info("No edits detected — your built lineups are untouched.")
 
-            if classic_nav==_CLASSIC_TABS[4]:
+            if classic_nav==_CLASSIC_TABS[3]:
                 st.markdown('<div class="card-title">Classic Rules</div><div class="card-sub">Contest-aware structure controls. Slate Intel can recommend these, but you decide what gets enforced.</div>',unsafe_allow_html=True)
                 r1,r2=st.columns(2)
                 with r1:
@@ -758,7 +766,8 @@ def render_main(settings):
                 allow_qb_rb=st.toggle("Allow QB + same-team RB",key="classic_allow_qb_rb",help="Turn off if you want QB stacks to avoid same-team running backs.")
                 st.caption("QB vs opposing DST is always blocked. More relationship controls can be added here without changing the core optimizer.")
 
-            if build_btn:
+            _story_build=st.session_state.pop("story_build_requested", False)
+            if build_btn or _story_build:
                 res=generate_lineups(
                     df,field_size,payout_style,lineup_count,max(300,lineup_count*12),
                     int(st.session_state["classic_min_salary"]),int(st.session_state["classic_qb_stack"]),st.session_state["classic_bringback"],
@@ -778,20 +787,23 @@ def render_main(settings):
                 st.session_state["classic_result_v4"]=res
                 # Slate Intel / Post-Build Coach renders earlier in the script than the Build tab.
                 # Rerun once after a successful build so those sections immediately see the new portfolio.
+                # A story-triggered build jumps straight to the Lineups page instead.
+                if _story_build:
+                    st.switch_page("pages/classic_lineups.py")
                 st.rerun()
 
             res=st.session_state.get("classic_result_v4")
-            if classic_nav==_CLASSIC_TABS[5]:
+            if classic_nav==_CLASSIC_TABS[4]:
                 if res is None or res.empty:
                     st.info("Generate lineups from Build.")
                 else:
                     # Post-build quick jumps: Players / Exposure / Build are one tap away.
                     _cq1,_cq2,_cq3=st.columns(3)
-                    _cq1.button("👤 Adjust Players",key="classic_jump_players",use_container_width=True,on_click=_classic_nav_go,args=(_CLASSIC_TABS[3],))
-                    _cq2.button("📊 Adjust Exposure",key="classic_jump_exposure",use_container_width=True,on_click=_classic_nav_go,args=(_CLASSIC_TABS[6],))
-                    _cq3.button("⚡ Build Settings",key="classic_jump_build",use_container_width=True,on_click=_classic_nav_go,args=(_CLASSIC_TABS[2],))
+                    _cq1.button("👤 Adjust Players",key="classic_jump_players",use_container_width=True,on_click=_classic_nav_go,args=(_CLASSIC_TABS[2],))
+                    _cq2.button("📊 Adjust Exposure",key="classic_jump_exposure",use_container_width=True,on_click=_classic_nav_go,args=(_CLASSIC_TABS[5],))
+                    _cq3.button("⚡ Build Settings",key="classic_jump_build",use_container_width=True,on_click=_classic_nav_go,args=(_CLASSIC_TABS[1],))
                     render_results_command_center(res, df, sim_table, sim_worlds, packet)
-            if classic_nav==_CLASSIC_TABS[6]:
+            if classic_nav==_CLASSIC_TABS[5]:
                 if res is None or res.empty:
                     st.info("Generate lineups first.")
                 else:
@@ -910,7 +922,7 @@ def render_main(settings):
                             st.rerun()
                         else:
                             st.success("Exposure targets saved. They will be used on the next build.")
-            if classic_nav==_CLASSIC_TABS[7]:
+            if classic_nav==_CLASSIC_TABS[6]:
                 from dfs_lab.ui.guide import render_guide
                 render_guide(mode="classic")
         except Exception as e:
@@ -964,12 +976,18 @@ def render_main(settings):
             max_salary=50000
 
             st.markdown(styles.SHOWDOWN_SHELL_CSS, unsafe_allow_html=True)
-            _SD_TABS=["💡 Story","⚡ Build","👤 Players","🔗 Relationships","🧠 Game Intel","⚙ Rules","📋 Lineups","📊 Exposure","📖 Guide"]
+            # Story detour: the Story page sets this flag and calls render_main;
+            # render only the story (no nav, no sections) and return.
+            if st.session_state.pop("_story_detour", None) == "showdown":
+                from dfs_lab.ui.story import render_showdown_story
+                render_showdown_story(df, teams)
+                return
+            _SD_TABS=["⚡ Build","👤 Players","🔗 Relationships","🧠 Game Intel","⚙ Rules","📋 Lineups","📊 Exposure","📖 Guide"]
             # Multipage nav: the segmented control switches real Streamlit pages
             # (pages/*.py) via st.switch_page, so each section is its own screen
             # instead of a tab on one long scrolling page. Pinned via CSS on the
             # keyed container (.st-key-sd_nav).
-            st.session_state.setdefault("sd_nav","💡 Story")
+            st.session_state.setdefault("sd_nav","⚡ Build")
             def _sd_nav_changed():
                 from dfs_lab.ui import nav as _navmod
                 _navmod.goto_page("Showdown", st.session_state.get("sd_nav"))
@@ -1017,12 +1035,13 @@ def render_main(settings):
                     effective_script=_sd_asc; effective_team=_sd_atm
             elif _sd_script=="Auto from score":
                 effective_script="Neutral"; effective_team=""
-            # --- Story (belief-first entry) ---
             if sd_nav==_SD_TABS[0]:
-                from dfs_lab.ui.story import render_showdown_story
-                render_showdown_story(df, teams)
-            if sd_nav==_SD_TABS[1]:
                 st.markdown('<div class="card-title">Showdown Build</div><div class="card-sub">Control how the six-man portfolio is shaped before the optimizer starts solving.</div>',unsafe_allow_html=True)
+                # Optional story detour: not a required step, just a different way in.
+                with st.expander("💡 Tell the story first (optional)", expanded=False):
+                    st.caption("Have a take on this game? Tell it as a story and Aytia will translate it into build settings. Or ignore this and build the usual way — nothing here is required.")
+                    if st.button("Tell the story →", key="sd_goto_story", use_container_width=True):
+                        st.switch_page("pages/showdown_story.py")
                 st.markdown("#### Allowed team builds")
                 st.caption("Choose what is allowed — no percentages. 4-2 means four players from either team; 5-1 means five from either team.")
                 c1,c2,c3=st.columns(3)
@@ -1059,7 +1078,7 @@ def render_main(settings):
                     st.warning(_sd_fresh_note)
                 build_btn=st.button(f"⚡ GENERATE {lineup_count} LINEUPS",type="primary",use_container_width=True,key="v4_sd_build")
 
-            if sd_nav==_SD_TABS[2]:
+            if sd_nav==_SD_TABS[1]:
                 st.markdown('<div class="card-title">Players</div><div class="card-sub">Overall exposure and Captain exposure are controlled separately. Check CPT? only for the players you want in the Captain pool.</div>',unsafe_allow_html=True)
                 team_filter=st.multiselect("Teams",teams,key="v4_sdteam")
                 pos_filter=st.multiselect("Positions",sorted(df["Position"].dropna().unique().tolist()),key="v4_sdpos")
@@ -1238,8 +1257,8 @@ def render_main(settings):
                     st.toast("✅ Player changes applied")
                     st.success(f"Player settings applied.{f' {_n_ov} projection override(s) active — builds use your numbers.' if _n_ov else ''}")
                     st.rerun()
-                st.button("📋 Back to Lineups",key="sd_players_back_to_lineups",use_container_width=True,on_click=_sd_nav_go,args=(_SD_TABS[6],))
-            if sd_nav==_SD_TABS[3]:
+                st.button("📋 Back to Lineups",key="sd_players_back_to_lineups",use_container_width=True,on_click=_sd_nav_go,args=(_SD_TABS[5],))
+            if sd_nav==_SD_TABS[2]:
                 st.markdown('<div class="card-title">Relationships</div><div class="card-sub">Teach Aytia which players, positions and team roles belong together — or should never appear together.</div>',unsafe_allow_html=True)
                 st.caption("Hard relationship rules are enforced by the optimizer. Use Player for a specific matchup or Team + Position for broader football logic.")
                 player_options={f"{r['Name']} · {r['Team']} {r['Position']}":str(r['ID']) for _,r in df.sort_values(['Team','Position','Name']).iterrows()}
@@ -1287,7 +1306,7 @@ def render_main(settings):
                 st.caption("These create broad restrictions without naming individual players.")
                 max_one_rb=st.toggle("Max 1 RB from the same team",value=st.session_state.get("max_one_rb_team",False),key="max_one_rb_team",help="Useful when two same-team RBs are direct alternatives. Leave off when a backfield can realistically support two players together.")
 
-            if sd_nav==_SD_TABS[4]:
+            if sd_nav==_SD_TABS[3]:
                 st.markdown('<div class="card-title">Game View</div><div class="card-sub">The football signals Aytia is using for this slate. Neutral inputs stay out of the way; open Model details only when you want to audit them.</div>',unsafe_allow_html=True)
                 st.info("Ratings are confidence-shrunk and capped. Defense and current usage carry more weight than travel or primetime splits.")
                 st.session_state.setdefault("showdown_context_auto",{})
@@ -1367,7 +1386,7 @@ def render_main(settings):
                 st.dataframe(cp,hide_index=True,use_container_width=True,height=390,column_config={"Player":st.column_config.TextColumn("Player",pinned=True,width=185),"Base":st.column_config.NumberColumn("Base",format="%.2f"),"Scenario":st.column_config.NumberColumn("Scenario",format="%.2f"),"Context %":st.column_config.NumberColumn("Context %",format="%.1f"),"Aytia":st.column_config.NumberColumn("Aytia",format="%.2f")})
                 st.caption("Neutral means Aytia found no reason to move the projection. Detailed model inputs remain available above for auditing; Lineup Lab explains what matters for each lineup.")
 
-            if sd_nav==_SD_TABS[5]:
+            if sd_nav==_SD_TABS[4]:
                 st.markdown('<div class="card-title">Scenario Engine</div><div class="card-sub">Use a football story, a predicted score, or both. Your game thesis changes projections, correlation and lineup construction. Use the 0–100 influence control to decide how strongly Aytia should commit to it.</div>',unsafe_allow_html=True)
                 script_options=["Neutral","Auto from score","Shootout","Pass-heavy shootout","Low-scoring game","Defensive / field-goal battle","Ground-and-pound","Team wins close","Team dominates","Team plays from ahead","Team passing comeback"]
                 script=persistent_widget(st.selectbox,"sd_script","Neutral","Game script",script_options)
@@ -1475,7 +1494,8 @@ def render_main(settings):
                     for x in range(len(rb_ids)):
                         for y in range(x+1,len(rb_ids)):
                             active_relationships.append({"enabled":True,"rule":"Never Together","a":{"kind":"Player","id":rb_ids[x]},"b":{"kind":"Player","id":rb_ids[y]}})
-            if build_btn:
+            _story_build_sd=st.session_state.pop("story_build_requested", False)
+            if build_btn or _story_build_sd:
                 _cpt_pool=captain_pool_ids(build_df,strategy_map)
                 if not _cpt_pool:
                     st.error("No captain-eligible players — every CPT? box is unchecked (or excluded). Check **CPT?** for at least one player in 👤 Players (checking the **CPT** lock column counts too), tap **Apply player changes**, then generate again.")
@@ -1607,9 +1627,12 @@ def render_main(settings):
                                 st.write(("✅ Legal when relaxed: " if works else "— Still infeasible when relaxed: ") + name)
                     elif len(result) < lineup_count:
                         st.warning(f"Built {len(result)} of {lineup_count} requested lineups. The current portfolio rules are limiting the number of unique legal builds.")
+                # A story-triggered build jumps straight to the Lineups page.
+                if _story_build_sd:
+                    st.switch_page("pages/showdown_lineups.py")
             result=st.session_state.get("showdown_result_v4")
 
-            if sd_nav==_SD_TABS[6]:
+            if sd_nav==_SD_TABS[5]:
                 st.markdown('<div class="card-title">Rated Lineups</div><div class="card-sub">The grade is portfolio-relative. A+ means one of the strongest lineups in this build — not a guarantee of outcome.</div>',unsafe_allow_html=True)
                 if result is None or result.empty: st.info("Set your build, player takes and script, then generate lineups.")
                 else:
@@ -1630,9 +1653,9 @@ def render_main(settings):
                     # on_click callbacks (see _sd_nav_go) and the rerun lands on
                     # the chosen section.
                     _jq1,_jq2,_jq3=st.columns(3)
-                    _jq1.button("👤 Adjust Players",key="sd_jump_players",use_container_width=True,on_click=_sd_nav_go,args=(_SD_TABS[2],))
-                    _jq2.button("📊 Adjust Exposure",key="sd_jump_exposure",use_container_width=True,on_click=_sd_nav_go,args=(_SD_TABS[7],))
-                    _jq3.button("⚡ Build Settings",key="sd_jump_build",use_container_width=True,on_click=_sd_nav_go,args=(_SD_TABS[1],))
+                    _jq1.button("👤 Adjust Players",key="sd_jump_players",use_container_width=True,on_click=_sd_nav_go,args=(_SD_TABS[1],))
+                    _jq2.button("📊 Adjust Exposure",key="sd_jump_exposure",use_container_width=True,on_click=_sd_nav_go,args=(_SD_TABS[6],))
+                    _jq3.button("⚡ Build Settings",key="sd_jump_build",use_container_width=True,on_click=_sd_nav_go,args=(_SD_TABS[0],))
                     result_views=st.tabs(
                         [f"🏈  LINEUPS · {len(result)}",f"🌎  GAME WORLDS · {_world_total}","🧠  LINEUP LAB + AGENT"],
                         key="sd_results_hub"
@@ -1708,7 +1731,7 @@ def render_main(settings):
                                 st.download_button(f"Download my {my_entries} entries (top {my_entries} by grade)",showdown_upload_csv(_top_n),f"showdown_my_{my_entries}_entries.csv","text/csv",use_container_width=True,key="quick_my_entries_download")
                                 st.caption(f"Top {my_entries} by grade — review the full {len(result)} above and reorder if you prefer different ones.")
                             st.caption("Tip: on iPhone, downloading opens the Files preview — use the app switcher to come back here. Your lineups stay on this tab.")
-                            st.button("📋 Back to My Lineups",key="sd_dl_back_to_lineups",use_container_width=True,on_click=_sd_nav_go,args=(_SD_TABS[6],))
+                            st.button("📋 Back to My Lineups",key="sd_dl_back_to_lineups",use_container_width=True,on_click=_sd_nav_go,args=(_SD_TABS[5],))
 
                     with result_views[1]:
                         st.markdown("<div class='results-view-title'>Game Worlds</div><div class='results-view-sub'>See the different ways Aytia thinks this slate can unfold, then isolate the lineups built for any one world.</div>",unsafe_allow_html=True)
@@ -1800,7 +1823,7 @@ def render_main(settings):
                         st.write(f"**{r['Rating']} ({r['Rating Score']})** — {r['Story']}")
                         st.caption(f"Projection {r['Projection']} • Salary ${int(r['Salary']):,} • ${int(r['Salary Left']):,} left • Duplication risk {r['Dup Risk']} • {r['Strategy Notes']}")
 
-            if sd_nav==_SD_TABS[7]:
+            if sd_nav==_SD_TABS[6]:
                 st.markdown('<div class="card-title">Exposure Lab</div><div class="card-sub">Edit exposure targets right here — no trip to Players needed.</div>',unsafe_allow_html=True)
                 if result is None or result.empty: st.info("Generate lineups first.")
                 else:
@@ -1853,8 +1876,8 @@ def render_main(settings):
                             st.rerun()
                     st.download_button("Download exposure CSV",exp.to_csv(index=False),"showdown_exposure_v6_1.csv","text/csv",use_container_width=True)
                     st.caption("Tip: on iPhone, downloading opens the Files preview — use the app switcher to come back here.")
-                    st.button("📋 Back to Lineups",key="sd_exposure_back_to_lineups",use_container_width=True,on_click=_sd_nav_go,args=(_SD_TABS[6],))
-            if sd_nav==_SD_TABS[8]:
+                    st.button("📋 Back to Lineups",key="sd_exposure_back_to_lineups",use_container_width=True,on_click=_sd_nav_go,args=(_SD_TABS[5],))
+            if sd_nav==_SD_TABS[7]:
                 from dfs_lab.ui.guide import render_guide
                 render_guide(mode="showdown")
         except Exception as e:

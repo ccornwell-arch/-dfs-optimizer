@@ -7,9 +7,8 @@ rendering sections on one long scrolling page.
 
 import streamlit as st
 
-# (tab label, page file) in nav order. Story leads: it's the belief-first entry.
+# (tab label, page file) in nav order.
 CLASSIC_PAGES = [
-    ("💡 Story", "pages/classic_story.py"),
     ("🧠 Slate Intel", "pages/classic_intel.py"),
     ("⚡ Build", "pages/classic_build.py"),
     ("👤 Players", "pages/classic_players.py"),
@@ -20,7 +19,6 @@ CLASSIC_PAGES = [
 ]
 
 SHOWDOWN_PAGES = [
-    ("💡 Story", "pages/showdown_story.py"),
     ("⚡ Build", "pages/showdown_build.py"),
     ("👤 Players", "pages/showdown_players.py"),
     ("🔗 Relationships", "pages/showdown_relationships.py"),
@@ -30,6 +28,12 @@ SHOWDOWN_PAGES = [
     ("📊 Exposure", "pages/showdown_exposure.py"),
     ("📖 Guide", "pages/showdown_guide.py"),
 ]
+
+# Story detour pages (not in the main nav; reached via "Tell the story" from Build).
+STORY_PAGES = {
+    "Classic": "pages/classic_story.py",
+    "Showdown": "pages/showdown_story.py",
+}
 
 # Map tab label -> page file, for programmatic jumps.
 _CLASSIC_MAP = dict(CLASSIC_PAGES)

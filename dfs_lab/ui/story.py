@@ -1,15 +1,14 @@
-"""Story pages: belief-first lineup building for Aytia.
+"""Story detour: optional belief-first entry to building lineups.
 
-The Story tab is the deep end. The user tells Aytia what they believe about
-the game(s); Aytia echoes its interpretation, previews the game worlds, and
-"Use this story" translates the story into the real build knobs (priorities,
-game script, team leans) then jumps to the Build page. The Build page itself
-is untouched — this is purely additive.
+NOT a nav tab — reached via "Tell the story" from the Build page. The user
+can skip it entirely; the Build page works the same without a story.
+
+"Apply story & build lineups" writes the story into the real build knobs,
+then requests a build and jumps to the Lineups page, where render_main
+executes the optimizer (same code path as the GENERATE button).
 """
 
 import streamlit as st
-
-from dfs_lab.ui import nav as _navmod
 
 
 # ---------------------------------------------------------------------------
@@ -75,14 +74,28 @@ def _worlds_for(gtype, winner, drivers):
     return base.get(gtype or "normal", base["normal"])
 
 
+def _pw(widget_fn, pkey, default, *args, **kwargs):
+    """Persistent widget: value survives detour navigation.
+
+    Mirrors the widget value to a non-widget session key via on_change and
+    re-seeds the widget from it if Streamlit drops the unmounted widget's
+    state. Same pattern as main.persistent_widget (imported lazily to avoid
+    a circular import at module load).
+    """
+    from dfs_lab.ui.main import persistent_widget
+    return persistent_widget(widget_fn, pkey, default, *args, **kwargs)
+
+
 # ---------------------------------------------------------------------------
 # Showdown
 # ---------------------------------------------------------------------------
 
 def render_showdown_story(df, teams):
-    st.markdown('<div class="card-title">Tell the story</div>'
-                '<div class="card-sub">Start with what you believe about the game. '
-                'Aytia translates it into build settings — or skip this and build the usual way.</div>',
+    if st.button("← Back to Build", key="story_sd_back"):
+        st.switch_page("pages/showdown_build.py")
+    st.markdown('<div class="card-title">Tell the story <span style="font-size:12px;opacity:.6">(optional)</span></div>'
+                '<div class="card-sub">If you have a take on this game, tell it here and Aytia will '
+                'build from it. No take? Head back — the Build page works the same without a story.</div>',
                 unsafe_allow_html=True)
     if len(teams) < 2:
         st.info("Load a showdown slate to tell its story.")
@@ -93,47 +106,37 @@ def render_showdown_story(df, teams):
     id_by_name = dict(zip(df["Name"].astype(str), df["ID"].astype(str)))
 
     st.markdown("#### Who wins?")
-    st.session_state.setdefault("story_sd_winner", "Coin flip")
-    winner = st.segmented_control("Winner", [t1, t2, "Coin flip"],
-                                  key="story_sd_winner")
+    winner = _pw(st.segmented_control, "story_sd_winner", "Coin flip",
+                 "Winner", [t1, t2, "Coin flip"])
     st.markdown("#### What kind of game?")
-    st.session_state.setdefault("story_sd_gtype", "normal")
-    gtype = st.segmented_control("Game type",
-                                 ["shootout", "normal", "defensive", "blowout"],
-                                 key="story_sd_gtype")
+    gtype = _pw(st.segmented_control, "story_sd_gtype", "normal",
+                "Game type", ["shootout", "normal", "defensive", "blowout"])
     st.markdown("#### Expected score")
     s1, s2 = st.columns(2)
-    st.session_state.setdefault("story_sd_as", 24)
-    st.session_state.setdefault("story_sd_hs", 21)
     with s1:
-        aws = st.number_input(f"{t1} points", min_value=0, max_value=70,
-                              key="story_sd_as")
+        aws = _pw(st.number_input, "story_sd_as", 24, f"{t1} points",
+                  min_value=0, max_value=70)
     with s2:
-        hs = st.number_input(f"{t2} points", min_value=0, max_value=70,
-                             key="story_sd_hs")
+        hs = _pw(st.number_input, "story_sd_hs", 21, f"{t2} points",
+                 min_value=0, max_value=70)
     st.markdown("#### How does the winner win?")
-    st.session_state.setdefault("story_sd_how_won", "air")
-    how_won = st.segmented_control(
-        "How won", ["air", "ground", "bigplay", "defense"],
+    how_won = _pw(
+        st.segmented_control, "story_sd_how_won", "air", "How won",
+        ["air", "ground", "bigplay", "defense"],
         format_func=lambda x: {"air": "Air raid", "ground": "Ground control",
-                               "bigplay": "Big plays", "defense": "Defense & ST"}[x],
-        key="story_sd_how_won")
+                               "bigplay": "Big plays", "defense": "Defense & ST"}[x])
     st.markdown("#### How does the loser score?")
-    st.session_state.setdefault("story_sd_how_lost", "pace")
-    how_lost = st.segmented_control(
-        "How lost", ["garbage", "pace", "shutdown"],
+    how_lost = _pw(
+        st.segmented_control, "story_sd_how_lost", "pace", "How lost",
+        ["garbage", "pace", "shutdown"],
         format_func=lambda x: {"garbage": "Garbage time", "pace": "Keeps pace",
-                               "shut": "Shut down", "shutdown": "Shut down"}[x],
-        key="story_sd_how_lost")
+                               "shutdown": "Shut down"}[x])
     st.markdown("#### Who drives the story? (up to 3)")
-    st.session_state.setdefault("story_sd_drivers", [])
-    drivers = st.multiselect("Drivers", names,
-                             max_selections=3, key="story_sd_drivers",
-                             label_visibility="collapsed")
+    drivers = _pw(st.multiselect, "story_sd_drivers", [], "Drivers", names,
+                  max_selections=3, label_visibility="collapsed")
     st.markdown("#### Who disappoints?")
-    st.session_state.setdefault("story_sd_fades", [])
-    fades = st.multiselect("Disappointments", names,
-                           key="story_sd_fades", label_visibility="collapsed")
+    fades = _pw(st.multiselect, "story_sd_fades", [], "Disappointments", names,
+                label_visibility="collapsed")
 
     st.markdown("#### Aytia's read")
     st.info(_interpret_showdown(winner, gtype, hs, aws, how_won, how_lost,
@@ -146,12 +149,14 @@ def render_showdown_story(df, teams):
                     unsafe_allow_html=True)
         st.progress(pct / 100.0)
 
-    if st.button("Use this story → build lineups", type="primary",
-                 use_container_width=True, key="story_sd_apply"):
+    if st.button("Apply story & build lineups", type="primary",
+                 use_container_width=True, key="story_sd_build"):
         _apply_showdown_story(df, id_by_name, winner, gtype, t1, t2,
                               aws, hs, drivers, fades)
-        st.toast("Story applied to build settings")
-        _navmod.goto_page("Showdown", "⚡ Build")
+        # Request a real optimizer run; the Lineups page executes it on load
+        # (same code path as the Build page's GENERATE button).
+        st.session_state["story_build_requested"] = True
+        st.switch_page("pages/showdown_lineups.py")
 
 
 def _apply_showdown_story(df, id_by_name, winner, gtype, t1, t2, aws, hs, drivers, fades):
@@ -209,9 +214,12 @@ def _classic_games(df):
 
 
 def render_classic_story(df, teams):
-    st.markdown('<div class="card-title">Tell the story</div>'
+    if st.button("← Back to Build", key="story_cl_back"):
+        st.switch_page("pages/classic_build.py")
+    st.markdown('<div class="card-title">Tell the story <span style="font-size:12px;opacity:.6">(optional)</span></div>'
                 '<div class="card-sub">Your slate thesis, then stories only for the games '
-                'you have a take on. Untold games run on Aytia\'s baseline.</div>',
+                'you have a take on. Untold games run on Aytia\'s baseline. No take? '
+                'Head back — the Build page works the same without a story.</div>',
                 unsafe_allow_html=True)
     games = _classic_games(df)
     game_labels = [g[0] for g in games] or ["No games detected"]
@@ -219,32 +227,27 @@ def render_classic_story(df, teams):
     id_by_name = dict(zip(df["Name"].astype(str), df["ID"].astype(str)))
 
     st.markdown("#### My slate thesis")
-    love = st.selectbox("Game I love", game_labels,
-                        index=_idx(game_labels, st.session_state.get("story_cl_love")),
-                        key="story_cl_love")
-    bust = st.selectbox("Game I think busts", game_labels,
-                        index=_idx(game_labels, st.session_state.get("story_cl_bust")),
-                        key="story_cl_bust")
-    lev = st.selectbox("Favorite leverage", names,
-                       index=_idx(names, st.session_state.get("story_cl_leverage")),
-                       key="story_cl_leverage")
-    fade = st.selectbox("Fading", names,
-                        index=_idx(names, st.session_state.get("story_cl_fade")),
-                        key="story_cl_fade")
+    love = _pw(st.selectbox, "story_cl_love", game_labels[0],
+               "Game I love", game_labels)
+    bust = _pw(st.selectbox, "story_cl_bust", game_labels[0],
+               "Game I think busts", game_labels)
+    lev = _pw(st.selectbox, "story_cl_leverage", names[0] if names else "",
+              "Favorite leverage", names)
+    fade = _pw(st.selectbox, "story_cl_fade", names[0] if names else "",
+               "Fading", names)
 
     st.markdown("#### Games — tell a story where you have an edge")
     told = 0
     for label, a, b in games:
         key = f"story_cl_game_{a}_{b}"
         with st.expander(label, expanded=False):
-            w = st.segmented_control("Who wins?", [a, b, "Coin flip"],
-                                     default="Coin flip", key=key + "_w")
-            gt = st.segmented_control("Game type",
-                                      ["shootout", "normal", "defensive", "blowout"],
-                                      default="normal", key=key + "_t")
+            w = _pw(st.segmented_control, key + "_w_p", "Coin flip",
+                    "Who wins?", [a, b, "Coin flip"])
+            gt = _pw(st.segmented_control, key + "_t_p", "normal",
+                     "Game type", ["shootout", "normal", "defensive", "blowout"])
             gp = [n for n in names if n in df[df["Team"].astype(str).str.upper().isin([a, b])]["Name"].astype(str).tolist()]
-            dr = st.multiselect("Drivers (up to 3)", gp, max_selections=3,
-                                key=key + "_d", label_visibility="collapsed")
+            dr = _pw(st.multiselect, key + "_d_p", [], "Drivers", gp,
+                     max_selections=3, label_visibility="collapsed")
             if w != "Coin flip" or gt != "normal" or dr:
                 told += 1
                 st.caption(_interpret_showdown(w, gt, "", "", "air", "pace", dr, [], a, b))
@@ -253,18 +256,11 @@ def render_classic_story(df, teams):
     else:
         st.caption(f"{told} storied game(s) · {len(games)-told} on Aytia baseline · 15% hedge reserved.")
 
-    if st.button("Use my stories → build lineups", type="primary",
-                 use_container_width=True, key="story_cl_apply"):
+    if st.button("Apply stories & build lineups", type="primary",
+                 use_container_width=True, key="story_cl_build"):
         _apply_classic_story(df, id_by_name, games, love, bust, lev, fade)
-        st.toast("Stories applied to build settings")
-        _navmod.goto_page("Classic", "⚡ Build")
-
-
-def _idx(options, val):
-    try:
-        return options.index(val)
-    except ValueError:
-        return 0
+        st.session_state["story_build_requested"] = True
+        st.switch_page("pages/classic_lineups.py")
 
 
 def _apply_classic_story(df, id_by_name, games, love, bust, lev, fade):
