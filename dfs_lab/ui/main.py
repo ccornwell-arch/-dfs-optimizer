@@ -622,6 +622,7 @@ def render_main(settings):
                     st.session_state.pop(_ced_prev,None)
                 st.session_state["v4_classic_players_key"]=_ced_key
                 with st.form("classic_player_editor_form",clear_on_submit=False):
+                    apply_classic_players_top=st.form_submit_button("APPLY PLAYER EDITS",type="primary",use_container_width=True)
                     edited=st.data_editor(ed,hide_index=True,use_container_width=True,height=620,
                         disabled=["ID","Name","Pos","Team","Opponent","Salary","Base Proj","Own"],
                         # iOS Safari ignores Streamlit's pinned columns, so Out/Lock sit
@@ -649,7 +650,7 @@ def render_main(settings):
                     for _,r in edited.iterrows():
                         st.session_state["classic_projection_overrides"].pop(str(r["ID"]),None)
                     st.rerun()
-                if apply_classic_players:
+                if apply_classic_players or apply_classic_players_top:
                     # The old "APPLY PLAYER CHANGES" silently wiped built lineups even
                     # when nothing was edited. Now: only clear the portfolio when an
                     # edit actually changed something.
@@ -671,6 +672,7 @@ def render_main(settings):
                             st.session_state["classic_projection_overrides"].pop(pid,None)
                     if changed:
                         st.session_state.pop("classic_result_v4",None)
+                        st.toast("✅ Player edits applied")
                         # Pending row-positional edits are now materialized in
                         # strategy_master. Drop the widget's pending-edit state so a
                         # later sort/filter change doesn't warn about "unapplied"
@@ -1091,17 +1093,17 @@ def render_main(settings):
                     if qid not in st.session_state["showdown_strategy"]: st.session_state["showdown_strategy"][qid]={}
                     with q2:
                         if st.button("Lock",use_container_width=True,key="sd_quick_lock"):
-                            st.session_state["showdown_strategy"][qid].update({"Lock":True,"CPT Lock":False,"Exclude":False}); st.rerun()
+                            st.session_state["showdown_strategy"][qid].update({"Lock":True,"CPT Lock":False,"Exclude":False}); st.toast(f"🔒 {quick_player} locked — applied"); st.rerun()
                     with q3:
                         if st.button("CPT",use_container_width=True,key="sd_quick_cpt"):
-                            st.session_state["showdown_strategy"][qid].update({"Lock":False,"CPT Lock":True,"Exclude":False,"CPT Eligible":True}); st.rerun()
+                            st.session_state["showdown_strategy"][qid].update({"Lock":False,"CPT Lock":True,"Exclude":False,"CPT Eligible":True}); st.toast(f"👑 {quick_player} captained — applied"); st.rerun()
                     with q4:
                         if st.button("Out",use_container_width=True,key="sd_quick_out"):
-                            st.session_state["showdown_strategy"][qid].update({"Lock":False,"CPT Lock":False,"Exclude":True,"CPT Eligible":False,"Priority":"Exclude"}); st.rerun()
+                            st.session_state["showdown_strategy"][qid].update({"Lock":False,"CPT Lock":False,"Exclude":True,"CPT Eligible":False,"Priority":"Exclude"}); st.toast(f"🚫 {quick_player} marked Out — applied"); st.rerun()
                     with q5:
                         if st.button("Clear",use_container_width=True,key="sd_quick_clear"):
-                            st.session_state["showdown_strategy"].pop(qid,None); st.rerun()
-                    st.caption("Lock = every lineup • CPT = Captain every lineup • Out = never use")
+                            st.session_state["showdown_strategy"].pop(qid,None); st.toast(f"{quick_player} rules cleared"); st.rerun()
+                    st.caption("Lock = every lineup • CPT = Captain every lineup • Out = never use — these apply instantly, no submit needed.")
 
                 ed=pd.DataFrame({"ID":view["ID"].astype(str),"Name":view["Name"],"Pos":view["Position"],"Team":view["Team"],"Flex $":view["FlexSalary"],"DFS Base":view["My Proj"].round(2),"Availability":view.get("Live Status",pd.Series("Not verified",index=view.index)),"Hist G":view.get("History Games",pd.Series(0,index=view.index)),"Matchup %":view.get("Matchup Adj %",pd.Series(0.0,index=view.index)),"Model":view["Model Proj"].round(2),"Your Proj":view["Aytia Proj"].round(2),"Δ%":view["Proj Change %"].round(1),"Own":view["My Own"].round(1),"CPT Own":view["CPT Own"].round(1),"Lock":False,"CPT Lock":False,"Exclude":False,"CPT Eligible":False,"Priority":"Neutral","Min Exposure":0,"Max Exposure":100,"CPT Min":0,"CPT Max":100})
                 for x,r in ed.iterrows():
@@ -1123,6 +1125,7 @@ def render_main(settings):
                     st.session_state.pop(_sed_prev,None)
                 st.session_state["v4_sdplayers_key"]=_sed_key
                 with st.form("showdown_player_editor_form", clear_on_submit=False):
+                    apply_player_changes_top=st.form_submit_button("Apply player changes",type="primary",use_container_width=True)
                     edited=st.data_editor(
                         ed,
                     hide_index=True,
@@ -1159,7 +1162,7 @@ def render_main(settings):
                         key=_sed_key,
                     )
                     apply_player_changes=st.form_submit_button("Apply player changes",type="primary",use_container_width=True)
-                if apply_player_changes:
+                if apply_player_changes or apply_player_changes_top:
                     for _,r in edited.iterrows():
                         pid=str(r["ID"]); model_val=float(view.loc[view["ID"].astype(str).eq(pid),"Model Proj"].iloc[0]) if not view.loc[view["ID"].astype(str).eq(pid)].empty else float(r["Your Proj"])
                         user_val=float(r["Your Proj"])
@@ -1183,6 +1186,7 @@ def render_main(settings):
                     for _k in [k for k in list(st.session_state.keys()) if str(k).startswith("sd_exp_editor_")]:
                         st.session_state.pop(_k,None)
                     _n_ov=len(st.session_state["projection_overrides"])
+                    st.toast("✅ Player changes applied")
                     st.success(f"Player settings applied.{f' {_n_ov} projection override(s) active — builds use your numbers.' if _n_ov else ''}")
                     st.rerun()
                 st.button("📋 Back to Lineups",key="sd_players_back_to_lineups",use_container_width=True,on_click=_sd_nav_go,args=(_SD_TABS[5],))
