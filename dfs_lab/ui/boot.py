@@ -12,6 +12,7 @@ import streamlit as st
 from dfs_lab import styles
 from dfs_lab.theme import theme_css
 from dfs_lab.ui import nav as _nav
+from dfs_lab.ui import persist as _persist
 
 
 def boot_page(mode, tab):
@@ -32,6 +33,9 @@ def boot_page(mode, tab):
     if not settings or settings.get("mode") != mode:
         st.switch_page("streamlit_app.py")
         st.stop()
+    # 'Aytia remembers': record where the user is so a killed tab can land
+    # back here. Saved into the URL blob by persist.save().
+    _persist.note_page(_nav.page_file_for(mode, tab) or "")
     # Pre-seed the nav widget state so render_main's segmented control opens
     # on this page. on_change only fires on user taps, not this assignment.
     st.session_state[_nav.nav_state_key(mode)] = tab

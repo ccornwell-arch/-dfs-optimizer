@@ -21,6 +21,7 @@ from dfs_lab.common import player_editor_widget_key
 from dfs_lab.config import APP_BUILD, PRIORITY_OPTIONS, ROSTER_SLOTS, git_build_stamp
 from dfs_lab.leverage import leverage_lane_pick, chalk_bust_beneficiaries
 from dfs_lab.ui.results import render_results_command_center, postbuild_lineups_context
+from dfs_lab.ui import persist
 from dfs_lab.data import prepare_player_pool, prepare_showdown_pool, apply_projection_overrides, apply_override_rescue, apply_post_edit_availability_gate, availability_freshness_note
 from dfs_lab.classic import (generate_lineups, classic_apply_qb_cap, classic_apply_qb_exclusions,
     classic_contest_recommendations, classic_context_evidence,
@@ -263,6 +264,10 @@ def render_main(settings):
                 st.info("Using Aytia projections — no SaberSim file uploaded. Ownership shown is Aytia's estimate, built from projection, salary value and position baselines.")
             st.session_state.setdefault("strategy_master",{}); st.session_state.setdefault("team_strategy_master",{})
             st.session_state.setdefault("classic_projection_overrides",{})
+            # 'Aytia remembers': re-apply persisted player edits after a session
+            # death (iOS tab suspend). No-op when the dicts already have data
+            # or the slate differs.
+            persist.restore_player_state(df, "Classic")
             df["Base Proj"]=pd.to_numeric(df["My Proj"],errors="coerce").fillna(0.0)
             if st.session_state["classic_projection_overrides"]:
                 for _i,_r in df.iterrows():
@@ -954,6 +959,11 @@ def render_main(settings):
             st.session_state.setdefault("showdown_context",{})
             st.session_state.setdefault("showdown_relationships",[])
             st.session_state.setdefault("projection_overrides",{})
+            # 'Aytia remembers': re-apply persisted player edits after a session
+            # death (iOS tab suspend). No-op when the dicts already have data
+            # or the slate differs. Runs before the rescue path so restored
+            # overrides participate in it.
+            persist.restore_player_state(df, "Showdown")
             # Rescue path for the silent-override trust bug (Jalon Daniels, TNF
             # 10/08): a typed projection on an auto-excluded player puts them
             # back in the pool, unless officially OUT or user-marked Out. Runs

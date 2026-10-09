@@ -96,16 +96,16 @@ def render_setup():
         st.caption("These controls live inside Aytia and stay available after the slate loads.")
         cc1,cc2=st.columns(2)
         with cc1:
-            mode=st.segmented_control("Game type",["Classic","Showdown"],default="Showdown")
-            preset=st.selectbox("Contest preset",["Large GPP","Small-field GPP","Single Entry","Winner Take All","Cash-ish"])
+            mode=st.segmented_control("Game type",["Classic","Showdown"],default="Showdown",key="cfg_mode")
+            preset=st.selectbox("Contest preset",["Large GPP","Small-field GPP","Single Entry","Winner Take All","Cash-ish"],key="cfg_preset")
         defaults={"Large GPP":(50000,"GPP / top-heavy","150-Max"),"Small-field GPP":(500,"GPP / top-heavy","3-Max"),"Single Entry":(300,"Flatter payouts","Single Entry"),"Winner Take All":(500,"Winner take all","Single Entry"),"Cash-ish":(100,"Flatter payouts","Single Entry")}
         dfield,dpayout,dentry=defaults[preset]
         with cc2:
-            field_size=st.number_input("Field size",min_value=2,value=int(dfield),step=1)
-            entry_format=st.selectbox("Contest max entries",["Single Entry","3-Max","20-Max","150-Max"],index=["Single Entry","3-Max","20-Max","150-Max"].index(dentry),
+            field_size=st.number_input("Field size",min_value=2,value=int(dfield),step=1,key="cfg_field")
+            entry_format=st.selectbox("Contest max entries",["Single Entry","3-Max","20-Max","150-Max"],index=["Single Entry","3-Max","20-Max","150-Max"].index(dentry),key="cfg_entry",
                 help="The contest's entry limit — NOT how many you're building. Sets how the app models the field: higher max = flatter estimated ownership (the field owns contrarian plays more) and higher ceiling requirements.")
         cc3,cc4=st.columns(2)
-        with cc3: payout_style=st.selectbox("Payout",["GPP / top-heavy","Winner take all","Flatter payouts"],index=["GPP / top-heavy","Winner take all","Flatter payouts"].index(dpayout))
+        with cc3: payout_style=st.selectbox("Payout",["GPP / top-heavy","Winner take all","Flatter payouts"],index=["GPP / top-heavy","Winner take all","Flatter payouts"].index(dpayout),key="cfg_payout")
         with cc4:
             lineup_choice=st.radio("Lineups to build",[5,20,50,100,150,"Custom"],index=1,horizontal=True,key="dfs_lineup_choice",
                 help="How many lineups the optimizer generates for you to review. Build more than you'll enter to have options — the game-world cap keeps this candidate pool diverse.")
@@ -123,8 +123,13 @@ def render_setup():
                 elif lineup_count>_emax:
                     st.caption(f"Building {lineup_count} candidates for review ({_emax}-max contest) — export your top {my_entries} when you're done.")
         with st.expander("Advanced build settings"):
-            seed=st.number_input("Random seed",min_value=1,value=42,step=1)
+            seed=st.number_input("Random seed",min_value=1,value=42,step=1,key="cfg_seed")
             st.caption("Change this only when you want a different randomized batch.")
+            if st.button("↺ Reset saved setup", key="cfg_reset_saved",
+                         help="Forget everything Aytia remembers on this device (setup, players, rules) and start from defaults."):
+                from dfs_lab.ui import persist as _persist
+                _persist.clear_saved()
+                st.rerun()
     return {
         "mode": mode,
         "field_size": field_size,
