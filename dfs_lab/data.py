@@ -813,6 +813,77 @@ def apply_projection_overrides(df, override_map=None):
     out["Aytia Proj"]=np.array(finals).round(3); out["Projection Override"]=flags
     return out
 
+def _is_hard_football_out(reason):
+    """Exclusion reasons a manual projection override must NOT rescue.
+
+    A typed number is strong user intent, but it cannot make an officially
+    ruled-out or roster-ineligible player score fantasy points. Those stay
+    out — loudly, not silently.
+    """
+    r=str(reason or "")
+    return (
+        r=="Official injury report: OUT"
+        or r.startswith("Live roster status:")
+        or "NFL roster record" in r
+        or r.startswith("Roster record has no team")
+    )
+
+def apply_override_rescue(df, override_map, strategy_map=None):
+    """Rescue path for the silent-override trust bug (Jalon Daniels, TNF 10/08).
+
+    A manual projection override ("Your Proj") is the strongest explicit user
+    take: typing a number for a player means "I want this player usable".
+    Previously an override on an auto-excluded player updated the number but
+    left ActiveForBuild=False, so the build silently ignored it.
+
+    Rules:
+    - Explicit user exclusion (Out / Priority=Exclude) always wins: no
+      rescue; the conflict is reported so the user can clear the Out rule.
+    - Hard football outs (official OUT, live roster blocks) are NOT rescued:
+      the player cannot score. Reported, not silent.
+    - Model-driven exclusions (Backup QB guard, no usable projection,
+      pre-build projection/salary bands) ARE rescued: ActiveForBuild=True,
+      Role Confidence relabeled so the coherence gate treats the player as
+      user-backed instead of hard-rejecting them, and the stale exclusion
+      reason cleared.
+
+    Returns (df, rescued, blocked): rescued/blocked are lists of
+    (name, prior_reason_or_note) for loud pre-build surfacing.
+    """
+    out=df.copy()
+    strategy_map=strategy_map or {}
+    rescued=[]; blocked=[]
+    if "ActiveForBuild" not in out.columns:
+        out["ActiveForBuild"]=True
+    try:
+        ov={str(k):float(v) for k,v in (override_map or {}).items()}
+    except (TypeError,ValueError):
+        ov={}
+    has_id="ID" in out.columns
+    for i,r in out.iterrows():
+        pid=str(r["ID"]) if has_id else None
+        val=ov.get(pid) if pid else None
+        if val is None or not (val>0.01):
+            continue
+        if bool(out.at[i,"ActiveForBuild"]):
+            continue
+        name=str(r["Name"]) if "Name" in out.columns else (pid or f"row {i}")
+        strat=strategy_map.get(pid,{}) if pid else {}
+        if bool(strat.get("Exclude",False)) or strat.get("Priority")=="Exclude":
+            blocked.append((name,"you marked them Out — the Out rule wins"))
+            continue
+        reason=str(out.at[i,"Auto Excluded Reason"]) if "Auto Excluded Reason" in out.columns else ""
+        if _is_hard_football_out(reason):
+            blocked.append((name,reason or "officially ruled out"))
+            continue
+        out.at[i,"ActiveForBuild"]=True
+        if "Role Confidence" in out.columns:
+            out.at[i,"Role Confidence"]="Your projection — rescued from auto-exclusion"
+        if "Auto Excluded Reason" in out.columns:
+            out.at[i,"Auto Excluded Reason"]=""
+        rescued.append((name,reason or "no reason recorded"))
+    return out,rescued,blocked
+
 def prepare_showdown_pool(dk_file, ss_file=None, entry_format=None):
     """Create the Showdown pool. Aytia projections work with DK alone; SaberSim is optional comparison data.
 

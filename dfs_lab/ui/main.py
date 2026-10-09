@@ -21,7 +21,7 @@ from dfs_lab.common import player_editor_widget_key
 from dfs_lab.config import APP_BUILD, PRIORITY_OPTIONS, ROSTER_SLOTS, git_build_stamp
 from dfs_lab.leverage import leverage_lane_pick, chalk_bust_beneficiaries
 from dfs_lab.ui.results import render_results_command_center, postbuild_lineups_context
-from dfs_lab.data import prepare_player_pool, prepare_showdown_pool, apply_projection_overrides, apply_post_edit_availability_gate, availability_freshness_note
+from dfs_lab.data import prepare_player_pool, prepare_showdown_pool, apply_projection_overrides, apply_override_rescue, apply_post_edit_availability_gate, availability_freshness_note
 from dfs_lab.classic import (generate_lineups, classic_apply_qb_cap, classic_apply_qb_exclusions,
     classic_contest_recommendations, classic_context_evidence,
     classic_portfolio_intelligence, classic_postbuild_answer, classic_postbuild_report,
@@ -273,6 +273,12 @@ def render_main(settings):
             # to zero AFTER pool creation must take the player out of the build.
             # Without this, ActiveForBuild stays True from the original upload.
             df=apply_post_edit_availability_gate(df,"My Proj","ActiveForBuild",0.05)
+            # Rescue path for the silent-override trust bug: a typed projection
+            # on an auto-excluded player puts them back in the pool, unless the
+            # player is officially OUT or the user marked them Out. The notes
+            # surface in the Build tab, above the Generate button.
+            df,_rescued_c,_blocked_c=apply_override_rescue(df,st.session_state.get("classic_projection_overrides",{}),st.session_state.get("strategy_master",{}))
+            st.session_state["_classic_rescue_notes"]=(_rescued_c,_blocked_c)
             st.session_state.setdefault("classic_ai_chat",[])
             st.session_state.setdefault("classic_ai_model","")
             st.session_state.setdefault("classic_ai_error","")
@@ -624,6 +630,11 @@ def render_main(settings):
                 _fresh_note = availability_freshness_note(df)
                 if _fresh_note:
                     st.warning(_fresh_note)
+                _rescued_c,_blocked_c=st.session_state.get("_classic_rescue_notes",([],[]))
+                for _nm,_why in _rescued_c:
+                    st.info(f"🔓 {_nm} is back in the pool — your projection overrode the auto-exclusion ({_why}).")
+                for _nm,_why in _blocked_c:
+                    st.warning(f"⚠️ Your projection for {_nm} was NOT applied — {_why}.")
                 build_btn=st.button(f"⚡ GENERATE {lineup_count} RATED LINEUPS",type="primary",use_container_width=True,key="v4_classic_build")
 
             if classic_nav==_CLASSIC_TABS[2]:
@@ -943,6 +954,13 @@ def render_main(settings):
             st.session_state.setdefault("showdown_context",{})
             st.session_state.setdefault("showdown_relationships",[])
             st.session_state.setdefault("projection_overrides",{})
+            # Rescue path for the silent-override trust bug (Jalon Daniels, TNF
+            # 10/08): a typed projection on an auto-excluded player puts them
+            # back in the pool, unless officially OUT or user-marked Out. Runs
+            # on the pool here so build_df inherits it; notes surface in the
+            # Build tab above the Generate button.
+            df,_rescued_sd,_blocked_sd=apply_override_rescue(df,st.session_state.get("projection_overrides",{}),st.session_state.get("showdown_strategy",{}))
+            st.session_state["_sd_rescue_notes"]=(_rescued_sd,_blocked_sd)
             st.session_state.setdefault("context_strength","Standard")
             st.session_state.setdefault("sd_use_score", False)
             st.session_state.setdefault("sd_script", "Neutral")
@@ -1076,6 +1094,11 @@ def render_main(settings):
                 _sd_fresh_note = availability_freshness_note(df)
                 if _sd_fresh_note:
                     st.warning(_sd_fresh_note)
+                _rescued_sd,_blocked_sd=st.session_state.get("_sd_rescue_notes",([],[]))
+                for _nm,_why in _rescued_sd:
+                    st.info(f"🔓 {_nm} is back in the pool — your projection overrode the auto-exclusion ({_why}).")
+                for _nm,_why in _blocked_sd:
+                    st.warning(f"⚠️ Your projection for {_nm} was NOT applied — {_why}.")
                 build_btn=st.button(f"⚡ GENERATE {lineup_count} LINEUPS",type="primary",use_container_width=True,key="v4_sd_build")
 
             if sd_nav==_SD_TABS[1]:
