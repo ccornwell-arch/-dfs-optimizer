@@ -262,3 +262,67 @@ if __name__ == "__main__":
             print(f"FAIL {n}: {e!r}")
     print(f"\n{len(names)-failed}/{len(names)} passed")
     sys.exit(1 if failed else 0)
+
+
+# --- reseed_missing_scalars (Oct 10, 2026: rules reset on page nav) --------
+
+def _blob_with_rules(**overrides):
+    s = {"classic_qb_stack": 1, "classic_bringback": "Required",
+         "classic_min_salary": 48500, "classic_max_game": 5}
+    s.update(overrides)
+    return {"v": 1, "s": s}
+
+
+def test_reseed_fills_missing_widget_keys_from_blob():
+    # Simulates the iPhone bug: user set rules on the Rules page, navigated
+    # to Build, and the widget-backed keys vanished mid-session.
+    ss = {"_persist_blob": _blob_with_rules(),
+          "_persist_page": "pages/classic_rules.py"}
+    n = persist.reseed_missing_scalars(ss)
+    assert n == 4
+    assert ss["classic_qb_stack"] == 1
+    assert ss["classic_bringback"] == "Required"
+    assert ss["classic_min_salary"] == 48500
+    assert ss["classic_max_game"] == 5
+
+
+def test_reseed_never_overwrites_live_values():
+    ss = {"_persist_blob": _blob_with_rules(),
+          "classic_bringback": "None"}  # user changed it after the save
+    n = persist.reseed_missing_scalars(ss)
+    assert ss["classic_bringback"] == "None"
+    assert ss["classic_qb_stack"] == 1  # missing -> filled
+    assert n == 3
+
+
+def test_reseed_rejects_values_outside_widget_options():
+    ss = {"_persist_blob": _blob_with_rules(classic_bringback="Sometimes")}
+    n = persist.reseed_missing_scalars(ss)
+    assert "classic_bringback" not in ss
+    assert ss["classic_qb_stack"] == 1
+    assert n == 3
+
+
+def test_reseed_noop_without_blob():
+    assert persist.reseed_missing_scalars({}) == 0
+    assert persist.reseed_missing_scalars({"_persist_blob": None}) == 0
+
+
+def test_save_then_reseed_round_trip():
+    # Full loop: Rules page edits -> save -> keys lost -> reseed restores.
+    ss = {"classic_qb_stack": 1, "classic_bringback": "Required",
+          "classic_min_salary": 48500}
+    qp = {}
+    persist.save(ss, qp)
+    assert persist.PARAM in qp
+    # Simulate the page navigation losing widget-backed keys.
+    for k in ("classic_qb_stack", "classic_bringback", "classic_min_salary"):
+        del ss[k]
+    # restore() is a no-op here (same session, already restored) — this is
+    # exactly why reseed exists as a separate step in boot_page.
+    ss[persist._RESTORED_KEY] = True
+    assert persist.restore(ss, qp) is False
+    n = persist.reseed_missing_scalars(ss)
+    assert n == 3
+    assert ss["classic_qb_stack"] == 1
+    assert ss["classic_bringback"] == "Required"

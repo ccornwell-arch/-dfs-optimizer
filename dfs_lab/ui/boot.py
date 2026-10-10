@@ -16,6 +16,9 @@ from dfs_lab.ui import persist as _persist
 
 
 def boot_page(mode, tab):
+    # 'Aytia remembers': seed from the URL blob before anything else. No-op
+    # when this session already restored (never fights live editing).
+    _persist.restore()
     st.markdown(styles.MAIN_V634_SHELL_CSS, unsafe_allow_html=True)
     st.markdown(styles.MAIN_DYNAMIC_SHELL_CSS, unsafe_allow_html=True)
     st.markdown(styles.MAIN_UNIFORM_THEME_CSS, unsafe_allow_html=True)
@@ -36,6 +39,11 @@ def boot_page(mode, tab):
     # 'Aytia remembers': record where the user is so a killed tab can land
     # back here. Saved into the URL blob by persist.save().
     _persist.note_page(_nav.page_file_for(mode, tab) or "")
+    # Page navigation on iPhone can drop widget-backed session keys (new page
+    # load / dropped websocket): without this, render_main's setdefaults fill
+    # in DEFAULTS and the next page shows reset rules. Re-seed anything missing
+    # from the URL blob before any widget renders.
+    _persist.reseed_missing_scalars()
     # Pre-seed the nav widget state so render_main's segmented control opens
     # on this page. on_change only fires on user taps, not this assignment.
     st.session_state[_nav.nav_state_key(mode)] = tab

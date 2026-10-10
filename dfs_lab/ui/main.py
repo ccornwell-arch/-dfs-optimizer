@@ -1927,4 +1927,10 @@ def render_main(settings):
 
 
 
+    # 'Aytia remembers': every page (entry + all multipage pages) funnels through
+    # render_main, so saving here keeps the URL blob fresh no matter where the
+    # user edits. Without this, rule changes made on the Rules page never reach
+    # the blob, and any session hiccup on the way to Build restores stale
+    # defaults — the "rules reset when I go to build" bug.
+    persist.save()
     st.caption(f"Aytia · Build the story. Test the lineup. Challenge the field. · build {git_build_stamp()}")

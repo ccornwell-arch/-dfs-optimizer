@@ -282,6 +282,31 @@ def restore(session_state=None, query_params=None):
     return restored
 
 
+def reseed_missing_scalars(session_state=None):
+    """Re-fill persisted scalar keys that are missing from session state.
+
+    Multipage navigation on iPhone can lose widget-backed keys even without a
+    full session death (new page load, dropped websocket, widget cleanup):
+    the Rules page's `classic_bringback` vanishes, render_main's setdefault
+    fills in the DEFAULT, and the Build page shows reset rules. The URL blob
+    is the source of truth — anything in the blob that isn't in session state
+    gets re-seeded. Never overwrites a value the session already has, so live
+    editing is never fought.
+    Returns the number of keys re-seeded.
+    """
+    st = _st()
+    ss = session_state if session_state is not None else st.session_state
+    blob = ss.get("_persist_blob")
+    if not blob:
+        return 0
+    n = 0
+    for key, value in (blob.get("s") or {}).items():
+        if key not in ss and key in SCALAR_KEYS and _scalar_ok(key, value):
+            ss[key] = value
+            n += 1
+    return n
+
+
 def restore_player_state(df, mode, session_state=None):
     """Apply persisted player/context deltas after the pool is built.
 
@@ -367,6 +392,10 @@ def save(session_state=None, query_params=None):
             blob.pop(section, None)
     if current_fp:
         ss["_persist_last_blob_slate"] = current_fp
+    # Keep the stashed blob in sync: reseed_missing_scalars() reads it on page
+    # navigation, and it must reflect the latest edits, not the session's
+    # first restore.
+    ss["_persist_blob"] = blob
     raw = encode_blob(blob)
     try:
         if qp.get(PARAM) != raw:
