@@ -412,7 +412,8 @@ def solve_showdown_one(
     script, script_team, cpt_qb_passcatchers, wrte_cpt_qb_pair_pct, rb_cpt_dst_k_pct,
     max_k, max_dst, min_unique, previous_lineups,
     exposure_state=None, cpt_exposure_state=None, built_count=0, noise_scale=0.18,
-    relationship_rules=None, forced_overall_ids=None, forced_cpt_ids=None, game_world=None, world_influence=50
+    relationship_rules=None, forced_overall_ids=None, forced_cpt_ids=None, game_world=None, world_influence=50,
+    qb_exact=None
 ):
     n = len(df); s = len(SHOWDOWN_SLOTS); total_vars = n*s
     c = np.zeros(total_vars); lb = np.zeros(total_vars); ub = np.ones(total_vars); integrality = np.ones(total_vars)
@@ -557,6 +558,12 @@ def solve_showdown_one(
         for i in df.index[mask]:
             for j in range(s): coeff[vidx(i,j)] = 1.0
         if coeff: _add_constraint(rows,lows,highs,coeff,0,float(maxn))
+    # Optional exact-QB rule (e.g. "exactly one QB per lineup").
+    if qb_exact is not None:
+        coeff={}
+        for i in df.index[df["is_QB"]]:
+            for j in range(s): coeff[vidx(i,j)] = 1.0
+        if coeff: _add_constraint(rows,lows,highs,coeff,float(qb_exact),float(qb_exact))
 
     # Captain-specific correlation rules. Use randomized enforcement for percentage-based rules.
     for cpt in df.index[df["ActiveForBuild"]]:
@@ -892,7 +899,7 @@ def generate_showdown_lineups(df, field_size, payout_style, count, attempts, min
                               entry_format,
                               cpt_qb_passcatchers, wrte_cpt_qb_pair_pct, rb_cpt_dst_k_pct,
                               max_k, max_dst, min_unique, seed, relationship_rules=None, world_influence=50,
-                              show_progress=True, world_max_share=None):
+                              show_progress=True, world_max_share=None, qb_exact=None):
     """Generate a Showdown portfolio without wasting attempts on one randomly chosen build shape.
 
     V6.5 reliability change: every attempt now tries every user-allowed team construction
@@ -976,7 +983,8 @@ def generate_showdown_lineups(df, field_size, payout_style, count, attempts, min
                 cpt_qb_passcatchers,wrte_cpt_qb_pair_pct,rb_cpt_dst_k_pct,max_k,max_dst,
                 min_unique,previous,exposure,cpt_exp,len(rows),noise_scale=.14+.13*aggr,
                 relationship_rules=relationship_rules,forced_overall_ids=forced_overall,
-                forced_cpt_ids=forced_cpt,game_world=game_world,world_influence=world_influence
+                forced_cpt_ids=forced_cpt,game_world=game_world,world_influence=world_influence,
+                qb_exact=qb_exact
             )
             if chosen:
                 break

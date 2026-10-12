@@ -174,6 +174,8 @@ def _load_live_nfl_availability(season=2026):
 def _dfs_name_key(v):
     import re, unicodedata
     s=unicodedata.normalize("NFKD",str(v or "")).encode("ascii","ignore").decode("ascii").lower()
+    # Strip generational suffixes so "James Cook III" matches roster "James Cook".
+    s=re.sub(r"\s+(jr|sr|ii|iii|iv|v)\.?$","",s.strip())
     return re.sub(r"[^a-z0-9]","",s)
 
 def apply_live_availability_guard(df, active_col="ActiveForBuild", season=2026):

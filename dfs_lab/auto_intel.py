@@ -71,6 +71,12 @@ def _season_week_stats(player_stats, season):
     return s
 
 
+# DraftKings and nflverse disagree on exactly one abbreviation: the Rams are
+# "LAR" in DK files and "LA" in nflverse. Without this, auto-fill silently
+# finds no game for any Rams slate.
+_TEAM_ABBR_FIXUPS = {"LAR": "LA"}
+
+
 def slate_game_from_schedule(schedules, season, teams):
     """Find this slate's game in the nflverse schedule. Pure.
 
@@ -78,7 +84,7 @@ def slate_game_from_schedule(schedules, season, teams):
     slate's matchup cannot be matched -- auto-fill then reports honestly
     instead of guessing.
     """
-    tset = {str(t) for t in teams if str(t) and str(t).lower() != "nan"}
+    tset = {_TEAM_ABBR_FIXUPS.get(str(t), str(t)) for t in teams if str(t) and str(t).lower() != "nan"}
     if len(tset) != 2:
         return None
     s = schedules
@@ -278,7 +284,8 @@ def suggest_game_intel(df, player_stats, schedules, season):
     suggestions = {}
     for _, r in df.iterrows():
         pid, pos, team = str(r["ID"]), str(r["Position"]), str(r["Team"])
-        opp = away if team == home else home
+        nteam = _TEAM_ABBR_FIXUPS.get(team, team)
+        opp = away if nteam == home else home
         s = {"Defense": 0, "Usage": 0, "Home/Rest": 0, "Travel": 0,
              "Time/Split": 0, "Confidence": AUTO_CONFIDENCE, "Note": ""}
         notes = []
@@ -301,11 +308,11 @@ def suggest_game_intel(df, player_stats, schedules, season):
             unote = ""
         if unote:
             notes.append(unote)
-        hr, hnote = rt.get(team, {}).get("Home/Rest", (0, ""))
+        hr, hnote = rt.get(nteam, {}).get("Home/Rest", (0, ""))
         if hr:
             s["Home/Rest"] = hr
             notes.append(hnote)
-        tv, tnote2 = rt.get(team, {}).get("Travel", (0, ""))
+        tv, tnote2 = rt.get(nteam, {}).get("Travel", (0, ""))
         if tv:
             s["Travel"] = tv
             notes.append(tnote2)
