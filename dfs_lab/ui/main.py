@@ -195,6 +195,21 @@ def _dfs_lab_slate_cache():
     return {}
 
 
+@st.cache_data(show_spinner=False, max_entries=3)
+def _classic_sim_bundle(df, seed):
+    """Cache the 10,000-world sim + 500-world Optimal % so that switching
+    tabs (or any other rerun) doesn't recompute ~5 minutes of simulation.
+    The cache key is the pool contents + seed, so player edits or a new
+    upload correctly recompute."""
+    sim_result = topdown_simulate_slate(df, sims=10000, seed=seed)
+    try:
+        opt = optimal_lineup_rates(sim_result["worlds"], df, n_sample=500,
+                                   seed=seed)
+    except Exception:
+        opt = pd.DataFrame(columns=["Name", "Optimal %"])
+    return sim_result, opt
+
+
 def render_main(settings):
     """Post-upload flow (moved verbatim from streamlit_app.py)."""
     mode = settings["mode"]
@@ -330,7 +345,7 @@ def render_main(settings):
 
             intel=classic_context_evidence(df[["Name","Position","Team","Opponent","Game Info","My Proj"]].copy())
             intel_map=intel.set_index("Name") if not intel.empty else pd.DataFrame()
-            sim_result=topdown_simulate_slate(df, sims=10000, seed=seed)
+            sim_result, _opt_rates = _classic_sim_bundle(df, seed)
             sim_table=sim_result["game_table"]
             player_sim=sim_result["player_stats"]
             sim_worlds=sim_result["worlds"]
@@ -340,7 +355,6 @@ def render_main(settings):
             # 10,000 is available on demand via a button in the Simulation
             # Lab expander below.
             try:
-                _opt_rates=optimal_lineup_rates(sim_worlds, df, n_sample=500, seed=seed)
                 if not _opt_rates.empty and not player_sim.empty:
                     player_sim=player_sim.merge(_opt_rates, on="Name", how="left")
                     player_sim["Optimal %"]=player_sim["Optimal %"].fillna(0.0)
