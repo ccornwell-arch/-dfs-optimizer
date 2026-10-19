@@ -1022,13 +1022,15 @@ def topdown_simulate_slate(df, sims=10000, seed=42):
     worlds_df = pd.DataFrame(worlds, columns=d.index)
     return {"player_stats": player_stats, "game_table": game_table, "worlds": worlds_df}
 
-def optimal_lineup_rates(worlds_df, df, n_sample=500, seed=7, salary_cap=50000):
+def optimal_lineup_rates(worlds_df, df, n_sample=500, seed=7, salary_cap=50000,
+                         progress_cb=None):
     """Optimal % per player: share of sampled sim worlds in which the player
     appears in that world's highest-scoring salary-cap-legal lineup.
 
     Solves one minimal MILP per sampled world (salary cap + roster slots +
     position eligibility only — no correlation rules; the true optimal lineup
-    is purely max points). ~0.13s per solve, so 500 worlds ≈ 1 minute.
+    is purely max points). ~0.13s per solve. progress_cb(done, total) is
+    called every 200 solves when provided.
     Returns DataFrame with columns Name and "Optimal %".
     """
     from scipy.optimize import Bounds, LinearConstraint, milp
@@ -1103,7 +1105,8 @@ def optimal_lineup_rates(worlds_df, df, n_sample=500, seed=7, salary_cap=50000):
                             replace=False)
     counts = np.zeros(n)
     c = np.zeros(total)
-    for wi in sample_idx:
+    total_solves = len(sample_idx)
+    for si, wi in enumerate(sample_idx):
         pts = np.maximum(wmat[wi], 0.0)
         c[:] = 0.0
         for i in range(n):
@@ -1120,6 +1123,8 @@ def optimal_lineup_rates(worlds_df, df, n_sample=500, seed=7, salary_cap=50000):
             continue
         x = np.asarray(res.x).reshape(n, s)
         counts[x.sum(axis=1) > 0.5] += 1
+        if progress_cb and (si + 1) % 200 == 0:
+            progress_cb(si + 1, total_solves)
     pct = np.round(100 * counts / max(len(sample_idx), 1), 2)
     return pd.DataFrame({"Name": names, "Optimal %": pct}).sort_values(
         "Optimal %", ascending=False).reset_index(drop=True)

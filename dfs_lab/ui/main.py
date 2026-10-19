@@ -334,10 +334,17 @@ def render_main(settings):
             sim_table=sim_result["game_table"]
             player_sim=sim_result["player_stats"]
             sim_worlds=sim_result["worlds"]
-            # Optimal %: share of sampled sim worlds where the player lands in
-            # that world's highest-scoring salary-cap-legal lineup (~1 min).
+            # Optimal %: share of sim worlds where the player lands in that
+            # world's highest-scoring salary-cap-legal lineup (full 10,000
+            # worlds, ~20 min; progress shown in the Simulation Lab expander).
             try:
-                _opt_rates=optimal_lineup_rates(sim_worlds, df, n_sample=500, seed=seed)
+                _opt_prog = st.progress(0, text="Computing Optimal % (10,000 worlds)…")
+                def _cb(done, total):
+                    _opt_prog.progress(min(done / max(total, 1), 1.0),
+                                       text=f"Computing Optimal % ({done:,}/{total:,} worlds)…")
+                _opt_rates=optimal_lineup_rates(sim_worlds, df, n_sample=10000,
+                                                seed=seed, progress_cb=_cb)
+                _opt_prog.empty()
                 if not _opt_rates.empty and not player_sim.empty:
                     player_sim=player_sim.merge(_opt_rates, on="Name", how="left")
                     player_sim["Optimal %"]=player_sim["Optimal %"].fillna(0.0)
@@ -463,7 +470,7 @@ def render_main(settings):
                     st.dataframe(sim_table[[x for x in sim_cols if x in sim_table.columns]],hide_index=True,use_container_width=True,height=min(430,70+35*len(sim_table)))
                 if player_sim is not None and not player_sim.empty:
                     with st.expander("Simulation Lab — 10,000 top-down game worlds",expanded=False):
-                        st.caption("Sim Mean should track My Proj (the simulation is built on it). Sim P90 and P(3x) describe ceiling: how often a player breaks the slate in a correlated game script. Optimal % is the share of 500 sampled worlds where the player lands in that world's highest-scoring salary-cap-legal lineup — the slate's true must-haves.")
+                        st.caption("Sim Mean should track My Proj (the simulation is built on it). Sim P90 and P(3x) describe ceiling: how often a player breaks the slate in a correlated game script. Optimal % is the share of all 10,000 worlds where the player lands in that world's highest-scoring salary-cap-legal lineup — the slate's true must-haves.")
                         _ps=player_sim.sort_values("Sim P90",ascending=False)
                         st.dataframe(_ps,hide_index=True,use_container_width=True,height=420)
 
