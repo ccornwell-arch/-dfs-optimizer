@@ -27,6 +27,7 @@ from dfs_lab.classic import (generate_lineups, classic_apply_qb_cap, classic_app
     classic_contest_recommendations, classic_context_evidence,
     classic_portfolio_intelligence, classic_postbuild_answer, classic_postbuild_report,
     classic_qb_concentration_plan, topdown_simulate_slate, classic_strategy_theses, bringback_worthy_teams,
+    optimal_lineup_rates,
     calculate_exposure_table)
 from dfs_lab.showdown import (apply_context_engine, apply_showdown_scenario,
     audit_min_exposure, audit_showdown_portfolio, captain_pool_ids,
@@ -333,6 +334,15 @@ def render_main(settings):
             sim_table=sim_result["game_table"]
             player_sim=sim_result["player_stats"]
             sim_worlds=sim_result["worlds"]
+            # Optimal %: share of sampled sim worlds where the player lands in
+            # that world's highest-scoring salary-cap-legal lineup (~1 min).
+            try:
+                _opt_rates=optimal_lineup_rates(sim_worlds, df, n_sample=500, seed=seed)
+                if not _opt_rates.empty and not player_sim.empty:
+                    player_sim=player_sim.merge(_opt_rates, on="Name", how="left")
+                    player_sim["Optimal %"]=player_sim["Optimal %"].fillna(0.0)
+            except Exception:
+                pass
             bb_worthy=bringback_worthy_teams(df)
             _slate_teams=sorted(set(df["Team"].astype(str).str.upper().tolist()))
             _bb_weak=[t for t in _slate_teams if t not in bb_worthy]
@@ -453,7 +463,7 @@ def render_main(settings):
                     st.dataframe(sim_table[[x for x in sim_cols if x in sim_table.columns]],hide_index=True,use_container_width=True,height=min(430,70+35*len(sim_table)))
                 if player_sim is not None and not player_sim.empty:
                     with st.expander("Simulation Lab — 10,000 top-down game worlds",expanded=False):
-                        st.caption("Sim Mean should track My Proj (the simulation is built on it). Sim P90 and P(3x) describe ceiling: how often a player breaks the slate in a correlated game script.")
+                        st.caption("Sim Mean should track My Proj (the simulation is built on it). Sim P90 and P(3x) describe ceiling: how often a player breaks the slate in a correlated game script. Optimal % is the share of 500 sampled worlds where the player lands in that world's highest-scoring salary-cap-legal lineup — the slate's true must-haves.")
                         _ps=player_sim.sort_values("Sim P90",ascending=False)
                         st.dataframe(_ps,hide_index=True,use_container_width=True,height=420)
 

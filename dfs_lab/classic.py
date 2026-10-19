@@ -1022,6 +1022,108 @@ def topdown_simulate_slate(df, sims=10000, seed=42):
     worlds_df = pd.DataFrame(worlds, columns=d.index)
     return {"player_stats": player_stats, "game_table": game_table, "worlds": worlds_df}
 
+def optimal_lineup_rates(worlds_df, df, n_sample=500, seed=7, salary_cap=50000):
+    """Optimal % per player: share of sampled sim worlds in which the player
+    appears in that world's highest-scoring salary-cap-legal lineup.
+
+    Solves one minimal MILP per sampled world (salary cap + roster slots +
+    position eligibility only — no correlation rules; the true optimal lineup
+    is purely max points). ~0.13s per solve, so 500 worlds ≈ 1 minute.
+    Returns DataFrame with columns Name and "Optimal %".
+    """
+    from scipy.optimize import Bounds, LinearConstraint, milp
+    from scipy.sparse import lil_matrix
+
+    cols_out = pd.DataFrame(columns=["Name", "Optimal %"])
+    if worlds_df is None or worlds_df.empty or df is None or df.empty:
+        return cols_out
+    d = df.reset_index(drop=True)
+    if "ActiveForBuild" in d.columns:
+        d = d[d["ActiveForBuild"]].reset_index(drop=True)
+    if d.empty or "Salary" not in d.columns or "Position" not in d.columns:
+        return cols_out
+
+    slots = list(ROSTER_SLOTS)
+    s = len(slots)
+
+    def _elig(pos):
+        p = str(pos).upper()
+        if p == "QB":
+            return ["QB"]
+        if p == "RB":
+            return ["RB1", "RB2", "FLEX"]
+        if p == "WR":
+            return ["WR1", "WR2", "WR3", "FLEX"]
+        if p == "TE":
+            return ["TE", "FLEX"]
+        if p == "DST":
+            return ["DST"]
+        return []
+
+    elig = [_elig(p) for p in d["Position"]]
+    # world column k corresponds to pre-reset df position; map names via order
+    names = d["Name"].astype(str).tolist()
+    salaries = pd.to_numeric(d["Salary"], errors="coerce").fillna(0).to_numpy(float)
+    n = len(d)
+
+    def _vidx(i, j):
+        return i * s + j
+
+    total = n * s
+    rows, lows, highs = [], [], []
+    for j, sl in enumerate(slots):
+        coeff = {_vidx(i, j): 1.0 for i in range(n) if sl in elig[i]}
+        if coeff:
+            rows.append(coeff); lows.append(1.0); highs.append(1.0)
+    for i in range(n):
+        coeff = {_vidx(i, j): 1.0 for j, sl in enumerate(slots) if sl in elig[i]}
+        if coeff:
+            rows.append(coeff); lows.append(0.0); highs.append(1.0)
+    coeff = {_vidx(i, j): salaries[i] for i in range(n)
+             for j, sl in enumerate(slots) if sl in elig[i]}
+    rows.append(coeff); lows.append(0.0); highs.append(float(salary_cap))
+    A = lil_matrix((len(rows), total), dtype=float)
+    for r, coeff in enumerate(rows):
+        for col, val in coeff.items():
+            A[r, col] = val
+    cons = LinearConstraint(A.tocsr(), np.array(lows), np.array(highs))
+    integrality = np.ones(total)
+    bounds = Bounds(np.zeros(total), np.ones(total))
+
+    # World column k corresponds to row k of the full (pre-filter) pool.
+    # Restrict the matrix to the active players used in the MILP.
+    full = df.reset_index(drop=True)
+    name_to_k = {str(nm): k for k, nm in enumerate(full["Name"].astype(str))}
+    keep = [name_to_k.get(nm) for nm in names]
+    if any(k is None for k in keep):
+        return cols_out
+    wmat = worlds_df.to_numpy(float)[:, keep]
+    rng = np.random.default_rng(seed)
+    sample_idx = rng.choice(wmat.shape[0], size=min(n_sample, wmat.shape[0]),
+                            replace=False)
+    counts = np.zeros(n)
+    c = np.zeros(total)
+    for wi in sample_idx:
+        pts = np.maximum(wmat[wi], 0.0)
+        c[:] = 0.0
+        for i in range(n):
+            v = -pts[i]
+            for j, sl in enumerate(slots):
+                if sl in elig[i]:
+                    c[_vidx(i, j)] = v
+        try:
+            res = milp(c=c, integrality=integrality, bounds=bounds,
+                       constraints=cons, options={"time_limit": 10.0})
+        except Exception:
+            continue
+        if not res.success or res.x is None:
+            continue
+        x = np.asarray(res.x).reshape(n, s)
+        counts[x.sum(axis=1) > 0.5] += 1
+    pct = np.round(100 * counts / max(len(sample_idx), 1), 2)
+    return pd.DataFrame({"Name": names, "Optimal %": pct}).sort_values(
+        "Optimal %", ascending=False).reset_index(drop=True)
+
 def lineup_sim_equity(lineups, worlds_df, names):
     """Per-lineup tournament equity from top-down worlds.
 

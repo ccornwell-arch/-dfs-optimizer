@@ -25,7 +25,7 @@ def render_guide(mode="showdown"):
         if is_sd:
             st.markdown("**Grade** = overall quality. **Story** = the game script. **Game World** = which outcome bucket (used for diversification). **Dup Risk** = how chalky the lineup is.")
         else:
-            st.markdown("**Grade** = overall quality. **Story** = the game script. **Dup Risk** = how chalky the lineup is. **Ceiling P90 / Break Slate %** come from 10,000 simulated worlds.")
+            st.markdown("**Grade** = overall quality. **Story** = the game script. **Dup Risk** = how chalky the lineup is. **Ceiling P90 / Break Slate %** come from 10,000 simulated worlds. **Optimal %** (Intel tab → Simulation Lab) = how often a player lands in a simulated world's highest-scoring legal lineup.")
     with st.expander("Exporting", expanded=False):
         if is_sd:
             st.markdown("**DK-format CSV** uploads straight to DraftKings (contest → Upload lineups). **My entries CSV** exports just your top N by grade. On iPhone the download opens Files — use the app switcher to come back.")
