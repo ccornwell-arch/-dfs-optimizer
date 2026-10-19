@@ -196,6 +196,29 @@ def _dfs_lab_slate_cache():
     return {}
 
 
+# The prepared player pool (projection engine + nflverse + availability) is
+# the slowest per-page-load step. Cache it on the raw file bytes so tab
+# switches (full page loads) don't rebuild it. Callers .copy() the result
+# because render_main mutates df in place (restored edits, overrides).
+@st.cache_data(show_spinner=False, max_entries=4)
+def _cached_classic_pool(dk_bytes, dk_name, ss_bytes=None, ss_name="SaberSim.csv"):
+    _dk = io.BytesIO(dk_bytes); _dk.name = dk_name or "DKSalaries.csv"
+    _ss = None
+    if ss_bytes:
+        _ss = io.BytesIO(ss_bytes); _ss.name = ss_name or "SaberSim.csv"
+    return prepare_player_pool(_dk, _ss)
+
+
+@st.cache_data(show_spinner=False, max_entries=4)
+def _cached_showdown_pool(dk_bytes, dk_name, entry_format, ss_bytes=None,
+                          ss_name="SaberSim.csv"):
+    _dk = io.BytesIO(dk_bytes); _dk.name = dk_name or "DKSalaries.csv"
+    _ss = None
+    if ss_bytes:
+        _ss = io.BytesIO(ss_bytes); _ss.name = ss_name or "SaberSim.csv"
+    return prepare_showdown_pool(_dk, _ss, entry_format=entry_format)
+
+
 @st.cache_data(show_spinner=False, max_entries=3)
 def _classic_sim_bundle(df, seed):
     """Cache the 10,000-world sim + 500-world Optimal % so that switching
@@ -363,7 +386,9 @@ def render_main(settings):
 
     if mode=="Classic":
         try:
-            df=prepare_player_pool(dk_file,ss_file); teams=sorted(df["Team"].dropna().unique().tolist())
+            _dkb=st.session_state["dfs_lab_dk_bytes"]; _dkn=st.session_state.get("dfs_lab_dk_name","DKSalaries.csv")
+            _ssb=st.session_state.get("dfs_lab_ss_bytes"); _ssn=st.session_state.get("dfs_lab_ss_name","SaberSim.csv")
+            df=_cached_classic_pool(_dkb,_dkn,_ssb,_ssn).copy(); teams=sorted(df["Team"].dropna().unique().tolist())
             if bool(df.get("Own Estimated",pd.Series([False])).any()):
                 st.info("Using Aytia projections — no SaberSim file uploaded. Ownership shown is Aytia's estimate, built from projection, salary value and position baselines.")
             st.session_state.setdefault("strategy_master",{}); st.session_state.setdefault("team_strategy_master",{})
@@ -392,7 +417,7 @@ def render_main(settings):
             st.session_state.setdefault("classic_ai_model","")
             st.session_state.setdefault("classic_ai_error","")
             st.session_state.setdefault("classic_qb_cap",0)
-            _classic_chat_fp=f"{entry_format}|{int(field_size)}|{payout_style}|{getattr(dk_file,'name','slate')}"
+            _classic_chat_fp=f"{entry_format}|{int(field_size)}|{payout_style}|{_dkn}"
             if st.session_state.get("classic_ai_chat_fingerprint") != _classic_chat_fp:
                 st.session_state["classic_ai_chat"]=[]
                 st.session_state["classic_qb_cap"]=0
@@ -457,7 +482,7 @@ def render_main(settings):
             # User QB-pool control: unchecking a QB in the Slate Intel table removes
             # them from the build. Exclusions are scoped to the current slate
             # fingerprint so a new upload starts with a clean pool.
-            _qb_pool_fp=f"{entry_format}|{int(field_size)}|{payout_style}|{getattr(dk_file,'name','slate')}"
+            _qb_pool_fp=f"{entry_format}|{int(field_size)}|{payout_style}|{_dkn}"
             if st.session_state.get("classic_qb_excluded_fp")!=_qb_pool_fp:
                 st.session_state["classic_qb_excluded"]=set()
                 st.session_state["classic_qb_excluded_fp"]=_qb_pool_fp
@@ -581,7 +606,8 @@ def render_main(settings):
                         else:
                             _psm = player_sim
                         _ps=_psm.sort_values("Sim P90",ascending=False)
-                        st.dataframe(_ps,hide_index=True,use_container_width=True,height=420)
+                        st.dataframe(_ps,hide_index=True,use_container_width=True,height=420,
+                                     column_config={"Name":st.column_config.TextColumn("Name",pinned=True,width=170)})
 
                 st.markdown("#### Context evidence")
                 st.caption("Aytia blends the uploaded slate with multi-year player results and opponent-vs-position evidence. Current day/night is shown when DraftKings Game Info exposes kickoff time. Travel, weather and injury/news are not invented when the current data feed does not supply them.")
@@ -1071,7 +1097,9 @@ def render_main(settings):
             st.error(f"Classic build error: {e}")
     else:
         try:
-            df=prepare_showdown_pool(dk_file,ss_file,entry_format=entry_format); teams=[t for t in df["Team"].dropna().unique().tolist() if t]
+            _dkb=st.session_state["dfs_lab_dk_bytes"]; _dkn=st.session_state.get("dfs_lab_dk_name","DKSalaries.csv")
+            _ssb=st.session_state.get("dfs_lab_ss_bytes"); _ssn=st.session_state.get("dfs_lab_ss_name","SaberSim.csv")
+            df=_cached_showdown_pool(_dkb,_dkn,entry_format,_ssb,_ssn).copy(); teams=[t for t in df["Team"].dropna().unique().tolist() if t]
             if len(teams)!=2: st.warning(f"Showdown is one game (2 teams), but this file has {len(teams)}: {', '.join(teams[:8])}. Lineups will be built from the wrong player pool — re-upload the single-game DK Showdown salaries for the game you're playing.")
             nonzero_proj=int((pd.to_numeric(df["My Proj"],errors="coerce").fillna(0)>0.05).sum())
             nonzero_own=int((pd.to_numeric(df["My Own"],errors="coerce").fillna(0)>0).sum())
@@ -1079,7 +1107,7 @@ def render_main(settings):
                 st.error("Aytia could not create usable projections for this slate.")
                 st.stop()
             elif nonzero_proj < 6: st.warning(f"Projection check · Only {nonzero_proj} players have usable projections. The slate may be incomplete.")
-            else: st.success(f"Aytia projection engine ready · {nonzero_proj} players have usable projections." + (" · SaberSim comparison loaded." if ss_file else " · No SaberSim file used."))
+            else: st.success(f"Aytia projection engine ready · {nonzero_proj} players have usable projections." + (" · SaberSim comparison loaded." if _ssb else " · No SaberSim file used."))
             if nonzero_own==0: st.warning("Ownership not populated yet · Lineups can be built, but leverage and duplication ratings that depend on ownership are provisional.")
             st.session_state.setdefault("showdown_strategy",{})
             st.session_state.setdefault("showdown_context",{})
@@ -1342,7 +1370,7 @@ def render_main(settings):
                 # visible order. A filter change before tapping Apply resets
                 # pending edits (with a warning) instead of excluding/locking
                 # the wrong player.
-                _sd_fp=f"{entry_format}|{int(field_size)}|{payout_style}|{getattr(dk_file,'name','slate')}"
+                _sd_fp=f"{entry_format}|{int(field_size)}|{payout_style}|{_dkn}"
                 _sed_key=player_editor_widget_key("v4_sdplayers",_sd_fp,view["ID"].astype(str).tolist())
                 _sed_prev=st.session_state.get("v4_sdplayers_key")
                 if _sed_prev and _sed_prev!=_sed_key:
@@ -1566,14 +1594,21 @@ def render_main(settings):
                                 if _oc in _sdm.columns:
                                     _sdm[_oc] = _sdm[_oc].fillna(0.0)
                             _sdm = _sdm.sort_values("Sim P90", ascending=False)
-                            st.dataframe(_sdm, hide_index=True, use_container_width=True, height=420)
+                            st.dataframe(_sdm, hide_index=True, use_container_width=True, height=420,
+                                         column_config={"Name":st.column_config.TextColumn("Name",pinned=True,width=170)})
                 except Exception:
                     pass
 
             if sd_nav==_SD_TABS[4]:
                 st.markdown('<div class="card-title">Scenario Engine</div><div class="card-sub">Use a football story, a predicted score, or both. Your game thesis changes projections, correlation and lineup construction. Use the 0–100 influence control to decide how strongly Aytia should commit to it.</div>',unsafe_allow_html=True)
                 script_options=["Neutral","Auto from score","Shootout","Pass-heavy shootout","Low-scoring game","Defensive / field-goal battle","Ground-and-pound","Team wins close","Team dominates","Team plays from ahead","Team passing comeback"]
-                script=persistent_widget(st.selectbox,"sd_script","Neutral","Game script",script_options)
+                # st.pills instead of a selectbox: on iOS the selectbox's search
+                # field summons the keyboard, which covers the option list.
+                script=persistent_widget(st.pills,"sd_script","Neutral","Game script",script_options)
+                if script is None:
+                    # Pills allow deselecting; a game script is required downstream.
+                    script="Neutral"; st.session_state["sd_script"]="Neutral"
+                    st.session_state["_w_sd_script"]="Neutral"
                 use_score=persistent_widget(st.toggle,"sd_use_score",False,"Use predicted score to adjust projections")
                 team_scores={}
                 score_profile={"total":0,"margin":0,"winner":"","loser":""}
