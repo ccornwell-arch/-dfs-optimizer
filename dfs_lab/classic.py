@@ -899,8 +899,9 @@ def topdown_simulate_slate(df, sims=10000, seed=42):
     the points-allowed bracket.
 
     Returns a dict with:
-      player_stats: Name, Position, Team, Sim Mean, Sim P50, Sim P75, Sim P90,
-                    Sim Std, P(3x) % (probability of 3x salary value)
+      player_stats: Name, Position, Team, Sim Mean, Sim P10, Sim P25, Sim P50,
+                    Sim P75, Sim P90, Sim Std, P(3x) % (probability of 3x
+                    salary value)
       game_table:   Game, Mean DFS env, P75, P90, Volatility, Slate ceiling %
                     (same shape as the old bottom-up sim table)
       worlds:       DataFrame (sims rows x players) of simulated fantasy
@@ -993,6 +994,8 @@ def topdown_simulate_slate(df, sims=10000, seed=42):
     player_stats = pd.DataFrame({
         "Name": d["Name"], "Position": d["Position"], "Team": d["Team"],
         "Sim Mean": np.round(worlds.mean(axis=0), 2),
+        "Sim P10": np.round(np.percentile(worlds, 10, axis=0), 2),
+        "Sim P25": np.round(np.percentile(worlds, 25, axis=0), 2),
         "Sim P50": np.round(np.median(worlds, axis=0), 2),
         "Sim P75": np.round(np.percentile(worlds, 75, axis=0), 2),
         "Sim P90": np.round(np.percentile(worlds, 90, axis=0), 2),

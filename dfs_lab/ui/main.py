@@ -470,7 +470,7 @@ def render_main(settings):
                     st.dataframe(sim_table[[x for x in sim_cols if x in sim_table.columns]],hide_index=True,use_container_width=True,height=min(430,70+35*len(sim_table)))
                 if player_sim is not None and not player_sim.empty:
                     with st.expander("Simulation Lab — 10,000 top-down game worlds",expanded=False):
-                        st.caption("Sim Mean should track My Proj (the simulation is built on it). Sim P90 and P(3x) describe ceiling: how often a player breaks the slate in a correlated game script. Optimal % is the share of all 10,000 worlds where the player lands in that world's highest-scoring salary-cap-legal lineup — the slate's true must-haves.")
+                        st.caption("Sim Mean should track My Proj (the simulation is built on it). The percentile rundown reads floor → typical → ceiling: Sim P10 is the dud case (only 10% of sims worse), Sim P50 is the median — the score he beats half the time — and Sim P90 is the realistic ceiling. P(3x) is how often he triples salary value. Optimal % is the share of all 10,000 worlds where the player lands in that world's highest-scoring salary-cap-legal lineup — the slate's true must-haves.")
                         _ps=player_sim.sort_values("Sim P90",ascending=False)
                         st.dataframe(_ps,hide_index=True,use_container_width=True,height=420)
 
