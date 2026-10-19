@@ -334,17 +334,13 @@ def render_main(settings):
             sim_table=sim_result["game_table"]
             player_sim=sim_result["player_stats"]
             sim_worlds=sim_result["worlds"]
-            # Optimal %: share of sim worlds where the player lands in that
-            # world's highest-scoring salary-cap-legal lineup (full 10,000
-            # worlds, ~20 min; progress shown in the Simulation Lab expander).
+            # Optimal %: share of sampled sim worlds where the player lands in
+            # that world's highest-scoring salary-cap-legal lineup.
+            # Fast 500-world sample runs with the build (~1 min); the full
+            # 10,000 is available on demand via a button in the Simulation
+            # Lab expander below.
             try:
-                _opt_prog = st.progress(0, text="Computing Optimal % (10,000 worlds)…")
-                def _cb(done, total):
-                    _opt_prog.progress(min(done / max(total, 1), 1.0),
-                                       text=f"Computing Optimal % ({done:,}/{total:,} worlds)…")
-                _opt_rates=optimal_lineup_rates(sim_worlds, df, n_sample=10000,
-                                                seed=seed, progress_cb=_cb)
-                _opt_prog.empty()
+                _opt_rates=optimal_lineup_rates(sim_worlds, df, n_sample=500, seed=seed)
                 if not _opt_rates.empty and not player_sim.empty:
                     player_sim=player_sim.merge(_opt_rates, on="Name", how="left")
                     player_sim["Optimal %"]=player_sim["Optimal %"].fillna(0.0)
@@ -470,8 +466,28 @@ def render_main(settings):
                     st.dataframe(sim_table[[x for x in sim_cols if x in sim_table.columns]],hide_index=True,use_container_width=True,height=min(430,70+35*len(sim_table)))
                 if player_sim is not None and not player_sim.empty:
                     with st.expander("Simulation Lab — 10,000 top-down game worlds",expanded=False):
-                        st.caption("Sim Mean should track My Proj (the simulation is built on it). The percentile rundown reads floor → typical → ceiling: Sim P10 is the dud case (only 10% of sims worse), Sim P50 is the median — the score he beats half the time — and Sim P90 is the realistic ceiling. P(3x) is how often he triples salary value. Optimal % is the share of all 10,000 worlds where the player lands in that world's highest-scoring salary-cap-legal lineup — the slate's true must-haves.")
-                        _ps=player_sim.sort_values("Sim P90",ascending=False)
+                        st.caption("Sim Mean should track My Proj (the simulation is built on it). The percentile rundown reads floor → typical → ceiling: Sim P10 is the dud case (only 10% of sims worse), Sim P50 is the median — the score he beats half the time — and Sim P90 is the realistic ceiling. P(3x) is how often he triples salary value. Optimal % is the share of sampled worlds where the player lands in that world's highest-scoring salary-cap-legal lineup — the slate's true must-haves (500-world sample; run the full 10,000 below for precision).")
+                        _opt_key = f"{seed}-{pd.util.hash_pandas_object(df[['Name','Salary','Position']]).sum()}"
+                        if st.button("Run full 10,000-world Optimal % (~20 min)", key="opt_full_btn"):
+                            _fp = st.progress(0, text="Computing Optimal % (10,000 worlds)…")
+                            def _fcb(done, total):
+                                _fp.progress(min(done / max(total, 1), 1.0),
+                                             text=f"Computing Optimal % ({done:,}/{total:,} worlds)…")
+                            _full = optimal_lineup_rates(sim_worlds, df, n_sample=10000,
+                                                         seed=seed, progress_cb=_fcb)
+                            _fp.empty()
+                            st.session_state["opt_full_rates"] = _full
+                            st.session_state["opt_full_key"] = _opt_key
+                        _fr = st.session_state.get("opt_full_rates")
+                        if (_fr is not None and not _fr.empty
+                                and st.session_state.get("opt_full_key") == _opt_key):
+                            _psm = player_sim.drop(columns=["Optimal %"], errors="ignore").merge(
+                                _fr, on="Name", how="left")
+                            _psm["Optimal %"] = _psm["Optimal %"].fillna(0.0)
+                            st.caption("Showing full 10,000-world Optimal %.")
+                        else:
+                            _psm = player_sim
+                        _ps=_psm.sort_values("Sim P90",ascending=False)
                         st.dataframe(_ps,hide_index=True,use_container_width=True,height=420)
 
                 st.markdown("#### Context evidence")
