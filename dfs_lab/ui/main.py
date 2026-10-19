@@ -7,6 +7,7 @@ import os
 import json
 import re
 import difflib
+import threading
 from collections import defaultdict
 
 import numpy as np
@@ -223,6 +224,78 @@ def _showdown_sim_bundle(df, seed):
     except Exception:
         opt = pd.DataFrame(columns=["Name", "Optimal %", "CPT %"])
     return sim_result, opt
+
+
+# Background 10,000-world Optimal % jobs. A daemon thread computes while the
+# user roams other tabs; each rerun (e.g. a tab switch) picks up the latest
+# progress/result from the module-level registry. Keys are pool+seed
+# fingerprints so a stale job never masquerades as a current one.
+_OPT_JOBS = {}
+_OPT_JOBS_LOCK = threading.Lock()
+
+
+def _start_opt_job(job_key, kind, worlds, df, seed):
+    """Launch the full 10,000-world Optimal % in a background thread.
+    kind is 'classic' or 'showdown'."""
+    def _work():
+        try:
+            def _cb(done, total):
+                with _OPT_JOBS_LOCK:
+                    _job = _OPT_JOBS.get(job_key)
+                    if _job is not None:
+                        _job["progress"] = (done, total)
+            if kind == "showdown":
+                from dfs_lab.showdown import showdown_optimal_rates
+                _res = showdown_optimal_rates(worlds, df, n_sample=10000,
+                                              seed=seed, progress_cb=_cb)
+            else:
+                _res = optimal_lineup_rates(worlds, df, n_sample=10000,
+                                            seed=seed, progress_cb=_cb)
+            with _OPT_JOBS_LOCK:
+                _OPT_JOBS[job_key] = {"status": "done", "progress": (10000, 10000),
+                                      "result": _res}
+        except Exception as _e:
+            with _OPT_JOBS_LOCK:
+                _OPT_JOBS[job_key] = {"status": "error", "progress": (0, 10000),
+                                      "result": None, "error": str(_e)[:200]}
+    with _OPT_JOBS_LOCK:
+        # Keep the registry small: evict finished jobs beyond a handful.
+        _done_keys = [k for k, v in _OPT_JOBS.items()
+                      if v.get("status") != "running" and k != job_key]
+        for k in _done_keys[:-4]:
+            _OPT_JOBS.pop(k, None)
+        _OPT_JOBS[job_key] = {"status": "running", "progress": (0, 10000),
+                              "result": None}
+    threading.Thread(target=_work, daemon=True).start()
+
+
+def _opt_background_ui(job_key, kind, worlds, df, seed, btn_key, minutes_label,
+                       state_rates_key, state_key_key):
+    """Background-run button + status for the 10,000-world Optimal %.
+
+    Returns the full-rates DataFrame when a finished run (this session's job
+    or a previous one) matches the current pool+seed, else None.
+    """
+    if st.button(f"Run full 10,000 in the background (~{minutes_label})", key=btn_key):
+        _start_opt_job(job_key, kind, worlds, df, seed)
+    with _OPT_JOBS_LOCK:
+        _job = _OPT_JOBS.get(job_key)
+        _status = _job.get("status") if _job else None
+        _prog = _job.get("progress", (0, 10000)) if _job else (0, 10000)
+    if _status == "running":
+        _d, _t = _prog
+        st.info(f"Working in the background — {_d:,} of {_t:,} worlds done. "
+                "Use any tab; the numbers will be here when you come back.")
+    elif _status == "error":
+        st.error("The background run hit an error — tap the button to try again.")
+    if _status == "done" and _job.get("result") is not None:
+        st.session_state[state_rates_key] = _job["result"]
+        st.session_state[state_key_key] = job_key
+    _fr = st.session_state.get(state_rates_key)
+    if (_fr is not None and not getattr(_fr, "empty", True)
+            and st.session_state.get(state_key_key) == job_key):
+        return _fr
+    return None
 
 
 def render_main(settings):
@@ -497,19 +570,10 @@ def render_main(settings):
                     with st.expander("Simulation Lab — 10,000 top-down game worlds",expanded=False):
                         st.caption("Sim Mean should track My Proj (the simulation is built on it). The percentile rundown reads floor → typical → ceiling: Sim P10 is the dud case (only 10% of sims worse), Sim P50 is the median — the score he beats half the time — and Sim P90 is the realistic ceiling. P(3x) is how often he triples salary value. Optimal % is the share of sampled worlds where the player lands in that world's highest-scoring salary-cap-legal lineup — the slate's true must-haves (500-world sample; run the full 10,000 below for precision).")
                         _opt_key = f"{seed}-{pd.util.hash_pandas_object(df[['Name','Salary','Position']]).sum()}"
-                        if st.button("Run full 10,000-world Optimal % (~20 min)", key="opt_full_btn"):
-                            _fp = st.progress(0, text="Computing Optimal % (10,000 worlds)…")
-                            def _fcb(done, total):
-                                _fp.progress(min(done / max(total, 1), 1.0),
-                                             text=f"Computing Optimal % ({done:,}/{total:,} worlds)…")
-                            _full = optimal_lineup_rates(sim_worlds, df, n_sample=10000,
-                                                         seed=seed, progress_cb=_fcb)
-                            _fp.empty()
-                            st.session_state["opt_full_rates"] = _full
-                            st.session_state["opt_full_key"] = _opt_key
-                        _fr = st.session_state.get("opt_full_rates")
-                        if (_fr is not None and not _fr.empty
-                                and st.session_state.get("opt_full_key") == _opt_key):
+                        _fr = _opt_background_ui(_opt_key, "classic", sim_worlds, df, seed,
+                                                 "opt_full_btn", "20 min",
+                                                 "opt_full_rates", "opt_full_key")
+                        if _fr is not None:
                             _psm = player_sim.drop(columns=["Optimal %"], errors="ignore").merge(
                                 _fr, on="Name", how="left")
                             _psm["Optimal %"] = _psm["Optimal %"].fillna(0.0)
@@ -1489,20 +1553,11 @@ def render_main(settings):
                             _ge = _sd_sim_result.get("game_env", {})
                             st.caption(f"Game environment: {_ge.get('Game','')} averages {_ge.get('Mean DFS env','–')} total fantasy (P90 {_ge.get('P90','–')}). All scores are FLEX (1x) scoring — captain 1.5x applies at lineup time, not here. Sim P50 is the median — the score he beats half the time. Optimal % = share of sampled worlds where he's in the highest-scoring salary-legal lineup; CPT % = share where he's the optimal captain (500-world sample; run the full 10,000 below for precision).")
                             _sd_opt_key = f"{seed}-{pd.util.hash_pandas_object(df[['Name','FlexSalary','Position']]).sum()}"
-                            if st.button("Run full 10,000-world Optimal % (~3 min)", key="sd_opt_full_btn"):
-                                from dfs_lab.showdown import showdown_optimal_rates as _sdor
-                                _sfp = st.progress(0, text="Computing Optimal % (10,000 worlds)…")
-                                def _sfcb(done, total):
-                                    _sfp.progress(min(done / max(total, 1), 1.0),
-                                                  text=f"Computing Optimal % ({done:,}/{total:,} worlds)…")
-                                _sdfull = _sdor(_sd_sim_result["worlds"], df, n_sample=10000,
-                                                seed=seed, progress_cb=_sfcb)
-                                _sfp.empty()
-                                st.session_state["sd_opt_full_rates"] = _sdfull
-                                st.session_state["sd_opt_full_key"] = _sd_opt_key
-                            _sfr = st.session_state.get("sd_opt_full_rates")
-                            if (_sfr is not None and not _sfr.empty
-                                    and st.session_state.get("sd_opt_full_key") == _sd_opt_key):
+                            _sfr = _opt_background_ui(_sd_opt_key, "showdown",
+                                                      _sd_sim_result["worlds"], df, seed,
+                                                      "sd_opt_full_btn", "3 min",
+                                                      "sd_opt_full_rates", "sd_opt_full_key")
+                            if _sfr is not None:
                                 _sdm = _sd_ps.merge(_sfr, on="Name", how="left")
                                 st.caption("Showing full 10,000-world Optimal % / CPT %.")
                             else:
