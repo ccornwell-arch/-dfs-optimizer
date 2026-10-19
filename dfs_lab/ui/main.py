@@ -292,6 +292,30 @@ def _start_opt_job(job_key, kind, worlds, df, seed):
     threading.Thread(target=_work, daemon=True).start()
 
 
+@st.fragment(run_every=5)
+def _opt_job_ticker(job_key, state_rates_key, state_key_key):
+    """Live countdown for a background Optimal % job. Re-runs only this
+    fragment every 5s (no page dim); when the job finishes it promotes the
+    result into session state and triggers one full rerun so the table
+    appears."""
+    with _OPT_JOBS_LOCK:
+        _job = _OPT_JOBS.get(job_key)
+    if not _job:
+        return
+    if _job.get("status") == "done" and _job.get("result") is not None:
+        st.session_state[state_rates_key] = _job["result"]
+        st.session_state[state_key_key] = job_key
+        st.rerun()
+        return
+    if _job.get("status") != "running":
+        return
+    _d, _t = _job.get("progress", (0, 10000))
+    _pct = 100 * _d / max(_t, 1)
+    st.info(f"Working in the background — {_d:,} of {_t:,} worlds done "
+            f"({_pct:.0f}%). Use any tab; the numbers will be here when "
+            "you come back.")
+
+
 def _opt_background_ui(job_key, kind, worlds, df, seed, btn_key, minutes_label,
                        state_rates_key, state_key_key):
     """Background-run button + status for the 10,000-world Optimal %.
@@ -304,11 +328,8 @@ def _opt_background_ui(job_key, kind, worlds, df, seed, btn_key, minutes_label,
     with _OPT_JOBS_LOCK:
         _job = _OPT_JOBS.get(job_key)
         _status = _job.get("status") if _job else None
-        _prog = _job.get("progress", (0, 10000)) if _job else (0, 10000)
     if _status == "running":
-        _d, _t = _prog
-        st.info(f"Working in the background — {_d:,} of {_t:,} worlds done. "
-                "Use any tab; the numbers will be here when you come back.")
+        _opt_job_ticker(job_key, state_rates_key, state_key_key)
     elif _status == "error":
         st.error("The background run hit an error — tap the button to try again.")
     if _status == "done" and _job.get("result") is not None:
