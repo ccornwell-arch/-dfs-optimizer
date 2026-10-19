@@ -23,7 +23,7 @@ def render_guide(mode="showdown"):
             st.markdown("**Out** = never in a lineup. **Lock** = in every lineup. **Min/Max %** = exposure targets. Always tap **Apply player changes** — unsaved edits don't count.")
     with st.expander("Reading your results", expanded=False):
         if is_sd:
-            st.markdown("**Grade** = overall quality. **Story** = the game script. **Game World** = which outcome bucket (used for diversification). **Dup Risk** = how chalky the lineup is.")
+            st.markdown("**Grade** = overall quality. **Story** = the game script. **Game World** = which outcome bucket (used for diversification). **Dup Risk** = how chalky the lineup is. **Optimal %** (Game Intel tab → Simulation Lab) = how often a player lands in a simulated world's highest-scoring legal lineup; **CPT %** = how often he's the optimal captain.")
         else:
             st.markdown("**Grade** = overall quality. **Story** = the game script. **Dup Risk** = how chalky the lineup is. **Ceiling P90 / Break Slate %** come from 10,000 simulated worlds. **Optimal %** (Intel tab → Simulation Lab) = how often a player lands in a simulated world's highest-scoring legal lineup.")
     with st.expander("Exporting", expanded=False):

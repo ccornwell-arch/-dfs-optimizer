@@ -210,6 +210,21 @@ def _classic_sim_bundle(df, seed):
     return sim_result, opt
 
 
+@st.cache_data(show_spinner=False, max_entries=3)
+def _showdown_sim_bundle(df, seed):
+    """Cache the 10,000-world single-game showdown sim + 500-world
+    Optimal % / CPT %, keyed on pool contents + seed (same pattern as
+    _classic_sim_bundle)."""
+    from dfs_lab.showdown import showdown_simulate_game, showdown_optimal_rates
+    sim_result = showdown_simulate_game(df, sims=10000, seed=seed)
+    try:
+        opt = showdown_optimal_rates(sim_result["worlds"], df, n_sample=500,
+                                     seed=seed)
+    except Exception:
+        opt = pd.DataFrame(columns=["Name", "Optimal %", "CPT %"])
+    return sim_result, opt
+
+
 def render_main(settings):
     """Post-upload flow (moved verbatim from streamlit_app.py)."""
     mode = settings["mode"]
@@ -1465,6 +1480,40 @@ def render_main(settings):
                 cp=cp.sort_values("Context %",key=lambda x:x.abs(),ascending=False)
                 st.dataframe(cp,hide_index=True,use_container_width=True,height=390,column_config={"Player":st.column_config.TextColumn("Player",pinned=True,width=185),"Base":st.column_config.NumberColumn("Base",format="%.2f"),"Scenario":st.column_config.NumberColumn("Scenario",format="%.2f"),"Context %":st.column_config.NumberColumn("Context %",format="%.1f"),"Aytia":st.column_config.NumberColumn("Aytia",format="%.2f")})
                 st.caption("Neutral means Aytia found no reason to move the projection. Detailed model inputs remain available above for auditing; Lineup Lab explains what matters for each lineup.")
+                # Simulation Lab — single-game sim, cached so tab switches stay instant.
+                try:
+                    _sd_sim_result, _sd_opt_rates = _showdown_sim_bundle(df, seed)
+                    _sd_ps = _sd_sim_result.get("player_stats")
+                    if _sd_ps is not None and not _sd_ps.empty:
+                        with st.expander("Simulation Lab — 10,000 single-game worlds", expanded=False):
+                            _ge = _sd_sim_result.get("game_env", {})
+                            st.caption(f"Game environment: {_ge.get('Game','')} averages {_ge.get('Mean DFS env','–')} total fantasy (P90 {_ge.get('P90','–')}). All scores are FLEX (1x) scoring — captain 1.5x applies at lineup time, not here. Sim P50 is the median — the score he beats half the time. Optimal % = share of sampled worlds where he's in the highest-scoring salary-legal lineup; CPT % = share where he's the optimal captain (500-world sample; run the full 10,000 below for precision).")
+                            _sd_opt_key = f"{seed}-{pd.util.hash_pandas_object(df[['Name','FlexSalary','Position']]).sum()}"
+                            if st.button("Run full 10,000-world Optimal % (~3 min)", key="sd_opt_full_btn"):
+                                from dfs_lab.showdown import showdown_optimal_rates as _sdor
+                                _sfp = st.progress(0, text="Computing Optimal % (10,000 worlds)…")
+                                def _sfcb(done, total):
+                                    _sfp.progress(min(done / max(total, 1), 1.0),
+                                                  text=f"Computing Optimal % ({done:,}/{total:,} worlds)…")
+                                _sdfull = _sdor(_sd_sim_result["worlds"], df, n_sample=10000,
+                                                seed=seed, progress_cb=_sfcb)
+                                _sfp.empty()
+                                st.session_state["sd_opt_full_rates"] = _sdfull
+                                st.session_state["sd_opt_full_key"] = _sd_opt_key
+                            _sfr = st.session_state.get("sd_opt_full_rates")
+                            if (_sfr is not None and not _sfr.empty
+                                    and st.session_state.get("sd_opt_full_key") == _sd_opt_key):
+                                _sdm = _sd_ps.merge(_sfr, on="Name", how="left")
+                                st.caption("Showing full 10,000-world Optimal % / CPT %.")
+                            else:
+                                _sdm = _sd_ps.merge(_sd_opt_rates, on="Name", how="left")
+                            for _oc in ("Optimal %", "CPT %"):
+                                if _oc in _sdm.columns:
+                                    _sdm[_oc] = _sdm[_oc].fillna(0.0)
+                            _sdm = _sdm.sort_values("Sim P90", ascending=False)
+                            st.dataframe(_sdm, hide_index=True, use_container_width=True, height=420)
+                except Exception:
+                    pass
 
             if sd_nav==_SD_TABS[4]:
                 st.markdown('<div class="card-title">Scenario Engine</div><div class="card-sub">Use a football story, a predicted score, or both. Your game thesis changes projections, correlation and lineup construction. Use the 0–100 influence control to decide how strongly Aytia should commit to it.</div>',unsafe_allow_html=True)

@@ -529,6 +529,15 @@ def solve_showdown_one(
                 coeff=dict(bcoeff)
                 for jj in range(s): coeff[vidx(int(ai),jj)]=coeff.get(vidx(int(ai),jj),0)-1
                 _add_constraint(rows,lows,highs,coeff,0,np.inf)
+        elif rtype=="Not B when A is Captain":
+            # If any selected A is at CPT (slot 0), no selected B may appear
+            # in any slot. A at FLEX is unrestricted.
+            for ai in aidx:
+                coeff={vidx(int(ai),0):1}
+                for bi in bidx:
+                    for jj in range(s):
+                        coeff[vidx(int(bi),jj)]=coeff.get(vidx(int(bi),jj),0)+1
+                _add_constraint(rows,lows,highs,coeff,0,1)
 
     # Salary by slot.
     salary_coeff={}
@@ -1194,3 +1203,203 @@ def audit_showdown_portfolio(result, strategy_map, id_to_name=None):
                         f"{label}: {_nm(pid)} is locked but is missing from the lineup."
                     )
     return violations
+
+
+def showdown_simulate_game(df, sims=10000, seed=42):
+    """Single-game top-down simulation for showdown: team scores -> team
+    fantasy -> player shares.
+
+    Mirrors classic.topdown_simulate_slate but for one game: both teams'
+    scores are drawn from nflverse four-season-weighted offense/defense
+    ratings with a home-field edge and pace-correlated noise, then each
+    team's fantasy is dealt to its players by projection-implied usage
+    shares with individual lognormal noise. Defenses ride the
+    points-allowed bracket off the opponent's simulated score.
+
+    All player scores are FLEX (1x) scoring — captain 1.5x is applied at
+    lineup time, not here.
+
+    Returns a dict with:
+      player_stats: Name, Position, Team, Sim Mean, Sim P10, Sim P25,
+                    Sim P50, Sim P75, Sim P90, Sim Std, P(3x) %
+      worlds:       DataFrame (sims rows x players) of simulated FLEX
+                    fantasy points, columns are df integer positions.
+      game_env:     dict with Game, Mean DFS env, P75, P90 for the game.
+    """
+    from dfs_lab.data import _slate_season, _dst_points_allowed_fantasy
+    from dfs_lab.classic import _nflverse_team_ratings, _team_fantasy_calibration
+    d = df.reset_index(drop=True).copy()
+    n = len(d)
+    empty = {"player_stats": pd.DataFrame(), "worlds": pd.DataFrame(), "game_env": {}}
+    if n == 0:
+        return empty
+    season = _slate_season(d)
+    rng = np.random.default_rng(int(seed))
+    sims = int(max(1000, sims))
+
+    away = str(d["Away"].iloc[0]).upper() if "Away" in d.columns else ""
+    home = str(d["Home"].iloc[0]).upper() if "Home" in d.columns else ""
+    if not away or not home or away == "NAN" or home == "NAN":
+        return empty
+
+    off, deff, lg = _nflverse_team_ratings(season)
+    ratio, emp_team_fp = _team_fantasy_calibration(season)
+    HFA, SCORE_SD, PACE_CORR = 1.8, 10.0, 0.2
+
+    proj = pd.to_numeric(d["My Proj"], errors="coerce").fillna(0.0).clip(lower=0.0).to_numpy()
+    pos = d["Position"].astype(str).str.upper().to_numpy()
+    teams = d["Team"].astype(str).str.upper().to_numpy()
+    is_dst = np.isin(pos, ["DST", "D/ST"])
+
+    ea = lg * (off.get(away, lg) / lg) * (deff.get(home, lg) / lg)
+    eh = lg * (off.get(home, lg) / lg) * (deff.get(away, lg) / lg) + HFA
+    cov = [[SCORE_SD ** 2, PACE_CORR * SCORE_SD ** 2],
+           [PACE_CORR * SCORE_SD ** 2, SCORE_SD ** 2]]
+    draw = rng.multivariate_normal([ea, eh], cov, size=sims)
+    pts_a = np.clip(draw[:, 0], 0, None)
+    pts_h = np.clip(draw[:, 1], 0, None)
+    skill_fp = {away: ratio * pts_a, home: ratio * pts_h}
+
+    # Usage shares from projections, scaled by historical coverage.
+    share = np.zeros(n)
+    for t in (away, home):
+        m = (teams == t) & (~is_dst)
+        ps = proj[m].sum()
+        if ps <= 0:
+            continue
+        covr = min(1.0, max(0.05, ps / max(emp_team_fp.get(t, ps), 1.0)))
+        share[m] = proj[m] / ps * covr
+
+    if "Sim Vol" in d.columns:
+        pvol = pd.to_numeric(d["Sim Vol"], errors="coerce").fillna(0.45).to_numpy()
+    else:
+        pvol = np.array([{"QB": 0.26, "RB": 0.42, "WR": 0.50, "TE": 0.48,
+                          "K": 0.55, "PK": 0.55, "DST": 0.62}.get(p, 0.45) for p in pos])
+    ind = 0.65 * np.clip(pvol, 0.12, 0.95)
+    noise = np.exp(rng.normal(0, 1, size=(sims, n)) * ind[None, :] - 0.5 * ind[None, :] ** 2)
+
+    team_fp = np.array([skill_fp.get(t, np.zeros(sims)) for t in teams]).T  # sims x n
+    worlds = np.zeros((sims, n))
+    sk = ~is_dst
+    worlds[:, sk] = team_fp[:, sk] * share[sk][None, :] * noise[:, sk]
+
+    # Defenses ride their projection, adjusted by the opponent's simulated
+    # score through the points-allowed bracket.
+    opp_pts = {away: pts_h, home: pts_a}
+    for j in np.where(is_dst)[0]:
+        t = teams[j]
+        base = max(float(proj[j]), 0.5)
+        adj = (np.vectorize(_dst_points_allowed_fantasy)(opp_pts.get(t, np.zeros(sims))) - 1.0)
+        dv = min(0.9, max(0.2, float(pvol[j])))
+        worlds[:, j] = np.clip(base + adj + rng.normal(0, dv * base, sims), 0, None)
+
+    sal = pd.to_numeric(d.get("FlexSalary", d.get("Salary", 0)), errors="coerce").fillna(0.0).to_numpy()
+    thr3x = 3.0 * sal / 1000.0
+    player_stats = pd.DataFrame({
+        "Name": d["Name"], "Position": d["Position"], "Team": d["Team"],
+        "Sim Mean": np.round(worlds.mean(axis=0), 2),
+        "Sim P10": np.round(np.percentile(worlds, 10, axis=0), 2),
+        "Sim P25": np.round(np.percentile(worlds, 25, axis=0), 2),
+        "Sim P50": np.round(np.median(worlds, axis=0), 2),
+        "Sim P75": np.round(np.percentile(worlds, 75, axis=0), 2),
+        "Sim P90": np.round(np.percentile(worlds, 90, axis=0), 2),
+        "Sim Std": np.round(worlds.std(axis=0), 2),
+        "P(3x) %": np.round(100 * (worlds > thr3x[None, :]).mean(axis=0), 1),
+    })
+
+    gfp = skill_fp[away] + skill_fp[home]
+    for j in np.where(is_dst)[0]:
+        gfp = gfp + worlds[:, j]
+    game_env = {"Game": f"{away}@{home}",
+                "Mean DFS env": round(float(gfp.mean()), 1),
+                "P75": round(float(np.percentile(gfp, 75)), 1),
+                "P90": round(float(np.percentile(gfp, 90)), 1)}
+
+    worlds_df = pd.DataFrame(worlds, columns=d.index)
+    return {"player_stats": player_stats, "worlds": worlds_df, "game_env": game_env}
+
+
+def showdown_optimal_rates(worlds_df, df, n_sample=500, seed=7, salary_cap=50000,
+                           progress_cb=None):
+    """Optimal % and CPT % per player for showdown.
+
+    Solves one MILP per sampled world: 1 captain (1.5x points,
+    CaptainSalary) + 5 FLEX (FlexSalary), salary cap, CPT-eligible
+    captains only. Optimal % = share of worlds in the optimal lineup at
+    either slot; CPT % = share as the optimal captain.
+    Returns DataFrame with columns Name, "Optimal %", "CPT %".
+    """
+    cols_out = pd.DataFrame(columns=["Name", "Optimal %", "CPT %"])
+    if worlds_df is None or worlds_df.empty or df is None or df.empty:
+        return cols_out
+    d = df.reset_index(drop=True)
+    if "ActiveForBuild" in d.columns:
+        d = d[d["ActiveForBuild"]].reset_index(drop=True)
+    if d.empty or "FlexSalary" not in d.columns:
+        return cols_out
+
+    names = d["Name"].astype(str).tolist()
+    flex_sal = pd.to_numeric(d["FlexSalary"], errors="coerce").fillna(0).to_numpy(float)
+    cpt_sal = pd.to_numeric(d.get("CaptainSalary", d["FlexSalary"] * 1.5),
+                            errors="coerce").fillna(0).to_numpy(float)
+    cpt_ok = d["CPT?"].astype(bool).to_numpy() if "CPT?" in d.columns else np.ones(len(d), bool)
+    n = len(d)
+
+    # Variables: x_i (FLEX) for i in 0..n-1, c_i (captain) for i in n..2n-1.
+    total = 2 * n
+    rows, lows, highs = [], [], []
+    rows.append({i: 1.0 for i in range(n)}); lows.append(5.0); highs.append(5.0)
+    rows.append({n + i: 1.0 for i in range(n) if cpt_ok[i]}); lows.append(1.0); highs.append(1.0)
+    for i in range(n):
+        rows.append({i: 1.0, n + i: 1.0}); lows.append(0.0); highs.append(1.0)
+    rows.append({i: flex_sal[i] for i in range(n)} | {n + i: cpt_sal[i] for i in range(n)})
+    lows.append(0.0); highs.append(float(salary_cap))
+    A = lil_matrix((len(rows), total), dtype=float)
+    for r, coeff in enumerate(rows):
+        for col, val in coeff.items():
+            A[r, col] = val
+    cons = LinearConstraint(A.tocsr(), np.array(lows), np.array(highs))
+    integrality = np.ones(total)
+    bounds = Bounds(np.zeros(total), np.ones(total))
+
+    # World column k corresponds to row k of the full (pre-filter) pool.
+    full = df.reset_index(drop=True)
+    name_to_k = {str(nm): k for k, nm in enumerate(full["Name"].astype(str))}
+    keep = [name_to_k.get(nm) for nm in names]
+    if any(k is None for k in keep):
+        return cols_out
+    mat_all = worlds_df.to_numpy(dtype=float)
+    if max(keep) >= mat_all.shape[1]:
+        return cols_out
+    mat = mat_all[:, keep]
+
+    rng = np.random.default_rng(int(seed))
+    n_worlds = mat.shape[0]
+    idx = rng.choice(n_worlds, size=min(int(n_sample), n_worlds), replace=False)
+    opt_hits = np.zeros(n)
+    cpt_hits = np.zeros(n)
+    total_done = 0
+    for t, w in enumerate(idx):
+        pts = mat[w]
+        c = np.zeros(total)
+        c[:n] = -pts
+        c[n:] = -1.5 * pts
+        try:
+            res = milp(c=c, constraints=cons, integrality=integrality, bounds=bounds)
+        except Exception:
+            continue
+        if res.status != 0 or res.x is None:
+            continue
+        x = (res.x[:n] > 0.5)
+        cc = (res.x[n:] > 0.5)
+        opt_hits[x | cc] += 1
+        cpt_hits[cc] += 1
+        total_done += 1
+        if progress_cb and (t + 1) % 200 == 0:
+            progress_cb(t + 1, len(idx))
+    if progress_cb:
+        progress_cb(len(idx), len(idx))
+    denom = max(total_done, 1)
+    return pd.DataFrame({"Name": names,
+                         "Optimal %": np.round(100 * opt_hits / denom, 1),
+                         "CPT %": np.round(100 * cpt_hits / denom, 1)})
