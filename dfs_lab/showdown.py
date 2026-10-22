@@ -193,8 +193,17 @@ def showdown_script_bonus(row, script, script_team):
         if (not same) and row["is_DST"]: bonus += 0.25
     return bonus
 
-def infer_score_script(team_scores):
-    """Translate a predicted final score into a broad Showdown game environment."""
+def infer_score_script(team_scores, market_total=None):
+    """Translate a predicted final score into a broad Showdown game environment.
+
+    When `market_total` (the game's market total) is given, the
+    low-scoring / shootout bands are judged RELATIVE to it — a script is
+    low-scoring when its line centers clearly under the total (<= total
+    - 9) and a shootout when it clears the total (>= total + 4.5) in a
+    close game — so a 44-point line in a 50.5 game is not mislabeled
+    and a 48 in a 38.5 game can be a shootout. Without a market total
+    the long-standing absolute bands apply (low <= 41, shootout >= 55).
+    """
     if not team_scores or len(team_scores) < 2:
         return "Neutral", "", {"total": 0, "margin": 0, "winner": "", "loser": ""}
     ordered = sorted(team_scores.items(), key=lambda kv: kv[1], reverse=True)
@@ -202,9 +211,14 @@ def infer_score_script(team_scores):
     loser, lose_pts = ordered[1]
     total = float(win_pts + lose_pts)
     margin = float(win_pts - lose_pts)
-    if total <= 41:
+    if market_total:
+        low_cut = float(market_total) - 9.0
+        shoot_cut = float(market_total) + 4.5
+    else:
+        low_cut, shoot_cut = 41.0, 55.0
+    if total <= low_cut:
         script = "Low-scoring game"
-    elif total >= 55 and margin <= 10:
+    elif total >= shoot_cut and margin <= 10:
         script = "Pass-heavy shootout"
     elif margin >= 17:
         script = "Team dominates"
@@ -1211,7 +1225,10 @@ def showdown_simulate_game(df, sims=10000, seed=42):
 
     Mirrors classic.topdown_simulate_slate but for one game: both teams'
     scores are drawn from nflverse four-season-weighted offense/defense
-    ratings with a home-field edge and pace-correlated noise, then each
+    ratings (current season heaviest), blended with the market's implied
+    team totals when nflverse carries a line for the game
+    (classic._anchored_team_means), with a home-field edge in the
+    ratings prior and pace-correlated noise, then each
     team's fantasy is dealt to its players by projection-implied usage
     shares with individual lognormal noise. Defenses ride the
     points-allowed bracket off the opponent's simulated score.
@@ -1227,7 +1244,9 @@ def showdown_simulate_game(df, sims=10000, seed=42):
       game_env:     dict with Game, Mean DFS env, P75, P90 for the game.
     """
     from dfs_lab.data import _slate_season, _dst_points_allowed_fantasy
-    from dfs_lab.classic import _nflverse_team_ratings, _team_fantasy_calibration
+    from dfs_lab.classic import (_anchored_team_means,
+                                 _nflverse_team_ratings,
+                                 _team_fantasy_calibration)
     d = df.reset_index(drop=True).copy()
     n = len(d)
     empty = {"player_stats": pd.DataFrame(), "worlds": pd.DataFrame(), "game_env": {}}
@@ -1251,8 +1270,7 @@ def showdown_simulate_game(df, sims=10000, seed=42):
     teams = d["Team"].astype(str).str.upper().to_numpy()
     is_dst = np.isin(pos, ["DST", "D/ST"])
 
-    ea = lg * (off.get(away, lg) / lg) * (deff.get(home, lg) / lg)
-    eh = lg * (off.get(home, lg) / lg) * (deff.get(away, lg) / lg) + HFA
+    ea, eh = _anchored_team_means(away, home, season, off, deff, lg)
     cov = [[SCORE_SD ** 2, PACE_CORR * SCORE_SD ** 2],
            [PACE_CORR * SCORE_SD ** 2, SCORE_SD ** 2]]
     draw = rng.multivariate_normal([ea, eh], cov, size=sims)

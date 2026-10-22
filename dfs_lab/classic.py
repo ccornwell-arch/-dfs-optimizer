@@ -806,8 +806,12 @@ def classic_context_evidence(intel_df):
 def _nflverse_team_ratings(season):
     """Offense (points scored) and defense (points allowed) ratings per team.
 
-    Four-season weighted means with the same recency/reliability treatment as
-    the projection engine. Returns (offense, defense, league_avg).
+    Four-season weighted means, CURRENT season heaviest with fast decay
+    (0.50 / 0.27 / 0.15 / 0.08 — the pre-Oct-2026 weights had the prior
+    season, 0.38, outweighing the current one, 0.34, so October sims were
+    graded mostly on last year's rosters). Per-season reliability shrink
+    (partial current seasons count less per game) is unchanged.
+    Returns (offense, defense, league_avg).
     """
     from dfs_lab.data import _load_nflverse_inputs
     _, sched = _load_nflverse_inputs(season)
@@ -822,7 +826,7 @@ def _nflverse_team_ratings(season):
                       "scored": pd.to_numeric(s["away_score"], errors="coerce"),
                       "allowed": pd.to_numeric(s["home_score"], errors="coerce")}),
     ], ignore_index=True).dropna(subset=["scored", "allowed"])
-    w = {season: 0.34, season - 1: 0.38, season - 2: 0.19, season - 3: 0.09}
+    w = {season: 0.50, season - 1: 0.27, season - 2: 0.15, season - 3: 0.08}
     off, deff = {}, {}
     for t, g in tg.groupby("team"):
         on = od = dn = dd = 0.0
@@ -840,6 +844,114 @@ def _nflverse_team_ratings(season):
         if dd:
             deff[t] = dn / dd
     return off, deff, float(tg["scored"].mean())
+
+# ---------------------------------------------------------------------------
+# Market anchor (Oct 2026). The game sims used to center team scores purely
+# on history ratings, so a game the market priced at 50.5 simmed as a 44 —
+# and the story layer then sold a slog. The sims now blend the market's
+# implied team totals into the score means. The market is the DOMINANT
+# PRIOR (MARKET_BLEND_WEIGHT of each mean); the ratings sit underneath.
+# It is never a pin or a clamp: the pair's center keeps (1 - weight) of
+# the ratings' distance from the market, and evidence layered on later
+# (the app's opt-in intel path) may move a game further — by design.
+# ---------------------------------------------------------------------------
+MARKET_BLEND_WEIGHT = 0.75
+
+# DraftKings and nflverse disagree on exactly one abbreviation (the same
+# mapping auto_intel.py documents): DK "LAR" is nflverse "LA".
+_DK_TO_NFLVERSE_TEAM = {"LAR": "LA"}
+_NFLVERSE_TO_DK_TEAM = {"LA": "LAR"}
+
+def _ratings_key(team):
+    """Ratings dicts are keyed by nflverse abbreviations."""
+    t = str(team).upper()
+    return _DK_TO_NFLVERSE_TEAM.get(t, t)
+
+def _dk_abbr(team):
+    t = str(team).upper()
+    return _NFLVERSE_TO_DK_TEAM.get(t, t)
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def _nflverse_market_lines(season):
+    """Market lines per game from the nflverse schedule for `season`.
+
+    Returns {(away, home): {"spread_line": float, "total_line": float}}
+    keyed by DraftKings-style abbreviations. nflverse `spread_line` is
+    the home team's expected margin (positive = home favored — verified
+    against completed games: home margin correlates +0.32 and averages
+    +3.3 when spread_line > 0, -4.5 when < 0). Games without both lines
+    are omitted; a pair that meets twice keeps the unplayed row (or the
+    latest week when both are unplayed/played).
+    """
+    from dfs_lab.data import _load_nflverse_inputs
+    _, sched = _load_nflverse_inputs(season)
+    s = sched.copy()
+    s["_sn"] = pd.to_numeric(s["season"], errors="coerce")
+    s = s[s["_sn"] == int(season)]
+    out = {}
+    for _, r in s.iterrows():
+        try:
+            spread = float(r.get("spread_line"))
+            total = float(r.get("total_line"))
+        except (TypeError, ValueError):
+            continue
+        if pd.isna(spread) or pd.isna(total):
+            continue
+        key = (_dk_abbr(r["away_team"]), _dk_abbr(r["home_team"]))
+        played = not pd.isna(r.get("home_score"))
+        week = float(r.get("week") or 0)
+        prev = out.get(key)
+        if prev is None or (prev[1] and not played) or \
+                (prev[1] == played and week > prev[2]):
+            out[key] = ({"spread_line": spread, "total_line": total},
+                        played, week)
+    return {k: v[0] for k, v in out.items()}
+
+def market_line_for_game(season, team_a, team_b):
+    """The market read on one game, orientation-free.
+
+    Returns {"total", "spread_line", "away", "home", "implied"} where
+    implied maps each (DK-style) team abbreviation to its implied total
+    — the total split by the spread, so the margin is encoded in the
+    pair. None when nflverse carries no line for the game.
+    """
+    try:
+        lines = _nflverse_market_lines(season)
+    except Exception:
+        return None
+    a, b = _dk_abbr(team_a), _dk_abbr(team_b)
+    row, away, home = lines.get((a, b)), a, b
+    if row is None:
+        row, away, home = lines.get((b, a)), b, a
+    if row is None:
+        return None
+    total = float(row["total_line"])
+    spread = float(row["spread_line"])
+    return {"total": total, "spread_line": spread, "away": away,
+            "home": home,
+            "implied": {home: (total + spread) / 2.0,
+                        away: (total - spread) / 2.0}}
+
+def _anchored_team_means(away, home, season, off, deff, lg):
+    """Expected team scores for one game: history-rating means blended
+    with the market's implied totals when a line exists.
+
+    The ratings mean keeps the long-standing formula (offense x opponent
+    defense vs league average, +1.8 home-field edge on the home side).
+    With a market line, each team's mean becomes
+    MARKET_BLEND_WEIGHT x implied + (1 - weight) x ratings. No line ->
+    ratings only (clean fallback). Returns (exp_away, exp_home).
+    """
+    ea = lg * (off.get(_ratings_key(away), lg) / lg) * \
+        (deff.get(_ratings_key(home), lg) / lg)
+    eh = lg * (off.get(_ratings_key(home), lg) / lg) * \
+        (deff.get(_ratings_key(away), lg) / lg) + 1.8
+    line = market_line_for_game(season, away, home)
+    if line:
+        w = MARKET_BLEND_WEIGHT
+        ea = w * line["implied"].get(_dk_abbr(away), ea) + (1 - w) * ea
+        eh = w * line["implied"].get(_dk_abbr(home), eh) + (1 - w) * eh
+    return ea, eh
 
 def _team_fantasy_calibration(season):
     """Empirical skill-position fantasy points per real point scored (team-week).
@@ -891,8 +1003,10 @@ def topdown_simulate_slate(df, sims=10000, seed=42):
     """Top-down game simulation: team scores -> team fantasy -> player shares.
 
     Each game is simulated `sims` times from team offense/defense ratings
-    (nflverse, four-season weighted) with a home-field edge and
-    pace-correlated team noise. Team fantasy points are dealt to players by
+    (nflverse, four-season weighted, current season heaviest), blended
+    with the market's implied team totals when nflverse carries a line
+    for the game (see _anchored_team_means), with a home-field edge in
+    the ratings prior and pace-correlated team noise. Team fantasy points are dealt to players by
     projection-implied usage shares with individual lognormal noise, so stacks
     and bring-backs emerge from correlated game scripts instead of ad-hoc
     shock terms. Defenses move against their opponent's simulated score via
@@ -942,8 +1056,7 @@ def topdown_simulate_slate(df, sims=10000, seed=42):
     cov = [[SCORE_SD ** 2, PACE_CORR * SCORE_SD ** 2],
            [PACE_CORR * SCORE_SD ** 2, SCORE_SD ** 2]]
     for (a, h) in games:
-        ea = lg * (off.get(a, lg) / lg) * (deff.get(h, lg) / lg)
-        eh = lg * (off.get(h, lg) / lg) * (deff.get(a, lg) / lg) + HFA
+        ea, eh = _anchored_team_means(a, h, season, off, deff, lg)
         draw = rng.multivariate_normal([ea, eh], cov, size=sims)
         team_pts[:, tix[a]] = np.clip(draw[:, 0], 0, None)
         team_pts[:, tix[h]] = np.clip(draw[:, 1], 0, None)
