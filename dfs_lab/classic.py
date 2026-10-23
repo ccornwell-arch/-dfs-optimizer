@@ -1138,15 +1138,63 @@ def topdown_simulate_slate(df, sims=10000, seed=42):
     worlds_df = pd.DataFrame(worlds, columns=d.index)
     return {"player_stats": player_stats, "game_table": game_table, "worlds": worlds_df}
 
+# State shared with worker processes for parallel Optimal % solves. The
+# per-world problem differs only in its objective vector, so workers get
+# the sampled worlds matrix + the (fixed) constraint system once, via the
+# pool initializer, and solve one world per task.
+_RATES_POOL_STATE = {}
+
+
+def _rates_solve_from_state(st, wi):
+    """Solve one sampled world from an explicit state dict; returns the
+    boolean per-player hit vector, or None when the solve fails (the
+    caller treats a failed world as no hits, exactly like the original
+    serial loop's `continue`). The objective vector built here is
+    entry-for-entry the one the original per-world Python loop built:
+    -pts[i] at every slot player i is eligible for, 0 elsewhere."""
+    from scipy.optimize import milp
+
+    pts = np.maximum(st["wmat"][wi], 0.0)
+    c = np.zeros(st["total"])
+    c[st["flat_cols"]] = -pts[st["flat_rows"]]
+    try:
+        res = milp(c=c, integrality=st["integrality"], bounds=st["bounds"],
+                   constraints=st["cons"], options={"time_limit": 10.0})
+    except Exception:
+        return None
+    if not res.success or res.x is None:
+        return None
+    x = np.asarray(res.x).reshape(st["n"], st["s"])
+    return x.sum(axis=1) > 0.5
+
+
+def _rates_pool_init(state):
+    _RATES_POOL_STATE.clear()
+    _RATES_POOL_STATE.update(state)
+
+
+def _rates_pool_solve(wi):
+    return _rates_solve_from_state(_RATES_POOL_STATE, wi)
+
+
 def optimal_lineup_rates(worlds_df, df, n_sample=500, seed=7, salary_cap=50000,
-                         progress_cb=None):
+                         progress_cb=None, workers=1):
     """Optimal % per player: share of sampled sim worlds in which the player
     appears in that world's highest-scoring salary-cap-legal lineup.
 
     Solves one minimal MILP per sampled world (salary cap + roster slots +
     position eligibility only — no correlation rules; the true optimal lineup
-    is purely max points). ~0.13s per solve. progress_cb(done, total) is
-    called every 200 solves when provided.
+    is purely max points). Measured Oct 23, 2026 on the staging droplet's
+    class of hardware: ~0.22s per solve, essentially all of it inside the
+    MILP call (objective assembly is ~1.7ms of it). progress_cb(done, total)
+    is called every 200 solves when provided.
+
+    workers > 1 solves the sampled worlds in forked worker processes.
+    Each world is the identical problem (same seed -> same sample, same
+    constraints, same objective), solved by the same solver, and the hit
+    counts are summed in sample order — so the returned rates are exactly
+    the serial ones; only the wall time changes. Any pool failure falls
+    back to the serial path.
     Returns DataFrame with columns Name and "Optimal %".
     """
     from scipy.optimize import Bounds, LinearConstraint, milp
@@ -1219,28 +1267,51 @@ def optimal_lineup_rates(worlds_df, df, n_sample=500, seed=7, salary_cap=50000,
     rng = np.random.default_rng(seed)
     sample_idx = rng.choice(wmat.shape[0], size=min(n_sample, wmat.shape[0]),
                             replace=False)
+    # Objective assembly indices, computed once: variable (i, j) is a
+    # nonzero of c iff slot j is in player i's eligibility list.
+    flat_cols, flat_rows = [], []
+    for i in range(n):
+        for j, sl in enumerate(slots):
+            if sl in elig[i]:
+                flat_cols.append(_vidx(i, j))
+                flat_rows.append(i)
+    state = {"wmat": wmat, "n": n, "s": s, "total": total,
+             "flat_cols": np.array(flat_cols, dtype=int),
+             "flat_rows": np.array(flat_rows, dtype=int),
+             "cons": cons, "integrality": integrality, "bounds": bounds}
     counts = np.zeros(n)
-    c = np.zeros(total)
-    total_solves = len(sample_idx)
-    for si, wi in enumerate(sample_idx):
-        pts = np.maximum(wmat[wi], 0.0)
-        c[:] = 0.0
-        for i in range(n):
-            v = -pts[i]
-            for j, sl in enumerate(slots):
-                if sl in elig[i]:
-                    c[_vidx(i, j)] = v
+    idx_list = [int(wi) for wi in sample_idx]
+    total_solves = len(idx_list)
+    progress = {"done": 0}
+
+    def _absorb(hits):
+        if hits is not None:
+            counts[hits] += 1
+        progress["done"] += 1
+        if progress_cb and progress["done"] % 200 == 0:
+            progress_cb(progress["done"], total_solves)
+
+    if workers and int(workers) > 1 and total_solves > 1:
         try:
-            res = milp(c=c, integrality=integrality, bounds=bounds,
-                       constraints=cons, options={"time_limit": 10.0})
+            import multiprocessing as _mp
+
+            ctx = _mp.get_context("fork")
+            with ctx.Pool(processes=int(workers),
+                          initializer=_rates_pool_init,
+                          initargs=(state,)) as pool:
+                for hits in pool.imap(_rates_pool_solve, idx_list,
+                                      chunksize=8):
+                    _absorb(hits)
         except Exception:
-            continue
-        if not res.success or res.x is None:
-            continue
-        x = np.asarray(res.x).reshape(n, s)
-        counts[x.sum(axis=1) > 0.5] += 1
-        if progress_cb and (si + 1) % 200 == 0:
-            progress_cb(si + 1, total_solves)
+            # Any pool failure recomputes serially with the same
+            # per-world solve, so the result is unchanged.
+            counts = np.zeros(n)
+            progress["done"] = 0
+            for wi in idx_list:
+                _absorb(_rates_solve_from_state(state, wi))
+    else:
+        for wi in idx_list:
+            _absorb(_rates_solve_from_state(state, wi))
     pct = np.round(100 * counts / max(len(sample_idx), 1), 2)
     return pd.DataFrame({"Name": names, "Optimal %": pct}).sort_values(
         "Optimal %", ascending=False).reset_index(drop=True)

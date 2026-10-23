@@ -151,19 +151,39 @@ def defense_rating(allowed, league_values):
     return 0, ""
 
 
-def usage_trend(player_stats, season, week, namekey, recent_n=3):
-    """(rating, note) from opportunity trend: last `recent_n` games vs earlier. Pure."""
+def _usage_frame(player_stats, season, week):
+    """The frame usage_trend works from: this season's stats, weeks
+    before `week`, with the normalized name key and per-row opportunity
+    counts attached. Factored out so suggest_game_intel can build it
+    ONCE per game — building it inside usage_trend meant the full-frame
+    filter + name-key map ran once per player (~50x per game), which
+    was the auto-intel hot spot (measured Oct 23, 2026: ~3.5s of a
+    Classic slate's ~4s per-game intel cost)."""
     s = _season_week_stats(player_stats, season)
     s = s[(s["week"] < week)].copy()
     if s.empty or "player_name" not in s.columns:
-        return 0, ""
+        return s
     s["_key"] = s["player_name"].map(_name_key)
+    opp = (pd.to_numeric(s.get("targets", 0), errors="coerce").fillna(0)
+           + pd.to_numeric(s.get("carries", 0), errors="coerce").fillna(0))
+    return s.assign(_opp=opp)
+
+
+def usage_trend(player_stats, season, week, namekey, recent_n=3, prepped=None):
+    """(rating, note) from opportunity trend: last `recent_n` games vs earlier. Pure.
+
+    `prepped` may carry the _usage_frame output for the same
+    (player_stats, season, week); the per-player math is unchanged —
+    opportunity counts are row-wise, so computing them before the
+    name filter yields the identical series."""
+    s = prepped if prepped is not None else _usage_frame(
+        player_stats, season, week)
+    if s.empty or "player_name" not in s.columns:
+        return 0, ""
     s = s[s["_key"].eq(namekey)]
     if s.empty:
         return 0, ""
-    opp = (pd.to_numeric(s.get("targets", 0), errors="coerce").fillna(0)
-           + pd.to_numeric(s.get("carries", 0), errors="coerce").fillna(0))
-    s = s.assign(_opp=opp).sort_values("week")
+    s = s.sort_values("week")
     recent = s[s["week"] >= week - recent_n]["_opp"]
     base = s[s["week"] < week - recent_n]["_opp"]
     if len(recent) < 2 or len(base) < 2 or base.mean() <= 0:
@@ -291,6 +311,7 @@ def suggest_game_intel(df, player_stats, schedules, season):
     rt = rest_travel_for_game(schedules, season, game)
     star_avg = _season_avg_points(player_stats, season, week)
     bumps = injury_usage_bumps(df, star_avg)
+    usage_frame = _usage_frame(player_stats, season, week)
     suggestions = {}
     for _, r in df.iterrows():
         pid, pos, team = str(r["ID"]), str(r["Position"]), str(r["Team"])
@@ -308,7 +329,8 @@ def suggest_game_intel(df, player_stats, schedules, season):
                     s["Defense"] = rating
                     rank = sum(1 for v in league if v >= dvp[key])
                     notes.append(f"{opp} allowed {dvp[key]:.1f} DK pts/g to {pos}s L4W ({word}, {rank}/{len(league)})")
-        tr, tnote = usage_trend(player_stats, season, week, _name_key(r["Name"]))
+        tr, tnote = usage_trend(player_stats, season, week,
+                                _name_key(r["Name"]), prepped=usage_frame)
         br, bnote = bumps.get(pid, (0, ""))
         if br >= tr and br:
             s["Usage"], unote = br, bnote
