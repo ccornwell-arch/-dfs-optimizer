@@ -267,12 +267,21 @@ def solve_one(
                 coeff[vidx(q, j)] = coeff.get(vidx(q, j), 0.0) - float(qmin)
         rows.append(coeff); lows.append(0.0); highs.append(np.inf)
 
-        # A forced bring-back from a weak offense is bad process: the "shootout"
-        # game script is a blowout instead. Only enforce it against worthy offenses.
-        if bringback_mode == "Required" and (bringback_worthy is None or str(opp).upper() in bringback_worthy):
+        # "Required" is an explicit user rule, so it is a HARD constraint:
+        # every lineup this QB anchors carries at least one opposing pass
+        # catcher (WR/TE). The bring-back worthiness gate (Sep 2026,
+        # commit 4ca9867) used to silently drop this constraint whenever
+        # the opposing offense rated below league average — the build
+        # came back with no bring-back and no warning. The gate still
+        # informs Aytia's own suggestions (the Optional-mode nudge below;
+        # lineup_details labeling/scoring) but it never overrides a rule
+        # the user set. If the opponent has no active WR/TE, this row
+        # makes the QB unselectable rather than letting him through
+        # without a bring-back; the API warns about that case by name.
+        if bringback_mode == "Required":
             opp_skill = df.index[
                 df["ActiveForBuild"] & (df["Team"] == opp)
-                & (df["is_RB"] | df["is_WR"] | df["is_TE"])
+                & (df["is_WR"] | df["is_TE"])
             ].tolist()
             coeff = {}
             for i in opp_skill:
@@ -722,7 +731,13 @@ def generate_lineups(
             continue
 
         seen.add(ids)
-        detail = lineup_details(df, chosen, strategy_map, preferred_stack_teams, bringback_worthy)
+        # Under an explicit "Required" rule the forced bring-back is a
+        # real bring-back: label and score it (pass worthy=None). In the
+        # suggestion modes the worthiness gate keeps expressing Aytia's
+        # own judgment about weak-offense filler, exactly as before.
+        detail = lineup_details(
+            df, chosen, strategy_map, preferred_stack_teams,
+            None if bringback_mode == "Required" else bringback_worthy)
         detail.update({
             "Coherence Score":coherence["Coherence Score"],
             "Lineup Story":coherence["Lineup Story"],
@@ -1003,7 +1018,11 @@ def bringback_worthy_teams(df):
     from dfs_lab.data import _slate_season
     season = _slate_season(df)
     off, _, lg = _nflverse_team_ratings(season)
-    return {str(t).upper() for t, r in off.items() if r >= lg}
+    # The ratings dict is keyed by nflverse abbreviations while every
+    # caller compares against pool (DraftKings) abbreviations — return
+    # the DK spelling ("LA" -> "LAR") so a worthy offense is actually
+    # found by its pool name.
+    return {_dk_abbr(t) for t, r in off.items() if r >= lg}
 
 def topdown_simulate_slate(df, sims=10000, seed=42):
     """Top-down game simulation: team scores -> team fantasy -> player shares.
