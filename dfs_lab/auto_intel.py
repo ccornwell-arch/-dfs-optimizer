@@ -83,6 +83,12 @@ def slate_game_from_schedule(schedules, season, teams):
     Returns the schedule row (week, home/away, gameday...) or None when the
     slate's matchup cannot be matched -- auto-fill then reports honestly
     instead of guessing.
+
+    A pairing can meet twice in a season (divisional home-and-home). The
+    slate's game is the NEXT meeting, not the last one on the schedule:
+    prefer the earliest row with no scores posted yet. When every meeting
+    is already in the books (or the feed carries no score columns), fall
+    back to the latest meeting, as before.
     """
     tset = {_TEAM_ABBR_FIXUPS.get(str(t), str(t)) for t in teams if str(t) and str(t).lower() != "nan"}
     if len(tset) != 2:
@@ -95,6 +101,10 @@ def slate_game_from_schedule(schedules, season, teams):
           ((s["home_team"].eq(b)) & (s["away_team"].eq(a)))]
     if m.empty:
         return None
+    if "home_score" in m.columns and "away_score" in m.columns:
+        unplayed = m[m["home_score"].isna() & m["away_score"].isna()]
+        if not unplayed.empty:
+            return unplayed.sort_values("week").iloc[0]
     return m.sort_values("week").iloc[-1]
 
 

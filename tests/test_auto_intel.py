@@ -190,6 +190,52 @@ def test_suggest_unknown_slate_returns_honest_empty():
     _check("message says why", "schedule" in msg)
 
 
+def _sched_scored(rows):
+    df = pd.DataFrame(rows)
+    df["season"] = 2026
+    return df
+
+
+def test_matcher_picks_next_meeting_not_last():
+    # Divisional home-and-home: wk7 at DET (the slate's game) and a wk18
+    # rematch at GB, both unplayed. The matcher must take the NEXT one.
+    sched = _sched_scored([
+        {"week": 7, "home_team": "DET", "away_team": "GB", "gameday": "2026-10-25",
+         "home_score": None, "away_score": None},
+        {"week": 18, "home_team": "GB", "away_team": "DET", "gameday": "2027-01-10",
+         "home_score": None, "away_score": None},
+    ])
+    row = ai.slate_game_from_schedule(sched, 2026, ["GB", "DET"])
+    _check("two unplayed meetings -> earliest (wk7)", int(row["week"]) == 7)
+    _check("wk7 row is the DET home game", row["home_team"] == "DET")
+
+
+def test_matcher_skips_played_meeting():
+    # First meeting already played (scores posted), rematch still to come.
+    sched = _sched_scored([
+        {"week": 3, "home_team": "DET", "away_team": "GB", "gameday": "2026-09-27",
+         "home_score": 24, "away_score": 20},
+        {"week": 14, "home_team": "GB", "away_team": "DET", "gameday": "2026-12-13",
+         "home_score": None, "away_score": None},
+    ])
+    row = ai.slate_game_from_schedule(sched, 2026, ["DET", "GB"])
+    _check("played meeting skipped -> wk14", int(row["week"]) == 14)
+
+
+def test_matcher_all_played_or_scoreless_feed_keeps_last():
+    sched = _sched_scored([
+        {"week": 3, "home_team": "DET", "away_team": "GB", "gameday": "2026-09-27",
+         "home_score": 24, "away_score": 20},
+        {"week": 14, "home_team": "GB", "away_team": "DET", "gameday": "2026-12-13",
+         "home_score": 27, "away_score": 23},
+    ])
+    row = ai.slate_game_from_schedule(sched, 2026, ["GB", "DET"])
+    _check("all meetings played -> last (wk14)", int(row["week"]) == 14)
+    bare = sched.drop(columns=["home_score", "away_score"])
+    row = ai.slate_game_from_schedule(bare, 2026, ["GB", "DET"])
+    _check("no score columns -> last (wk14), legacy behavior", int(row["week"]) == 14)
+
+
 def test_manual_adopt_marks_user_cells():
     context = {"p1": {"Defense": 2, "Usage": 0, "Home/Rest": 0, "Travel": 0,
                        "Time/Split": 0, "Confidence": 60, "Note": "Auto: x"}}
@@ -228,6 +274,9 @@ if __name__ == "__main__":
     test_rest_edge_and_long_travel()
     test_suggest_game_intel_end_to_end()
     test_suggest_unknown_slate_returns_honest_empty()
+    test_matcher_picks_next_meeting_not_last()
+    test_matcher_skips_played_meeting()
+    test_matcher_all_played_or_scoreless_feed_keeps_last()
     test_manual_adopt_marks_user_cells()
     test_manual_adopt_before_first_autofill()
     print("auto intel tests done")
