@@ -560,7 +560,13 @@ def lineup_details(df, chosen, strategy_map, preferred_stack_teams, bringback_wo
     idxs = [i for _, i in chosen]
     p = df.loc[idxs].copy()
 
-    projection = float(p["My Proj"].sum())
+    # The same projection-column preference the objective (player_objective)
+    # and the Showdown details use: a frame that carries "Aytia Proj" (the
+    # context engine's output, when Game Intel is applied to a build) reports
+    # the adjusted projection; every other frame — all Classic frames today —
+    # reads "My Proj" exactly as before.
+    proj_col = "Aytia Proj" if "Aytia Proj" in p.columns else "My Proj"
+    projection = float(p[proj_col].sum())
     salary = int(p["Salary"].sum())
     total_own = float(p["My Own"].sum())
     avg_own = total_own / 9.0
