@@ -81,6 +81,18 @@ def compute_mobile_qb_tags(df):
     return (is_qb & (share >= MOBILE_QB_RUSH_SHARE)).fillna(False).astype(bool)
 
 
+def _own_estimated(df):
+    """True when the pool's ownership is the percentile-formula estimate
+    (no SaberSim file). Chalk logic keys off real ownership only. When the
+    flag column is absent (hand-built pools) legacy behavior is kept."""
+    if df is None or "Own Estimated" not in getattr(df, "columns", []):
+        return False
+    try:
+        return bool(df["Own Estimated"].fillna(True).any())
+    except Exception:
+        return True
+
+
 def rb_chalk_threshold(df):
     """Estimated-ownership cutoff for a chalk RB on this slate."""
     m = _active(df) & df["Position"].astype(str).str.upper().eq("RB") if "Position" in df.columns else _active(df)
@@ -95,7 +107,10 @@ def chalk_cut_pairs(df, chosen):
 
     Returns a list of (rb_name, dst_name) where the RB clears the chalk
     threshold. Pure function of the pool + lineup; no side effects.
+    No-op when ownership is estimated: a formula cannot mint chalk.
     """
+    if _own_estimated(df):
+        return []
     idxs = [i for _, i in chosen]
     p = df.loc[idxs]
     thr = rb_chalk_threshold(df)
@@ -167,6 +182,8 @@ def chalk_bust_beneficiaries(sim_worlds, df, top_chalk=5, per_chalk=3):
     Deterministic ordering: conditional mean desc, then name asc.
     """
     if sim_worlds is None or getattr(sim_worlds, "empty", True) or df is None or df.empty:
+        return []
+    if _own_estimated(df):
         return []
     names = df["Name"].astype(str).tolist()
     if len(names) != sim_worlds.shape[1]:

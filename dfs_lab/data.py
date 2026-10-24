@@ -400,8 +400,17 @@ def prepare_player_pool(dk_file, ss_file=None):
         # The engine output preserves DK row order (left merge), but merge on
         # Name explicitly so alignment never depends on that assumption.
         proj_df = dfs_lab_projection_engine(dk)
-        proj_cols=["Name","Aytia Base Proj","Projection Why","Sim Vol","Matchup Adj %","Rush Share"]
+        proj_cols=["Name","Aytia Base Proj","Projection Why","Sim Vol","Matchup Adj %","Rush Share",
+                   # Sim-first inputs (spec section 7): per-channel expected
+                   # opportunities, shrunk per-opportunity point rates, and
+                   # the stat rates the stat-level world generator consumes.
+                   "Exp Tgt","Exp Car","Exp Att","RateRecv","RateRush","RatePass",
+                   "Catch Rate","TD Rate Tgt","TD Rate Car","TD Rate Att",
+                   "Yds Per Tgt","Yds Per Car","Yds Per Att"]
         df = dk.merge(proj_df[[c for c in proj_cols if c in proj_df.columns]], on="Name", how="left")
+        for _sc in proj_cols[6:]:
+            if _sc in df.columns:
+                df[_sc] = pd.to_numeric(df[_sc], errors="coerce").fillna(0.0)
         df["My Proj"] = pd.to_numeric(df["Aytia Base Proj"], errors="coerce").fillna(0.0)
         df["My Own"] = estimate_ownership(df)
         df["Projection Why"] = df["Projection Why"].fillna("DK slate prior fallback")
@@ -612,14 +621,48 @@ def _role_points_from_stats(x):
     return c("carries")*0.52 + c("targets")*0.78 + c("receptions")*0.18 + c("passing_attempts")*0.08
 
 def dfs_lab_projection_engine(dk):
-    """V6.1 independent projection baseline.
+    """V7 usage-first independent projection baseline.
 
-    Uses four seasons of nflverse weekly evidence, sample-size shrinkage, opportunity/role,
-    and opponent-vs-position history when the source exposes opponent_team. DK AvgPointsPerGame
-    is only a weak fallback/prior. No SaberSim projection is used.
+    Projection = expected opportunities x shrunk per-opportunity rate.
 
-    Also emits per-player volatility ("Sim Vol") and handles DST rows via a team-defense
-    model (sacks, turnovers, points allowed) so Classic can run without any SaberSim file.
+    ROLE comes from the CURRENT season only: each player's share of his
+    team's targets / carries / pass attempts over the weeks he was active,
+    times that team's per-game volume in the same channel. Shares split a
+    single team pool, so teammates cannibalize by construction (a TE2
+    behind an 18-point TE1 gets a TE2's share of targets, not his own
+    spot-start average).
+
+    RATES come from 2023-2026 history, empirical-Bayes shrunk toward the
+    positional prior: rate = (player points + k * prior) / (player opps + k),
+    k in opportunity units (120 targets for receiving, 150 RB carries /
+    120 other carries, 300 QB pass attempts). Season weights favor the
+    current season (0.40/0.32/0.18/0.10) -- the pre-V7 weighting put last
+    season (0.38) above the current one (0.34); that inversion is fixed.
+
+    MATCHUP (DvP) is per-TEAM-game totals allowed to the position,
+    opponent-adjusted, current season at full weight and prior season at
+    0.4, shrunk by weighted games n/(n+8), clipped to +/-8%, applied at
+    0.75 strength. (Pre-V7: per-PLAYER-game average over four pooled
+    seasons, shrink n/(n+24), clip +/-10%.)
+
+    Players with no current-season role fall back to their prior-season
+    share decayed x0.65, blended 70/30 with the salary prior; DK
+    AvgPointsPerGame survives only as a weak stabilizer on that path.
+    DST rows keep the pre-V7 team-defense model unchanged. Kickers carry
+    no opportunity data in this feed and keep the DK-prior path.
+    No SaberSim projection is used.
+
+    Also emits per-player volatility ("Sim Vol"). "Role Signal" is now
+    expected opportunities per game (pre-V7: weighted role points per game).
+
+    Sim-first emissions (Oct 2026, spec section 7): the engine also surfaces
+    the role layer split by channel ("Exp Tgt" / "Exp Car" / "Exp Att" --
+    fallback-path players carry their decayed prior-season values), the
+    shrunk point rates ("RateRecv" / "RateRush" / "RatePass"), and shrunk
+    stat rates ("Catch Rate", "TD Rate Tgt" / "TD Rate Car" / "TD Rate Att",
+    "Yds Per Tgt" / "Yds Per Car" / "Yds Per Att") so the stat-level world
+    generator in classic.py can draw stat lines instead of splitting
+    points. These are pure additions: no projection value depends on them.
     """
     out=dk.copy(); season=2026
     if "FlexSalary" not in out.columns and "Salary" in out.columns:
@@ -639,44 +682,180 @@ def dfs_lab_projection_engine(dk):
         nc=_name_col(stx); sc=_season_col(stx); oc=_opp_col(stx)
         if not nc or not sc: raise ValueError("nflverse player name/season columns unavailable")
         stx["Name"]=stx[nc].astype(str).str.strip(); stx["Season"]=pd.to_numeric(stx[sc],errors="coerce")
-        stx["_fp"]=_dk_fantasy_points_from_stats(stx); stx["_role"]=_role_points_from_stats(stx); stx["_rush_fp"]=_dk_rushing_points_from_stats(stx)
+        # Stat columns: nflreadpy renamed attempts/interceptions across
+        # versions, so resolve each by trying both spellings.
+        def _col(*names):
+            for _nm in names:
+                if _nm in stx.columns: return pd.to_numeric(stx[_nm],errors="coerce").fillna(0.0)
+            return pd.Series(0.0,index=stx.index)
+        stx["_att"]=_col("attempts","passing_attempts"); stx["_int"]=_col("passing_interceptions","interceptions")
+        stx["_tgt"]=_col("targets"); stx["_car"]=_col("carries"); stx["_rec"]=_col("receptions")
+        # Raw stat volumes per channel (sim-first inputs, Oct 2026): the stat
+        # aggregates behind Catch Rate / TD rates / yards-per-play below.
+        stx["_recyds"]=_col("receiving_yards"); stx["_rushyds"]=_col("rushing_yards"); stx["_passyds"]=_col("passing_yards")
+        stx["_rectd"]=_col("receiving_tds"); stx["_rushtd"]=_col("rushing_tds"); stx["_passtd"]=_col("passing_tds")
+        # Fantasy points split into the three opportunity channels, so rates
+        # are points PER OPPORTUNITY -- never points per involved game.
+        stx["_pass_pts"]=(_col("passing_yards")*0.04+_col("passing_tds")*4.0-stx["_int"]
+                          +(_col("passing_yards")>=300).astype(float)*3.0-_col("sack_fumbles_lost"))
+        stx["_rush_pts"]=_dk_rushing_points_from_stats(stx)
+        stx["_recv_pts"]=(stx["_rec"]*1.0+_col("receiving_yards")*0.10+_col("receiving_tds")*6.0
+                          +(_col("receiving_yards")>=100).astype(float)*3.0-_col("receiving_fumbles_lost"))
+        stx["_fp"]=stx["_pass_pts"]+stx["_rush_pts"]+stx["_recv_pts"]
         # Ignore placeholder rows with no statistical activity.
         activity=[]
-        for c in ["passing_attempts","carries","targets","receptions","field_goals_made","extra_points_made"]:
+        for c in ["attempts","passing_attempts","carries","targets","receptions","fg_made","field_goals_made","pat_made","extra_points_made"]:
             if c in stx.columns: activity.append(pd.to_numeric(stx[c],errors="coerce").fillna(0.0))
         if activity:
             active=sum(activity)>0
             stx=stx[active | (stx["_fp"].abs()>0)].copy()
+        _posc=_first_existing(stx.columns,["position","position_group","Pos"])
+        stx["Pos"]=stx[_posc].astype(str).str.upper().replace({"HB":"RB","FB":"RB"}) if _posc else ""
+        stx["TeamS"]=stx["team"].astype(str).str.strip().str.upper() if "team" in stx.columns else ""
+        _wkc=_first_existing(stx.columns,["week","Week"])
+        stx["Week"]=pd.to_numeric(stx[_wkc],errors="coerce").fillna(0) if _wkc else 0
+        # Season weights favor the current season (inversion fixed). The DST
+        # model below uses this same dict, as it did pre-V7.
+        season_weights={season:0.40,season-1:0.32,season-2:0.18,season-3:0.10}
+        stx["_sw"]=stx["Season"].map(season_weights).fillna(0.0)
+        stx=stx[stx["_sw"]>0].copy()
+        for _ch in ["_tgt","_car","_att"]:
+            stx["_w"+_ch]=stx["_sw"]*stx[_ch]
+        for _ch in ["_rec","_recyds","_rushyds","_passyds","_rectd","_rushtd","_passtd"]:
+            stx["_w"+_ch]=stx["_sw"]*stx[_ch]
+        stx["_w_recv"]=stx["_sw"]*stx["_recv_pts"]; stx["_w_rush"]=stx["_sw"]*stx["_rush_pts"]; stx["_w_pass"]=stx["_sw"]*stx["_pass_pts"]
+        stx["_w_fp"]=stx["_sw"]*stx["_fp"]
 
-        # Per-player per-season summaries. Four-year weights favor recency without letting one game take over.
-        ss=stx.groupby(["Name","Season"],as_index=False).agg(FPPG=("_fp","mean"),RushFPPG=("_rush_fp","mean"),Role=("_role","mean"),Games=("_fp","size"),Std=("_fp","std"))
-        season_weights={season:0.34,season-1:0.38,season-2:0.19,season-3:0.09}
-        rows=[]
-        for name,g in ss.groupby("Name"):
-            hist_num=hist_den=role_num=role_den=vol_num=vol_den=rush_num=rush_den=0.0; hist_games=cur_games=0
-            for _,r in g.iterrows():
-                yr=int(r["Season"]); games=int(r["Games"]); w=season_weights.get(yr,0.0)
-                if w<=0: continue
-                # Current-year reliability ramps from 20% after one game toward full weight after eight.
-                reliability=min(1.0,max(0.20,games/8.0)) if yr==season else min(1.0,games/8.0)
-                ew=w*reliability
-                hist_num += ew*float(r["FPPG"]); hist_den += ew
-                rush_num += ew*float(r["RushFPPG"]); rush_den += ew
-                role_num += ew*float(r["Role"]); role_den += ew
-                _sd=float(r["Std"]) if pd.notna(r["Std"]) else 0.0
-                vol_num += ew*_sd; vol_den += ew
-                hist_games += games
-                if yr==season: cur_games=games
-            rows.append({"Name":name,"HistProj":hist_num/hist_den if hist_den else 0.0,"RushHist":rush_num/rush_den if rush_den else 0.0,"RoleSignal":role_num/role_den if role_den else 0.0,"HistoryGames":hist_games,"CurrentGames":cur_games,"Vol":vol_num/vol_den if vol_den else 0.0})
-        ps=pd.DataFrame(rows)
-        out=out.merge(ps,on="Name",how="left")
-        for c in ["HistProj","RoleSignal","HistoryGames","CurrentGames","Vol"]: out[c]=pd.to_numeric(out[c],errors="coerce").fillna(0.0)
-        # Rushing share of fantasy: the mobile-QB signal. 0 when there is no
-        # usable history rather than a fabricated value.
-        _rh=pd.to_numeric(out["RushHist"],errors="coerce").fillna(0.0) if "RushHist" in out.columns else 0.0
-        _hp=pd.to_numeric(out["HistProj"],errors="coerce").fillna(0.0)
-        out["Rush Share"]=pd.Series(np.where(_hp>1.0,(_rh/_hp).clip(0.0,1.0),0.0),index=out.index).round(3)
+        # ---- History aggregates: season-weighted channel sums per player ----
+        _g=stx.groupby("Name")
+        hist=pd.DataFrame({
+            "WTgt":_g["_w_tgt"].sum(),"WCar":_g["_w_car"].sum(),"WAtt":_g["_w_att"].sum(),
+            "WPtsRecv":_g["_w_recv"].sum(),"WPtsRush":_g["_w_rush"].sum(),"WPtsPass":_g["_w_pass"].sum(),
+            "RawTgt":_g["_tgt"].sum(),"RawCar":_g["_car"].sum(),"RawAtt":_g["_att"].sum(),
+            "HistoryGames":_g["_fp"].size(),"WFP":_g["_w_fp"].sum(),"WRushPts":_g["_w_rush"].sum(),
+            "Vol":_g["_fp"].std(),"RawFP":_g["_fp"].sum(),
+            "WRec":_g["_w_rec"].sum(),"WRecYds":_g["_w_recyds"].sum(),"WRushYds":_g["_w_rushyds"].sum(),
+            "WPassYds":_g["_w_passyds"].sum(),"WRecTD":_g["_w_rectd"].sum(),"WRushTD":_g["_w_rushtd"].sum(),
+            "WPassTD":_g["_w_passtd"].sum(),
+        })
+        hist["CurrentGames"]=stx[stx["Season"]==season].groupby("Name")["_fp"].size()
+        hist=hist.fillna(0.0).reset_index()
+        out=out.merge(hist,on="Name",how="left")
+        for c in ["WTgt","WCar","WAtt","WPtsRecv","WPtsRush","WPtsPass","RawTgt","RawCar","RawAtt","HistoryGames","CurrentGames","WFP","WRushPts","Vol","RawFP","WRec","WRecYds","WRushYds","WPassYds","WRecTD","WRushTD","WPassTD"]:
+            out[c]=pd.to_numeric(out[c],errors="coerce").fillna(0.0)
+        # Rushing share of fantasy: the mobile-QB signal (weighted points ratio).
+        out["Rush Share"]=pd.Series(np.where(out["WFP"]>1.0,(out["WRushPts"]/out["WFP"]).clip(0.0,1.0),0.0),index=out.index).round(3)
 
+        # ---- Positional priors: league points per opportunity, by channel ----
+        _pp=stx.groupby("Pos").agg(WTgt=("_w_tgt","sum"),WCar=("_w_car","sum"),WAtt=("_w_att","sum"),
+                                   WPtsRecv=("_w_recv","sum"),WPtsRush=("_w_rush","sum"),WPtsPass=("_w_pass","sum"),
+                                   WRec=("_w_rec","sum"),WRecYds=("_w_recyds","sum"),WRushYds=("_w_rushyds","sum"),
+                                   WPassYds=("_w_passyds","sum"),WRecTD=("_w_rectd","sum"),WRushTD=("_w_rushtd","sum"),
+                                   WPassTD=("_w_passtd","sum"))
+        def _prior(num,den):
+            return float(num)/float(den) if float(den)>0 else 0.0
+        prior_recv={p:_prior(r["WPtsRecv"],r["WTgt"]) for p,r in _pp.iterrows()}
+        prior_rush={p:_prior(r["WPtsRush"],r["WCar"]) for p,r in _pp.iterrows()}
+        prior_pass={p:_prior(r["WPtsPass"],r["WAtt"]) for p,r in _pp.iterrows()}
+        _lg_recv=_prior(_pp["WPtsRecv"].sum(),_pp["WTgt"].sum()) or 1.30
+        _lg_rush=_prior(_pp["WPtsRush"].sum(),_pp["WCar"].sum()) or 0.60
+        _lg_pass=_prior(_pp["WPtsPass"].sum(),_pp["WAtt"].sum()) or 0.55
+        # Stat-rate priors for the sim layer (same _prior discipline).
+        prior_catch={p:_prior(r["WRec"],r["WTgt"]) for p,r in _pp.iterrows()}
+        prior_td_tgt={p:_prior(r["WRecTD"],r["WTgt"]) for p,r in _pp.iterrows()}
+        prior_td_car={p:_prior(r["WRushTD"],r["WCar"]) for p,r in _pp.iterrows()}
+        prior_td_att={p:_prior(r["WPassTD"],r["WAtt"]) for p,r in _pp.iterrows()}
+        prior_ypt={p:_prior(r["WRecYds"],r["WTgt"]) for p,r in _pp.iterrows()}
+        prior_ypc={p:_prior(r["WRushYds"],r["WCar"]) for p,r in _pp.iterrows()}
+        prior_ypa={p:_prior(r["WPassYds"],r["WAtt"]) for p,r in _pp.iterrows()}
+        _lg_catch=_prior(_pp["WRec"].sum(),_pp["WTgt"].sum()) or 0.62
+        _lg_td_tgt=_prior(_pp["WRecTD"].sum(),_pp["WTgt"].sum()) or 0.045
+        _lg_td_car=_prior(_pp["WRushTD"].sum(),_pp["WCar"].sum()) or 0.028
+        _lg_td_att=_prior(_pp["WPassTD"].sum(),_pp["WAtt"].sum()) or 0.045
+        _lg_ypt=_prior(_pp["WRecYds"].sum(),_pp["WTgt"].sum()) or 7.6
+        _lg_ypc=_prior(_pp["WRushYds"].sum(),_pp["WCar"].sum()) or 4.3
+        _lg_ypa=_prior(_pp["WPassYds"].sum(),_pp["WAtt"].sum()) or 6.9
+
+        # Shrunk per-opportunity rates per DK row (prior by the row's own
+        # position). k in opportunity units: receiving rates stabilize
+        # around ~150-200 targets -> k=120; RB carries k=150, other
+        # carries k=120; QB pass attempts k=300.
+        K_TGT=120.0; K_CAR_RB=150.0; K_CAR=120.0; K_ATT=300.0
+        _posu=out["Position"].astype(str).str.upper()
+        _pr_recv=_posu.map(prior_recv).fillna(_lg_recv)
+        _pr_rush=_posu.map(prior_rush).fillna(_lg_rush)
+        _pr_pass=_posu.map(prior_pass).fillna(_lg_pass)
+        _k_car=np.where(_posu.eq("RB"),K_CAR_RB,K_CAR)
+        out["RateRecv"]=((out["WPtsRecv"]+K_TGT*_pr_recv)/(out["WTgt"]+K_TGT)).round(4)
+        out["RateRush"]=((out["WPtsRush"]+_k_car*_pr_rush)/(out["WCar"]+_k_car)).round(4)
+        out["RatePass"]=((out["WPtsPass"]+K_ATT*_pr_pass)/(out["WAtt"]+K_ATT)).round(4)
+
+        # ---- Stat rates for the sim layer (spec section 7, item 3) ----
+        # Same empirical-Bayes form as the point rates: (player sum + k *
+        # positional prior) / (player opportunities + k). TD rates are the
+        # noisiest per-opportunity stats in football, so their k is larger;
+        # yards-per-play reuses the channel point-rate k discipline.
+        K_CATCH=60.0; K_TD_TGT=200.0; K_TD_CAR=200.0; K_TD_ATT=400.0
+        _pr_catch=_posu.map(prior_catch).fillna(_lg_catch)
+        _pr_td_tgt=_posu.map(prior_td_tgt).fillna(_lg_td_tgt)
+        _pr_td_car=_posu.map(prior_td_car).fillna(_lg_td_car)
+        _pr_td_att=_posu.map(prior_td_att).fillna(_lg_td_att)
+        _pr_ypt=_posu.map(prior_ypt).fillna(_lg_ypt)
+        _pr_ypc=_posu.map(prior_ypc).fillna(_lg_ypc)
+        _pr_ypa=_posu.map(prior_ypa).fillna(_lg_ypa)
+        out["Catch Rate"]=((out["WRec"]+K_CATCH*_pr_catch)/(out["WTgt"]+K_CATCH)).round(4)
+        out["TD Rate Tgt"]=((out["WRecTD"]+K_TD_TGT*_pr_td_tgt)/(out["WTgt"]+K_TD_TGT)).round(4)
+        out["TD Rate Car"]=((out["WRushTD"]+K_TD_CAR*_pr_td_car)/(out["WCar"]+K_TD_CAR)).round(4)
+        out["TD Rate Att"]=((out["WPassTD"]+K_TD_ATT*_pr_td_att)/(out["WAtt"]+K_TD_ATT)).round(4)
+        out["Yds Per Tgt"]=((out["WRecYds"]+K_TGT*_pr_ypt)/(out["WTgt"]+K_TGT)).round(3)
+        out["Yds Per Car"]=((out["WRushYds"]+_k_car*_pr_ypc)/(out["WCar"]+_k_car)).round(3)
+        out["Yds Per Att"]=((out["WPassYds"]+K_ATT*_pr_ypa)/(out["WAtt"]+K_ATT)).round(3)
+
+        # ---- ROLE tables: share of team opportunities x team per-game volume ----
+        def _role_table(rows):
+            """Expected opportunities per channel for one season slice.
+
+            A player's team is the team of his latest-week row in the slice.
+            His share is his opportunities divided by his team's
+            opportunities OVER THE WEEKS HE WAS ACTIVE for that team: role
+            is measured when he dresses, so missed games do not dilute the
+            share (availability is the availability guard's job, not the
+            projection's). A backup who dresses but barely plays still gets
+            a backup's share -- that is the Quitoriano fix. Expected
+            opportunities = share x the team's per-game volume over all of
+            its games, so teammates' shares still split one team pool.
+            """
+            if rows.empty: return {}
+            latest=rows.sort_values("Week").drop_duplicates("Name",keep="last")
+            cur_team=dict(zip(latest["Name"],latest["TeamS"]))
+            tw=rows.groupby("TeamS")["Week"].nunique()
+            tt=rows.groupby("TeamS").agg(TTgt=("_tgt","sum"),TCar=("_car","sum"),TAtt=("_att","sum"))
+            pg={}
+            for t in tt.index:
+                _w=max(float(tw.get(t,1)),1.0)
+                pg[t]={"tgt":float(tt.loc[t,"TTgt"])/_w,"car":float(tt.loc[t,"TCar"])/_w,"att":float(tt.loc[t,"TAtt"])/_w}
+            # Team channel totals per (team, week) for active-window sums.
+            wk_tot={}
+            for (t,w),grp in rows.groupby(["TeamS","Week"]):
+                wk_tot[(t,w)]=(float(grp["_tgt"].sum()),float(grp["_car"].sum()),float(grp["_att"].sum()))
+            on=rows[rows["TeamS"]==rows["Name"].map(cur_team)]
+            ps=on.groupby("Name").agg(CTgt=("_tgt","sum"),CCar=("_car","sum"),CAtt=("_att","sum"))
+            weeks_of={nm:sorted(set(g["Week"])) for nm,g in on.groupby("Name")}
+            table={}
+            for nm,r in ps.iterrows():
+                t=cur_team.get(nm,"")
+                if t not in pg: continue
+                wt=sum(wk_tot.get((t,w),(0.0,0.0,0.0))[0] for w in weeks_of.get(nm,[]))
+                wc=sum(wk_tot.get((t,w),(0.0,0.0,0.0))[1] for w in weeks_of.get(nm,[]))
+                wa=sum(wk_tot.get((t,w),(0.0,0.0,0.0))[2] for w in weeks_of.get(nm,[]))
+                sh_tgt=float(r["CTgt"])/wt if wt>0 else 0.0
+                sh_car=float(r["CCar"])/wc if wc>0 else 0.0
+                sh_att=float(r["CAtt"])/wa if wa>0 else 0.0
+                table[nm]={"team":t,"sh_tgt":sh_tgt,"sh_car":sh_car,"sh_att":sh_att,
+                           "exp_tgt":sh_tgt*pg[t]["tgt"],"exp_car":sh_car*pg[t]["car"],"exp_att":sh_att*pg[t]["att"]}
+            return table
+        role_cur=_role_table(stx[stx["Season"]==season])
+        role_prior=_role_table(stx[stx["Season"]==season-1])
         # ---- DST model: team-week defensive fantasy scores in DK scoring ----
         # Fumble recoveries aren't split out in the weekly feed, so recoveries are
         # estimated at half of forced fumbles (empirically ~50% are recovered by the defense).
@@ -738,68 +917,134 @@ def dfs_lab_projection_engine(dk):
         for c in ["DSTHist","DSTGames","DSTCur","DSTVol"]:
             if c in out.columns: out[c]=pd.to_numeric(out[c],errors="coerce").fillna(0.0)
 
-        # Opponent-vs-position fantasy allowance: three prior seasons + current season, shrunk toward neutral.
+        # ---- DvP: per-TEAM-game totals allowed to the position ----
+        # A defense is charged with the TOTAL DK points that position scored
+        # against it per game (not a per-player average), opponent-adjusted
+        # (divide by the offense's own scoring rate at that position vs
+        # league, so facing elite offenses is not charged as bad defense),
+        # current season at full weight / prior season at 0.4, shrunk toward
+        # neutral by weighted games n/(n+8), raw clipped to +/-8%, applied at
+        # 0.75 strength in the "Matchup Adj %" output.
         matchup={}
         if oc:
-            stx["Opp"]=stx[oc].astype(str).str.strip()
-            posc=_first_existing(stx.columns,["position","position_group","Pos"])
-            if posc:
-                stx["Pos"]=stx[posc].astype(str).str.upper().replace({"HB":"RB","FB":"RB"})
-                allowed=stx[stx["Pos"].isin(["QB","RB","WR","TE"])].groupby(["Opp","Pos"],as_index=False).agg(Allowed=("_fp","mean"),N=("_fp","size"))
-                league=stx[stx["Pos"].isin(["QB","RB","WR","TE"])].groupby("Pos")["_fp"].mean().to_dict()
-                for _,r in allowed.iterrows():
-                    base=max(float(league.get(r["Pos"],0)),1.0); n=float(r["N"])
-                    raw=float(r["Allowed"])/base-1.0; shrink=n/(n+24.0)
-                    matchup[(str(r["Opp"]),str(r["Pos"]))]=float(np.clip(raw*shrink,-0.10,0.10))
+            stx["Opp"]=stx[oc].astype(str).str.strip().str.upper()
+            _dv=stx[stx["Season"].isin([season,season-1]) & stx["Pos"].isin(["QB","RB","WR","TE"])]
+            if not _dv.empty:
+                _gm=_dv.groupby(["Season","Week","Opp","TeamS","Pos"],as_index=False).agg(Allowed=("_fp","sum"))
+                _off=_dv.groupby(["Season","TeamS","Pos"],as_index=False).agg(Pts=("_fp","sum"),G=("Week","nunique"))
+                _off["PPG"]=_off["Pts"]/_off["G"].clip(lower=1)
+                _lgp=_off.groupby(["Season","Pos"]).agg(TPts=("Pts","sum"),TG=("G","sum")).reset_index()
+                _lgp["LPPG"]=_lgp["TPts"]/_lgp["TG"].clip(lower=1)
+                _off=_off.merge(_lgp[["Season","Pos","LPPG"]],on=["Season","Pos"],how="left")
+                _off["Ratio"]=(_off["PPG"]/_off["LPPG"].replace(0,np.nan)).clip(0.4,2.5).fillna(1.0)
+                _gm=_gm.merge(_off[["Season","TeamS","Pos","Ratio"]],on=["Season","TeamS","Pos"],how="left")
+                _gm["Adj"]=_gm["Allowed"]/_gm["Ratio"].fillna(1.0)
+                _gm["W"]=np.where(_gm["Season"]==season,1.0,0.4)
+                _agg=_gm.groupby(["Opp","Pos"]).apply(lambda x: pd.Series({
+                    "AdjMean": float((x["Adj"]*x["W"]).sum()/x["W"].sum()) if float(x["W"].sum())>0 else 0.0,
+                    "NEff": float(x["W"].sum())}))
+                _lgb={}
+                for _p,_grp in _lgp.groupby("Pos"):
+                    _w=np.where(_grp["Season"]==season,1.0,0.4)
+                    _lgb[_p]=float((_grp["LPPG"]*_w).sum()/_w.sum()) if float(_w.sum())>0 else 0.0
+                for (_o,_p),_r in _agg.iterrows():
+                    _base=_lgb.get(_p,0.0)
+                    if _base<=0: continue
+                    _raw=_r["AdjMean"]/_base-1.0
+                    _sh=_r["NEff"]/(_r["NEff"]+8.0)
+                    matchup[(str(_o),str(_p))]=float(np.clip(_raw,-0.08,0.08)*_sh*0.75)
 
-        dkavg=pd.to_numeric(out["AvgPointsPerGame"],errors="coerce").fillna(0.0)
-        sal=pd.to_numeric(out["FlexSalary"],errors="coerce").fillna(0.0); pos=out["Position"].astype(str).str.upper()
-        vals=[]; reasons=[]; madjs=[]; sigs=[]
         _pos_default_vol={"QB":0.26,"RB":0.42,"WR":0.50,"TE":0.48,"DST":0.62}
         import math as _math
+        _TEAM_NORM={"LAR":"LA","WSH":"WAS","JAC":"JAX","ARZ":"ARI"}
+        def _norm_team(t):
+            _t=str(t).strip().upper()
+            return _TEAM_NORM.get(_t,_t)
+        _teams_u=[t for t in out["Team"].dropna().unique().tolist() if t]
+        vals=[]; reasons=[]; madjs=[]; sigs=[]; role_sigs=[]
+        exp_tgts=[]; exp_cars=[]; exp_atts=[]
         for _,r in out.iterrows():
             pos_u=str(r["Position"]).upper()
-            is_dst=(pos_u=="DST")
-            if is_dst and float(r.get("DSTHist",0))>0:
-                hist=float(r.get("DSTHist",0)); games=int(r.get("DSTGames",0)); curg=int(r.get("DSTCur",0)); prior=float(r.get("AvgPointsPerGame",0) or 0)
-                emp_vol=float(r.get("DSTVol",0)); why_src="DST history"
-            else:
-                hist=float(r.get("HistProj",0)); games=int(r.get("HistoryGames",0)); curg=int(r.get("CurrentGames",0)); prior=float(r.get("AvgPointsPerGame",0) or 0)
-                emp_vol=float(r.get("Vol",0)); why_src="4-year history"
-            # Historical evidence dominates established players; DK average is a weak stabilizer/fallback.
-            evidence=min(0.88, games/(games+8.0))
-            base=(evidence*hist + (1-evidence)*prior) if hist>0 else prior
-            # Role signal is used only as a modest stabilizer, not converted directly to fantasy points.
-            role=float(r.get("RoleSignal",0)); role_adj=0.0
-            if role>0 and base>0 and not is_dst:
-                # Keeps TD spikes from dominating while rewarding sustained opportunity.
-                role_adj=float(np.clip((role/12.0)-0.5,-0.04,0.05))
+            is_dst=(pos_u=="DST"); is_k=pos_u in ("K","PK")
+            prior=float(r.get("AvgPointsPerGame",0) or 0)
+            sal_i=float(r.get("FlexSalary",0) or 0)
+            sp=max(0.3,sal_i/1000.0*1.55)
             opp=""
             try:
-                teams=[t for t in out["Team"].dropna().unique().tolist() if t]
-                if len(teams)==2: opp=teams[1] if r["Team"]==teams[0] else teams[0]
+                if len(_teams_u)==2: opp=_teams_u[1] if r["Team"]==_teams_u[0] else _teams_u[0]
                 else: opp=_opp_from_gameinfo(r.get("Game Info",""),r["Team"])
             except Exception: pass
-            _mtable=dst_matchup if is_dst else matchup
-            m=float(_mtable.get((str(opp),pos_u),0.0)); madjs.append(m*100)
-            # Matchup and role are bounded; they refine the baseline rather than rewrite it.
-            model=max(0.0,base*(1.0+role_adj+m))
-            # Salary prior only for thin-history skill players.
-            if games<5 and pos_u in ["QB","RB","WR","TE"]:
-                sp=max(0.3,float(r["FlexSalary"])/1000.0*1.55)
-                model=0.90*model+0.10*sp
-            vals.append(round(model,3))
-            reasons.append(f"{why_src} {hist:.2f} over {games} games; current season {curg} game(s) is sample-shrunk; DK prior {prior:.2f}; role {role_adj*100:+.1f}%; {opp or 'opponent'} matchup {m*100:+.1f}%")
-            # Per-player volatility: empirical weekly std shrunk toward the position prior.
+            opp_n=_norm_team(opp) if opp else ""
+            emp_vol=float(r.get("Vol",0) or 0)
+            if is_dst and float(r.get("DSTHist",0))>0:
+                # DST assembly unchanged from pre-V7 (team-defense model).
+                hist=float(r.get("DSTHist",0)); games=int(r.get("DSTGames",0)); curg=int(r.get("DSTCur",0))
+                emp_vol=float(r.get("DSTVol",0))
+                evidence=min(0.88, games/(games+8.0))
+                base=(evidence*hist + (1-evidence)*prior) if hist>0 else prior
+                m=float(dst_matchup.get((str(opp),pos_u),0.0)); madjs.append(m*100)
+                model=max(0.0,base*(1.0+m))
+                vals.append(round(model,3)); role_sigs.append(0.0)
+                exp_tgts.append(0.0); exp_cars.append(0.0); exp_atts.append(0.0)
+                reasons.append(f"DST history {hist:.2f} over {games} games; current season {curg} game(s) is sample-shrunk; DK prior {prior:.2f}; role +0.0%; {opp or 'opponent'} matchup {m*100:+.1f}%")
+                _sig_base=base
+            elif is_k:
+                # The stat feed carries no kicking points; keep the DK-prior
+                # path (with the pre-V7 thin-history salary stabilizer) so a
+                # kicker never projects 0 just for having zero shares.
+                model=prior
+                if int(r.get("HistoryGames",0))<5: model=0.90*model+0.10*sp
+                vals.append(round(max(0.0,model),3)); madjs.append(0.0); role_sigs.append(0.0)
+                exp_tgts.append(0.0); exp_cars.append(0.0); exp_atts.append(0.0)
+                reasons.append(f"Kicker: DK prior {prior:.2f} (stat feed carries no kicking points); salary prior {sp:.2f}")
+                _sig_base=model
+            else:
+                rate_recv=float(r.get("RateRecv",0) or 0); rate_rush=float(r.get("RateRush",0) or 0); rate_pass=float(r.get("RatePass",0) or 0)
+                nm=str(r["Name"]); role=role_cur.get(nm); prole=role_prior.get(nm)
+                m=float(matchup.get((opp_n,pos_u),0.0)); madjs.append(m*100)
+                if role is not None:
+                    base=(role["exp_tgt"]*rate_recv + role["exp_car"]*rate_rush
+                          + (role["exp_att"]*rate_pass if pos_u=="QB" else 0.0))
+                    role_sigs.append(round(role["exp_tgt"]+role["exp_car"]+role["exp_att"],2))
+                    exp_tgts.append(round(role["exp_tgt"],2)); exp_cars.append(round(role["exp_car"],2)); exp_atts.append(round(role["exp_att"],2))
+                    _parts=[]
+                    if pos_u=="QB":
+                        _parts.append(f"role: {role['sh_att']*100:.0f}% of {role['team']} attempts (2026) ≈ {role['exp_att']:.1f} att × {rate_pass:.2f} pts/att (shrunk; {int(r.get('RawAtt',0))} career att)")
+                        if role["exp_car"]>=0.5: _parts.append(f"{role['exp_car']:.1f} car × {rate_rush:.2f} pts/car")
+                    else:
+                        if role["exp_tgt"]>=0.2: _parts.append(f"role: {role['sh_tgt']*100:.0f}% of {role['team']} targets (2026) ≈ {role['exp_tgt']:.1f} tgt × {rate_recv:.2f} pts/tgt (shrunk; {int(r.get('RawTgt',0))} career tgt)")
+                        if role["exp_car"]>=0.2: _parts.append(f"{role['sh_car']*100:.0f}% of carries ≈ {role['exp_car']:.1f} car × {rate_rush:.2f} pts/car (shrunk; {int(r.get('RawCar',0))} career car)")
+                        if not _parts: _parts.append(f"role: fringe {role['team']} share (2026) ≈ {role['exp_tgt']+role['exp_car']:.1f} opp/g")
+                    _parts.append(f"{opp or 'opponent'} matchup {m*100:+.1f}%")
+                    reasons.append("; ".join(_parts))
+                elif prole is not None:
+                    _pb=(prole["exp_tgt"]*rate_recv + prole["exp_car"]*rate_rush
+                         + (prole["exp_att"]*rate_pass if pos_u=="QB" else 0.0))*0.65
+                    base=0.70*_pb + 0.30*sp
+                    role_sigs.append(round((prole["exp_tgt"]+prole["exp_car"]+prole["exp_att"])*0.65,2))
+                    exp_tgts.append(round(prole["exp_tgt"]*0.65,2)); exp_cars.append(round(prole["exp_car"]*0.65,2)); exp_atts.append(round(prole["exp_att"]*0.65,2))
+                    reasons.append(f"no 2026 role yet; prior-season share ({prole['team']}) decayed x0.65 ≈ {prole['exp_tgt']+prole['exp_car']+prole['exp_att']:.1f} opp/g; blended 70/30 with salary prior {sp:.2f}; DK prior {prior:.2f}; {opp or 'opponent'} matchup {m*100:+.1f}%")
+                else:
+                    base=0.50*prior + 0.50*sp
+                    role_sigs.append(0.0)
+                    exp_tgts.append(0.0); exp_cars.append(0.0); exp_atts.append(0.0)
+                    reasons.append(f"no role data; DK prior {prior:.2f} blended with salary prior {sp:.2f}; {opp or 'opponent'} matchup {m*100:+.1f}%")
+                model=max(0.0,base*(1.0+m))
+                vals.append(round(model,3))
+                _sig_base=model if model>0 else (float(r.get("RawFP",0))/max(int(r.get("HistoryGames",0)),1) if int(r.get("HistoryGames",0))>0 else 0.0)
             _sig=0.45
-            if emp_vol>0 and base>0:
-                _cv=emp_vol/max(base,1.5)
+            if emp_vol>0 and _sig_base>0:
+                _cv=emp_vol/max(_sig_base,1.5)
                 _sig=float(min(0.9,max(0.15,_math.sqrt(_math.log1p(_cv*_cv)))))
             sigs.append(round(0.5*_sig+0.5*_pos_default_vol.get(pos_u,0.45),3))
         out["Aytia Base Proj"]=vals; out["History Games"]=out["HistoryGames"].astype(int); out["Current Games"]=out["CurrentGames"].astype(int)
-        out["Role Signal"]=out["RoleSignal"].round(2); out["Matchup Adj %"]=np.round(madjs,1); out["Projection Why"]=reasons
+        out["Role Signal"]=np.round(role_sigs,2); out["Matchup Adj %"]=np.round(madjs,1); out["Projection Why"]=reasons
         out["Sim Vol"]=sigs
-        out["Aytia Data"]="2023-2026 history + role + matchup"
+        # Per-channel expected opportunities (sim-first spec section 7, item
+        # 1): current-season role values, or the decayed prior-season values
+        # on the fallback path, so the surface is uniform for the sim layer.
+        out["Exp Tgt"]=np.round(exp_tgts,2); out["Exp Car"]=np.round(exp_cars,2); out["Exp Att"]=np.round(exp_atts,2)
+        out["Aytia Data"]="usage-first: 2026 role x shrunk rates (2023-2026) + DvP"
     except Exception as e:
         out.attrs["projection_warning"]=f"Live nflverse evidence could not load ({e}). Aytia used the DK slate prior for this run."
     return out

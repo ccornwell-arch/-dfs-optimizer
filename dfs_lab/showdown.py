@@ -392,6 +392,11 @@ def showdown_base_objective(df, aggr, strategy_map, script, script_team, exposur
     own = np.clip(df["My Own"].to_numpy(float), 0.1, None)
     objective = proj.copy()
     ownership_available = bool(pd.to_numeric(df.get("My Own",0),errors="coerce").fillna(0).max() > 0.01)
+    if "Own Estimated" in df.columns:
+        # Estimated ownership is a formula, not field data: it must not
+        # steer the build. Real ownership (SaberSim file) is unaffected.
+        try: ownership_available = ownership_available and not bool(df["Own Estimated"].fillna(True).any())
+        except Exception: ownership_available = False
     if ownership_available:
         leverage = np.log((proj + 2.0) / (own + 2.0))
         objective += (0.65 + 2.0 * aggr) * leverage
@@ -456,7 +461,9 @@ def solve_showdown_one(
             if slot == "CPT":
                 cpt_own = max(float(r["CPT Own"]), 0.1)
                 cpt_proj = float(r["Aytia Proj"] if "Aytia Proj" in r.index else (r["Script Proj"] if "Script Proj" in r.index else r["My Proj"]))
-                cpt_lev = math.log((1.5*cpt_proj+2)/(cpt_own+1.5))
+                # CPT leverage only on real (SaberSim) captain ownership;
+                # an estimated CPT Own must not steer the build.
+                cpt_lev = 0.0 if bool(r.get("CPT Own Estimated", False)) else math.log((1.5*cpt_proj+2)/(cpt_own+1.5))
                 val = 1.5*base[i] + (0.5 + 1.5*aggr)*cpt_lev
                 # Position priors are soft, never hard rules.
                 if r["is_WR"]: val += 0.55

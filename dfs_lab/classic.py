@@ -126,9 +126,19 @@ def player_objective(df, aggr, strategy_map, preferred_stack_teams, team_strateg
     # Projection remains the backbone.
     objective = proj.copy()
 
-    # Contest-aware, controlled leverage.
-    leverage = np.log((proj + 2.0) / (own + 2.0))
-    objective += (0.6 + 1.8 * aggr) * leverage
+    # Contest-aware, controlled leverage. Estimated ownership is a
+    # percentile formula, not field data: it must not steer the build.
+    # Real ownership (SaberSim file) keeps this term exactly as before.
+    # Pools from prepare_player_pool always carry the "Own Estimated"
+    # flag; when the column is absent (hand-built pools) legacy behavior
+    # is preserved.
+    _own_estimated = False
+    if "Own Estimated" in df.columns:
+        try: _own_estimated = bool(df["Own Estimated"].fillna(True).any())
+        except Exception: _own_estimated = True
+    if not _own_estimated:
+        leverage = np.log((proj + 2.0) / (own + 2.0))
+        objective += (0.6 + 1.8 * aggr) * leverage
 
     # User opinions matter explicitly.
     for i, r in df.iterrows():
@@ -1008,6 +1018,152 @@ def _team_fantasy_calibration(season):
     emp = m.groupby("_tm")["skill_fp"].mean().to_dict()
     return ratio, emp
 
+# ---------------------------------------------------------------------------
+# Stat-level world generation (sim-first spec, Oct 2026).
+#
+# The legacy dealing model split each team's simulated fantasy points across
+# players by projection-implied shares with per-player lognormal noise. The
+# stat-level model instead draws the football itself: team channel volumes
+# (attempts / carries / targets) are allocated to players by
+# Dirichlet-multinomial shares built from the projection engine's role layer
+# (so teammates cannibalize inside every world), stat lines are drawn from
+# the engine's shrunk stat rates, and DraftKings points are SCORED from the
+# drawn stat line -- never drawn as points directly.
+#
+# Tuning constants (calibration-gate knobs per spec section 5; the Oct 2026
+# gate run used exactly these spec defaults):
+#   DIRICHLET_KAPPA   share concentration per game (spec: ~25)
+#   TD_DISPERSION_PHI negative-binomial variance multiplier for TD draws
+#                     (variance = phi * mean; spec: ~1.3)
+#   yards CVs         per-play efficiency spread (lognormal multipliers)
+# ---------------------------------------------------------------------------
+DIRICHLET_KAPPA = 25.0
+TD_DISPERSION_PHI = 1.3
+_YDS_CV = {"pass": 0.30, "recv": 0.45, "rush": 0.50}
+# League-average rates used only where the stat feed has no player history
+# at all (the engine's shrunk columns already carry positional priors for
+# every pooled player, so these are last-resort constants).
+_INT_RATE_PER_ATT = 0.022
+_FUM_RATE = {"rush": 0.008, "recv": 0.004, "pass": 0.006}
+
+
+def _team_channel_volumes(season):
+    """Current-season team channel volumes per game from nflverse stats.
+
+    Returns {team: {"att": (mean, sd), "car": (mean, sd), "tgt": (mean, sd)}}
+    keyed by nflverse abbreviations. Attempts/carries/targets are team totals
+    over all rostered players in the feed (not just the DK pool), so the
+    sim's coverage scaling can compare pool-expected opportunities against
+    the team's real volume. Falls back to the most recent season present
+    when the current season has no completed weeks yet.
+    """
+    from dfs_lab.data import _load_nflverse_inputs
+    stats, _ = _load_nflverse_inputs(season)
+    s = stats.copy()
+    posc = _first_existing(s.columns, ["position", "position_group", "Pos"])
+    if posc is None or "team" not in s.columns:
+        return {}
+    s["_pos"] = s[posc].astype(str).str.upper().replace({"HB": "RB", "FB": "RB"})
+    s["_tm"] = s["team"].astype(str).str.upper()
+    s["_sn"] = pd.to_numeric(s["season"], errors="coerce")
+    s["_wk"] = pd.to_numeric(s["week"], errors="coerce")
+
+    def _c(name, *alts):
+        for nm in (name,) + alts:
+            if nm in s.columns:
+                return pd.to_numeric(s[nm], errors="coerce").fillna(0.0)
+        return pd.Series(0.0, index=s.index)
+
+    s["_att"] = _c("attempts", "passing_attempts")
+    s["_car"] = _c("carries")
+    s["_tgt"] = _c("targets")
+    use_sn = season if (s["_sn"] == season).any() else s["_sn"].max()
+    cur = s[s["_sn"] == use_sn]
+    tw = cur.groupby(["_tm", "_wk"], as_index=False).agg(
+        att=("_att", "sum"), car=("_car", "sum"), tgt=("_tgt", "sum"))
+    out = {}
+    for t, g in tw.groupby("_tm"):
+        if len(g) < 1:
+            continue
+        out[t] = {ch: (float(g[ch].mean()),
+                       float(g[ch].std(ddof=1)) if len(g) > 1 else 4.0)
+                  for ch in ["att", "car", "tgt"]}
+    return out
+
+
+def _dirichlet_multinomial(rng, totals, alpha):
+    """Dirichlet-multinomial allocation of per-world totals.
+
+    totals: (S,) integer totals per world; alpha: (k,) positive Dirichlet
+    concentration (expected opportunities x kappa). Returns (S, k) integer
+    counts. Shares are drawn per world (teammates' spikes mechanically
+    remove opportunities from each other), then counts are allocated by
+    sequential conditional binomials -- exactly multinomial given shares.
+    """
+    totals = np.asarray(totals, dtype=np.int64)
+    alpha = np.asarray(alpha, dtype=float)
+    S = totals.shape[0]
+    k = alpha.shape[0]
+    out = np.zeros((S, k), dtype=np.int64)
+    if k == 0 or S == 0:
+        return out
+    g = rng.gamma(shape=np.clip(alpha, 1e-6, None), scale=1.0, size=(S, k))
+    p = g / np.maximum(g.sum(axis=1, keepdims=True), 1e-12)
+    if k == 1:
+        out[:, 0] = totals
+        return out
+    rem_n = totals.copy()
+    rem_p = p.sum(axis=1)
+    for j in range(k - 1):
+        pj = np.divide(p[:, j], rem_p, out=np.zeros(S), where=rem_p > 1e-12)
+        draw = rng.binomial(rem_n, np.clip(pj, 0.0, 1.0))
+        out[:, j] = draw
+        rem_n = rem_n - draw
+        rem_p = rem_p - p[:, j]
+    out[:, k - 1] = rem_n
+    return out
+
+
+def _nb_draws(rng, lam, phi=TD_DISPERSION_PHI):
+    """Negative-binomial draws with mean lam and variance phi * lam
+    (Gamma-Poisson mixture). phi = 1 would be Poisson."""
+    lam = np.clip(np.asarray(lam, dtype=float), 0.0, None)
+    if phi <= 1.0:
+        return rng.poisson(lam)
+    shape = np.maximum(lam / (phi - 1.0), 1e-9)
+    mixed = rng.gamma(shape=shape, scale=(phi - 1.0))
+    return rng.poisson(np.where(lam > 0, mixed, 0.0))
+
+
+def _lognormal_mult(rng, cv, size):
+    """Mean-1 lognormal multiplier with the given coefficient of variation
+    (scalar, or an array broadcastable against `size`)."""
+    cv = np.asarray(cv, dtype=float)
+    sigma = np.sqrt(np.log1p(cv * cv))
+    return np.exp(rng.normal(0.0, sigma, size=size) - 0.5 * sigma * sigma)
+
+
+def _dk_points_from_statline(att, pass_yds, pass_td, interceptions,
+                             car, rush_yds, rush_td,
+                             tgt, rec, rec_yds, rec_td,
+                             fum_lost):
+    """DraftKings points for a simulated stat line, elementwise.
+
+    The same scoring constants as data._dk_fantasy_points_from_stats
+    (0.04/pass yd, 4/pass TD, -1/INT, 0.10/rush & rec yd, 6/rush & rec TD,
+    1/reception, -1/fumble lost, +3 bonuses at 300 pass / 100 rush /
+    100 receiving yards) so simulated and actual points share one scoring
+    definition. Fumbles lost are charged once per player (the components
+    are summed before scoring)."""
+    pts = (0.04 * pass_yds + 4.0 * pass_td - 1.0 * interceptions
+           + 0.10 * rush_yds + 6.0 * rush_td
+           + 1.0 * rec + 0.10 * rec_yds + 6.0 * rec_td
+           - 1.0 * fum_lost)
+    pts = pts + 3.0 * (pass_yds >= 300) + 3.0 * (rush_yds >= 100) \
+        + 3.0 * (rec_yds >= 100)
+    return np.maximum(pts, 0.0)
+
+
 def bringback_worthy_teams(df):
     """Offenses good enough to merit a bring-back.
 
@@ -1024,6 +1180,195 @@ def bringback_worthy_teams(df):
     # found by its pool name.
     return {_dk_abbr(t) for t, r in off.items() if r >= lg}
 
+def _simulate_stat_worlds(d, sims, rng, team_pts, team_list, tix, games,
+                          season, proj, pos, teams, is_dst, pvol, lg):
+    """Stat-level worlds (sim-first spec section 1).
+
+    Draws team channel volumes conditioned on the world's game script,
+    allocates them by Dirichlet-multinomial shares from the engine's role
+    layer, draws stat lines from the engine's shrunk stat rates, caps team
+    TD events at the total implied by the world's team score, and scores
+    every player with the canonical DK formula. DST rows keep the legacy
+    points-allowed bracket model; kickers and no-role dust keep a
+    projection-anchored lognormal (the stat feed carries neither kicking
+    data nor a role for them).
+
+    Returns (worlds, detail): worlds is (sims x n) DK points; detail holds
+    the per-world team points and opportunity matrices the story layer
+    (section 4) predicates over.
+    """
+    from dfs_lab.data import _dst_points_allowed_fantasy
+    n = len(d)
+
+    def _col(name, default):
+        if name in d.columns:
+            return pd.to_numeric(d[name], errors="coerce").fillna(default).to_numpy(float)
+        return np.full(n, float(default))
+
+    exp_tgt = np.clip(_col("Exp Tgt", 0.0), 0.0, None)
+    exp_car = np.clip(_col("Exp Car", 0.0), 0.0, None)
+    exp_att = np.clip(_col("Exp Att", 0.0), 0.0, None)
+    catch = np.clip(_col("Catch Rate", 0.65), 0.05, 0.95)
+    td_tgt_r = np.clip(_col("TD Rate Tgt", 0.045), 0.0, 0.35)
+    td_car_r = np.clip(_col("TD Rate Car", 0.028), 0.0, 0.35)
+    ypt = np.clip(_col("Yds Per Tgt", 7.5), 0.0, 15.0)
+    ypc = np.clip(_col("Yds Per Car", 4.3), 0.0, 9.0)
+    ypa = np.clip(_col("Yds Per Att", 6.9), 0.0, 12.0)
+    # Fallback-path players (no current-season role) get wider share
+    # uncertainty (spec 1.2). "Current Games" rides the engine frame; when
+    # a pool does not carry it, nobody is treated as fallback.
+    cur_games = _col("Current Games", 1.0)
+    kappa = np.where((cur_games <= 0) & ((exp_tgt + exp_car + exp_att) > 0),
+                     DIRICHLET_KAPPA * 0.5, DIRICHLET_KAPPA)
+
+    # Allocation weights: only players the availability layer expects to
+    # dress claim opportunities. Inactive rows keep their projection (the
+    # guard owns availability, per spec 1.2) and fall to the dust path.
+    if "ActiveForBuild" in d.columns:
+        _act = d["ActiveForBuild"].to_numpy(bool)
+    else:
+        _act = np.ones(n, dtype=bool)
+    w_tgt = np.where(_act, exp_tgt, 0.0)
+    w_car = np.where(_act, exp_car, 0.0)
+
+    volumes = _team_channel_volumes(season)
+    LG_VOL = {"att": (33.5, 5.5), "car": (26.5, 5.0), "tgt": (33.0, 5.5)}
+    opp_of = {}
+    for (a, h) in games:
+        opp_of[a] = h
+        opp_of[h] = a
+
+    tgt_m = np.zeros((sims, n), dtype=np.int64)
+    car_m = np.zeros((sims, n), dtype=np.int64)
+    att_m = np.zeros((sims, n), dtype=np.int64)
+    team_rows = {t: np.where(teams == t)[0] for t in team_list}
+    starter_of = {}
+    for t in team_list:
+        rows = team_rows[t]
+        if len(rows) == 0:
+            continue
+        vol = volumes.get(_ratings_key(t), LG_VOL)
+        own = team_pts[:, tix[t]]
+        opp = opp_of.get(t)
+        opp_pts = team_pts[:, tix[opp]] if opp in tix else np.full(sims, lg)
+        margin = own - opp_pts
+        att_mu, att_sd = vol["att"]
+        car_mu, car_sd = vol["car"]
+        tgt_mu, tgt_sd = vol["tgt"]
+        att_w = np.clip(rng.normal(att_mu * np.clip(1 - 0.006 * margin, 0.75, 1.30),
+                                   max(att_sd, 1.0)), 10, 62).round().astype(np.int64)
+        car_w = np.clip(rng.normal(car_mu * np.clip(1 + 0.008 * margin, 0.70, 1.35),
+                                   max(car_sd, 1.0)), 6, 52).round().astype(np.int64)
+        # Targets are drawn CONDITIONAL on the world's attempts (spec 1.3:
+        # QB and catcher volumes must agree), at the team's historical
+        # targets-per-attempt ratio with small independent noise -- not as
+        # an independent volume draw.
+        tgt_ratio = (tgt_mu / att_mu) if att_mu > 0 else 0.97
+        tgt_w = np.clip(np.round(att_w * tgt_ratio
+                                 * _lognormal_mult(rng, 0.06, sims)),
+                        8, 60).astype(np.int64)
+        # Coverage: the pool rarely rosters every stat-recording player on
+        # a team, so only the pool-covered share of team volume is dealt to
+        # pool players (the legacy model's coverage idea, per channel).
+        cov_tgt = min(1.0, float(w_tgt[rows].sum()) / tgt_mu) if tgt_mu > 0 else 0.0
+        cov_car = min(1.0, float(w_car[rows].sum()) / car_mu) if car_mu > 0 else 0.0
+        tgt_tot = np.clip(np.round(tgt_w * cov_tgt), 0, None).astype(np.int64)
+        car_tot = np.clip(np.round(car_w * cov_car), 0, None).astype(np.int64)
+
+        ti = rows[w_tgt[rows] > 0.05]
+        if len(ti):
+            tgt_m[:, ti] = _dirichlet_multinomial(
+                rng, tgt_tot, np.clip(w_tgt[ti], 0.02, None) * kappa[ti])
+        ci = rows[w_car[rows] > 0.05]
+        if len(ci):
+            car_m[:, ci] = _dirichlet_multinomial(
+                rng, car_tot, np.clip(w_car[ci], 0.02, None) * kappa[ci])
+        qi = rows[(pos[rows] == "QB") & _act[rows]]
+        if len(qi):
+            st = qi[int(np.argmax(exp_att[qi]))]
+            if exp_att[st] > 0:
+                starter_of[t] = st
+                share = min(1.0, float(exp_att[st]) / att_mu) if att_mu > 0 else 1.0
+                att_m[:, st] = np.round(att_w * share).astype(np.int64)
+
+    # ---- stat lines from world opportunities ----
+    rec_m = rng.binomial(tgt_m, catch[None, :])
+    rec_yds = np.where(tgt_m > 0,
+                       tgt_m * ypt[None, :] * _lognormal_mult(rng, _YDS_CV["recv"], (sims, n)), 0.0)
+    rush_yds = np.where(car_m > 0,
+                        car_m * ypc[None, :] * _lognormal_mult(rng, _YDS_CV["rush"], (sims, n)), 0.0)
+    pass_yds = np.where(att_m > 0,
+                        att_m * ypa[None, :] * _lognormal_mult(rng, _YDS_CV["pass"], (sims, n)), 0.0)
+    rush_td = np.minimum(_nb_draws(rng, car_m * td_car_r[None, :]), car_m)
+    rec_td = np.minimum(_nb_draws(rng, tgt_m * td_tgt_r[None, :]), rec_m)
+
+    # Team TD cap: player TD events cannot outnumber the touchdowns the
+    # world's team score implies (spec 1.3). Thin proportionally per team.
+    keep = np.ones((sims, n))
+    for t in team_list:
+        rows = team_rows[t]
+        if len(rows) == 0:
+            continue
+        events = rush_td[:, rows].sum(axis=1) + rec_td[:, rows].sum(axis=1)
+        cap = np.maximum(np.round(team_pts[:, tix[t]] / 6.9), 0)
+        over = events > cap
+        if over.any():
+            pv = np.where(events > 0, cap / np.maximum(events, 1), 1.0)
+            keep[:, rows] = np.where(over, pv, 1.0)[:, None]
+    rush_td = rng.binomial(rush_td, keep)
+    rec_td = rng.binomial(rec_td, keep)
+    # A passing TD is the same event as a receiving TD: the starter QB is
+    # credited with the team's surviving receiving-TD total (spec 1.3).
+    pass_td = np.zeros((sims, n), dtype=np.int64)
+    for t, st in starter_of.items():
+        rows = team_rows[t]
+        pass_td[:, st] = rec_td[:, rows].sum(axis=1)
+
+    qb_rows = np.zeros(n, dtype=bool)
+    for st in starter_of.values():
+        qb_rows[st] = True
+    int_m = np.where(qb_rows[None, :],
+                     rng.poisson(att_m * _INT_RATE_PER_ATT), 0)
+    fum = (rng.poisson(car_m * _FUM_RATE["rush"])
+           + rng.poisson(rec_m * _FUM_RATE["recv"])
+           + np.where(qb_rows[None, :], rng.poisson(att_m * _FUM_RATE["pass"]), 0))
+
+    worlds = _dk_points_from_statline(
+        att_m, pass_yds, pass_td, int_m, car_m, rush_yds, rush_td,
+        tgt_m, rec_m, rec_yds, rec_td, fum)
+
+    # Kickers and no-role dust: projection-anchored lognormal (no stat
+    # channel exists for them in the feed). Coverage is judged on expected
+    # opportunities, not realized draws, so a one-target-in-1000-worlds
+    # cameo does not exile a player from the fallback.
+    stat_covered = qb_rows | (w_tgt > 0.05) | (w_car > 0.05)
+    dust = (~is_dst) & (~stat_covered)
+    if dust.any():
+        dv = np.clip(pvol[dust], 0.12, 0.95)
+        worlds[:, dust] = np.clip(
+            proj[dust][None, :] * _lognormal_mult(rng, dv, (sims, int(dust.sum()))),
+            0, None)
+
+    # Defenses: the legacy bracket model against the opponent's simulated
+    # score, unchanged.
+    for j in np.where(is_dst)[0]:
+        t = teams[j]
+        opp = opp_of.get(t)
+        base = max(float(proj[j]), 0.5)
+        adj = (np.vectorize(_dst_points_allowed_fantasy)(team_pts[:, tix[opp]]) - 1.0) if opp else 0.0
+        dv = min(0.9, max(0.2, float(pvol[j])))
+        worlds[:, j] = np.clip(base + adj + rng.normal(0, dv * base, sims), 0, None)
+
+    detail = {
+        "stat_level": True,
+        "team_pts": pd.DataFrame(team_pts, columns=team_list),
+        "attempts": pd.DataFrame(att_m, columns=d.index),
+        "targets": pd.DataFrame(tgt_m, columns=d.index),
+        "carries": pd.DataFrame(car_m, columns=d.index),
+    }
+    return worlds, detail
+
+
 def topdown_simulate_slate(df, sims=10000, seed=42):
     """Top-down game simulation: team scores -> team fantasy -> player shares.
 
@@ -1037,6 +1382,13 @@ def topdown_simulate_slate(df, sims=10000, seed=42):
     shock terms. Defenses move against their opponent's simulated score via
     the points-allowed bracket.
 
+    When the pool carries the projection engine's role layer (Exp Tgt /
+    Exp Car / Exp Att columns -- the Aytia-projection path), worlds are
+    generated at STAT level (see _simulate_stat_worlds): opportunities are
+    allocated by Dirichlet-multinomial shares and DK points are scored
+    from drawn stat lines. Pools without the role layer (SaberSim-file
+    path) keep the legacy dealing model above, unchanged.
+
     Returns a dict with:
       player_stats: Name, Position, Team, Sim Mean, Sim P10, Sim P25, Sim P50,
                     Sim P75, Sim P90, Sim Std, P(3x) % (probability of 3x
@@ -1045,6 +1397,10 @@ def topdown_simulate_slate(df, sims=10000, seed=42):
                     (same shape as the old bottom-up sim table)
       worlds:       DataFrame (sims rows x players) of simulated fantasy
                     points, columns are df integer positions.
+      detail:       {"stat_level": bool, "team_pts": per-world team scores,
+                    "attempts"/"targets"/"carries": per-world opportunity
+                    matrices (stat path only; None on the legacy path)} --
+                    the predicate surface for story-conditional reporting.
     """
     from dfs_lab.data import _slate_season, _dst_points_allowed_fantasy
     d = df.reset_index(drop=True).copy()
@@ -1087,45 +1443,71 @@ def topdown_simulate_slate(df, sims=10000, seed=42):
         team_pts[:, tix[h]] = np.clip(draw[:, 1], 0, None)
         simmed[tix[a]] = simmed[tix[h]] = True
     team_pts[:, ~simmed] = np.clip(rng.normal(lg, SCORE_SD, size=(sims, (~simmed).sum())), 0, None)
-    skill_fp = ratio * team_pts  # sims x teams
 
-    # Usage shares from projections, scaled by historical coverage so backups'
-    # fantasy is not dealt to pool players.
-    share = np.zeros(n)
-    for t in team_list:
-        m = (teams == t) & (~is_dst)
-        ps = proj[m].sum()
-        if ps <= 0:
-            continue
-        covr = min(1.0, max(0.05, ps / max(emp_team_fp.get(t, ps), 1.0)))
-        share[m] = proj[m] / ps * covr
-
-    # Individual noise: part of weekly variance is team-driven, the rest is the
-    # player's own. 0.65 keeps total variance near the player's Sim Vol.
     if "Sim Vol" in d.columns:
         pvol = pd.to_numeric(d["Sim Vol"], errors="coerce").fillna(0.45).to_numpy()
     else:
         pvol = np.array([{"QB": 0.26, "RB": 0.42, "WR": 0.50, "TE": 0.48, "DST": 0.62}.get(p, 0.45) for p in pos])
-    ind = 0.65 * np.clip(pvol, 0.12, 0.95)
-    noise = np.exp(rng.normal(0, 1, size=(sims, n)) * ind[None, :] - 0.5 * ind[None, :] ** 2)
 
-    team_col = np.array([tix[t] for t in teams])
-    worlds = np.zeros((sims, n))
-    sk = ~is_dst
-    worlds[:, sk] = skill_fp[:, team_col[sk]] * share[sk][None, :] * noise[:, sk]
+    # Stat-level worlds when the pool carries the engine's role layer
+    # (spec section 1); otherwise the legacy dealing model below, verbatim
+    # (the SaberSim-file path has no role layer and is unchanged).
+    stat_ready = ("Exp Tgt" in d.columns) and \
+        float(pd.to_numeric(d["Exp Tgt"], errors="coerce").fillna(0.0).sum()) > 0
+    gmats = []
+    if stat_ready:
+        worlds, detail = _simulate_stat_worlds(
+            d, sims, rng, team_pts, team_list, tix, games, season,
+            proj, pos, teams, is_dst, pvol, lg)
+        for (a, h) in games:
+            gmats.append(worlds[:, np.isin(teams, [a, h])].sum(axis=1))
+    else:
+        skill_fp = ratio * team_pts  # sims x teams
 
-    # Defenses ride their projection, adjusted by the opponent's simulated
-    # score through the points-allowed bracket.
-    opp_of = {}
-    for (a, h) in games:
-        opp_of[a] = h; opp_of[h] = a
-    for j in np.where(is_dst)[0]:
-        t = teams[j]
-        opp = opp_of.get(t)
-        base = max(float(proj[j]), 0.5)
-        adj = (np.vectorize(_dst_points_allowed_fantasy)(team_pts[:, tix[opp]]) - 1.0) if opp else 0.0
-        dv = min(0.9, max(0.2, float(pvol[j])))
-        worlds[:, j] = np.clip(base + adj + rng.normal(0, dv * base, sims), 0, None)
+        # Usage shares from projections, scaled by historical coverage so
+        # backups' fantasy is not dealt to pool players.
+        share = np.zeros(n)
+        for t in team_list:
+            m = (teams == t) & (~is_dst)
+            ps = proj[m].sum()
+            if ps <= 0:
+                continue
+            covr = min(1.0, max(0.05, ps / max(emp_team_fp.get(t, ps), 1.0)))
+            share[m] = proj[m] / ps * covr
+
+        # Individual noise: part of weekly variance is team-driven, the rest
+        # is the player's own. 0.65 keeps total variance near Sim Vol.
+        ind = 0.65 * np.clip(pvol, 0.12, 0.95)
+        noise = np.exp(rng.normal(0, 1, size=(sims, n)) * ind[None, :] - 0.5 * ind[None, :] ** 2)
+
+        team_col = np.array([tix[t] for t in teams])
+        worlds = np.zeros((sims, n))
+        sk = ~is_dst
+        worlds[:, sk] = skill_fp[:, team_col[sk]] * share[sk][None, :] * noise[:, sk]
+
+        # Defenses ride their projection, adjusted by the opponent's
+        # simulated score through the points-allowed bracket.
+        opp_of = {}
+        for (a, h) in games:
+            opp_of[a] = h; opp_of[h] = a
+        for j in np.where(is_dst)[0]:
+            t = teams[j]
+            opp = opp_of.get(t)
+            base = max(float(proj[j]), 0.5)
+            adj = (np.vectorize(_dst_points_allowed_fantasy)(team_pts[:, tix[opp]]) - 1.0) if opp else 0.0
+            dv = min(0.9, max(0.2, float(pvol[j])))
+            worlds[:, j] = np.clip(base + adj + rng.normal(0, dv * base, sims), 0, None)
+
+        for (a, h) in games:
+            gfp = skill_fp[:, tix[a]] + skill_fp[:, tix[h]]
+            for t in (a, h):
+                dm = np.where(is_dst & (teams == t))[0]
+                if len(dm):
+                    gfp = gfp + worlds[:, dm].sum(axis=1)
+            gmats.append(gfp)
+        detail = {"stat_level": False,
+                  "team_pts": pd.DataFrame(team_pts, columns=team_list),
+                  "attempts": None, "targets": None, "carries": None}
 
     sal = pd.to_numeric(d["Salary"], errors="coerce").fillna(0.0).to_numpy()
     thr3x = 3.0 * sal / 1000.0
@@ -1141,14 +1523,9 @@ def topdown_simulate_slate(df, sims=10000, seed=42):
         "P(3x) %": np.round(100 * (worlds > thr3x[None, :]).mean(axis=0), 1),
     })
 
-    grows, gmats = [], []
-    for (a, h) in games:
-        gfp = skill_fp[:, tix[a]] + skill_fp[:, tix[h]]
-        for t in (a, h):
-            dm = np.where(is_dst & (teams == t))[0]
-            if len(dm):
-                gfp = gfp + worlds[:, dm].sum(axis=1)
-        gmats.append(gfp)
+    grows = []
+    for gi, (a, h) in enumerate(games):
+        gfp = gmats[gi]
         grows.append({"Game": f"{a}@{h}", "Mean DFS env": round(float(gfp.mean()), 1),
                       "P75": round(float(np.percentile(gfp, 75)), 1),
                       "P90": round(float(np.percentile(gfp, 90)), 1),
@@ -1161,7 +1538,8 @@ def topdown_simulate_slate(df, sims=10000, seed=42):
     game_table = game_table.sort_values(["Slate ceiling %", "P90"], ascending=False).reset_index(drop=True)
 
     worlds_df = pd.DataFrame(worlds, columns=d.index)
-    return {"player_stats": player_stats, "game_table": game_table, "worlds": worlds_df}
+    return {"player_stats": player_stats, "game_table": game_table,
+            "worlds": worlds_df, "detail": detail}
 
 # State shared with worker processes for parallel Optimal % solves. The
 # per-world problem differs only in its objective vector, so workers get
@@ -1202,37 +1580,29 @@ def _rates_pool_solve(wi):
     return _rates_solve_from_state(_RATES_POOL_STATE, wi)
 
 
-def optimal_lineup_rates(worlds_df, df, n_sample=500, seed=7, salary_cap=50000,
-                         progress_cb=None, workers=1):
-    """Optimal % per player: share of sampled sim worlds in which the player
-    appears in that world's highest-scoring salary-cap-legal lineup.
+def _rates_build_state(worlds_df, df, salary_cap=50000, lock_ids=None):
+    """The fixed per-world constraint system + restricted worlds matrix.
 
-    Solves one minimal MILP per sampled world (salary cap + roster slots +
-    position eligibility only — no correlation rules; the true optimal lineup
-    is purely max points). Measured Oct 23, 2026 on the staging droplet's
-    class of hardware: ~0.22s per solve, essentially all of it inside the
-    MILP call (objective assembly is ~1.7ms of it). progress_cb(done, total)
-    is called every 200 solves when provided.
-
-    workers > 1 solves the sampled worlds in forked worker processes.
-    Each world is the identical problem (same seed -> same sample, same
-    constraints, same objective), solved by the same solver, and the hit
-    counts are summed in sample order — so the returned rates are exactly
-    the serial ones; only the wall time changes. Any pool failure falls
-    back to the serial path.
-    Returns DataFrame with columns Name and "Optimal %".
+    Factored out of the original optimal_lineup_rates (Oct 2026, sim-first
+    work) so the measurement path, the story-conditional path, and the
+    sim-first construction path all solve the identical problem. The
+    constraint construction is the original code verbatim; `lock_ids`
+    (pool "ID" strings) optionally add hard in-solve lock rows, used only
+    by the construction fill path -- the measurement path never passes
+    them. Returns (d, names, state) or None when inputs are unusable;
+    `d` is the ActiveForBuild-filtered pool the state indexes into, and
+    state["keep"] maps its rows back to worlds_df columns.
     """
-    from scipy.optimize import Bounds, LinearConstraint, milp
+    from scipy.optimize import Bounds, LinearConstraint
     from scipy.sparse import lil_matrix
 
-    cols_out = pd.DataFrame(columns=["Name", "Optimal %"])
     if worlds_df is None or worlds_df.empty or df is None or df.empty:
-        return cols_out
+        return None
     d = df.reset_index(drop=True)
     if "ActiveForBuild" in d.columns:
         d = d[d["ActiveForBuild"]].reset_index(drop=True)
     if d.empty or "Salary" not in d.columns or "Position" not in d.columns:
-        return cols_out
+        return None
 
     slots = list(ROSTER_SLOTS)
     s = len(slots)
@@ -1270,6 +1640,15 @@ def optimal_lineup_rates(worlds_df, df, n_sample=500, seed=7, salary_cap=50000,
         coeff = {_vidx(i, j): 1.0 for j, sl in enumerate(slots) if sl in elig[i]}
         if coeff:
             rows.append(coeff); lows.append(0.0); highs.append(1.0)
+    if lock_ids:
+        lock_set = {str(x) for x in lock_ids}
+        id_of = d["ID"].astype(str).tolist() if "ID" in d.columns else []
+        for i in range(n):
+            if id_of and id_of[i] in lock_set:
+                coeff = {_vidx(i, j): 1.0 for j, sl in enumerate(slots)
+                         if sl in elig[i]}
+                if coeff:
+                    rows.append(coeff); lows.append(1.0); highs.append(1.0)
     coeff = {_vidx(i, j): salaries[i] for i in range(n)
              for j, sl in enumerate(slots) if sl in elig[i]}
     rows.append(coeff); lows.append(0.0); highs.append(float(salary_cap))
@@ -1287,11 +1666,8 @@ def optimal_lineup_rates(worlds_df, df, n_sample=500, seed=7, salary_cap=50000,
     name_to_k = {str(nm): k for k, nm in enumerate(full["Name"].astype(str))}
     keep = [name_to_k.get(nm) for nm in names]
     if any(k is None for k in keep):
-        return cols_out
+        return None
     wmat = worlds_df.to_numpy(float)[:, keep]
-    rng = np.random.default_rng(seed)
-    sample_idx = rng.choice(wmat.shape[0], size=min(n_sample, wmat.shape[0]),
-                            replace=False)
     # Objective assembly indices, computed once: variable (i, j) is a
     # nonzero of c iff slot j is in player i's eligibility list.
     flat_cols, flat_rows = [], []
@@ -1303,15 +1679,28 @@ def optimal_lineup_rates(worlds_df, df, n_sample=500, seed=7, salary_cap=50000,
     state = {"wmat": wmat, "n": n, "s": s, "total": total,
              "flat_cols": np.array(flat_cols, dtype=int),
              "flat_rows": np.array(flat_rows, dtype=int),
-             "cons": cons, "integrality": integrality, "bounds": bounds}
-    counts = np.zeros(n)
-    idx_list = [int(wi) for wi in sample_idx]
+             "cons": cons, "integrality": integrality, "bounds": bounds,
+             "keep": keep}
+    return d, names, state
+
+
+def _solve_world_hits(state, idx_list, progress_cb=None, workers=1):
+    """Solve each listed world once against `state`; returns a bool hits
+    matrix (len(idx_list) x n players). Reproduces the original
+    optimal_lineup_rates execution pattern exactly: forked pool when
+    workers > 1 with a full serial recompute on any pool failure, and
+    progress_cb(done, total) every 200 solves when provided. A failed
+    world contributes an all-False row (no hits), as the original did.
+    """
+    n = state["n"]
     total_solves = len(idx_list)
-    progress = {"done": 0}
+    hits_mat = np.zeros((total_solves, n), dtype=bool)
+    progress = {"done": 0, "k": 0}
 
     def _absorb(hits):
         if hits is not None:
-            counts[hits] += 1
+            hits_mat[progress["k"]] = hits
+        progress["k"] += 1
         progress["done"] += 1
         if progress_cb and progress["done"] % 200 == 0:
             progress_cb(progress["done"], total_solves)
@@ -1330,16 +1719,444 @@ def optimal_lineup_rates(worlds_df, df, n_sample=500, seed=7, salary_cap=50000,
         except Exception:
             # Any pool failure recomputes serially with the same
             # per-world solve, so the result is unchanged.
-            counts = np.zeros(n)
+            hits_mat[:] = False
             progress["done"] = 0
+            progress["k"] = 0
             for wi in idx_list:
                 _absorb(_rates_solve_from_state(state, wi))
     else:
         for wi in idx_list:
             _absorb(_rates_solve_from_state(state, wi))
+    return hits_mat
+
+
+def optimal_lineup_rates(worlds_df, df, n_sample=500, seed=7, salary_cap=50000,
+                         progress_cb=None, workers=1, world_mask=None):
+    """Optimal % per player: share of sampled sim worlds in which the player
+    appears in that world's highest-scoring salary-cap-legal lineup.
+
+    Solves one minimal MILP per sampled world (salary cap + roster slots +
+    position eligibility only — no correlation rules; the true optimal lineup
+    is purely max points). Measured Oct 23, 2026 on the staging droplet's
+    class of hardware: ~0.22s per solve, essentially all of it inside the
+    MILP call (objective assembly is ~1.7ms of it). progress_cb(done, total)
+    is called every 200 solves when provided.
+
+    workers > 1 solves the sampled worlds in forked worker processes.
+    Each world is the identical problem (same seed -> same sample, same
+    constraints, same objective), solved by the same solver, and the hit
+    counts are summed in sample order — so the returned rates are exactly
+    the serial ones; only the wall time changes. Any pool failure falls
+    back to the serial path.
+
+    world_mask (sim-first spec section 4): an optional boolean array over
+    worlds rows. When given, the sample is drawn from the masked worlds
+    only, so the returned rates are conditional on that subset of worlds
+    (e.g. the worlds matching a user-picked story). Sampling and counting
+    are otherwise identical.
+    Returns DataFrame with columns Name and "Optimal %".
+    """
+    cols_out = pd.DataFrame(columns=["Name", "Optimal %"])
+    built = _rates_build_state(worlds_df, df, salary_cap=salary_cap)
+    if built is None:
+        return cols_out
+    _d, names, state = built
+    wmat = state["wmat"]
+    rng = np.random.default_rng(seed)
+    if world_mask is None:
+        sample_idx = rng.choice(wmat.shape[0], size=min(n_sample, wmat.shape[0]),
+                                replace=False)
+    else:
+        mask = np.asarray(world_mask, dtype=bool)
+        if mask.shape[0] != wmat.shape[0]:
+            raise ValueError("world_mask length must match the worlds rows")
+        midx = np.where(mask)[0]
+        if len(midx) == 0:
+            return pd.DataFrame({"Name": names,
+                                 "Optimal %": np.zeros(len(names))}).sort_values(
+                                     "Optimal %", ascending=False).reset_index(drop=True)
+        sample_idx = midx[rng.choice(len(midx), size=min(n_sample, len(midx)),
+                                     replace=False)]
+    idx_list = [int(wi) for wi in sample_idx]
+    hits = _solve_world_hits(state, idx_list, progress_cb=progress_cb,
+                             workers=workers)
+    counts = hits.sum(axis=0)
     pct = np.round(100 * counts / max(len(sample_idx), 1), 2)
     return pd.DataFrame({"Name": names, "Optimal %": pct}).sort_values(
         "Optimal %", ascending=False).reset_index(drop=True)
+
+
+def _world_optimal_lineups(worlds_df, df, world_indices, salary_cap=50000,
+                           workers=1, progress_cb=None, lock_ids=None,
+                           objective_df=None):
+    """Solve the listed worlds and return (d, results): `d` is the active
+    pool frame the results index into, and results is a list of
+    (world_idx, frozenset of d-positions, true world points) for each
+    world whose solve succeeded. This is the per-world solver of
+    optimal_lineup_rates promoted to construction duty (spec section 3).
+
+    objective_df, when given, replaces worlds_df as the SOLVE objective
+    (the assembly perturbation fill); reported points always come from
+    worlds_df itself. lock_ids add hard in-solve lock rows (fill path
+    only -- the plain optimal path stays pure legality, exactly like the
+    measurement path).
+    """
+    built = _rates_build_state(objective_df if objective_df is not None
+                               else worlds_df, df, salary_cap=salary_cap,
+                               lock_ids=lock_ids)
+    if built is None:
+        return None, []
+    d, _names, state = built
+    true_wmat = worlds_df.to_numpy(float)[:, state["keep"]]
+    idx_list = [int(w) for w in world_indices]
+    hits = _solve_world_hits(state, idx_list, progress_cb=progress_cb,
+                             workers=workers)
+    out = []
+    for k, wi in enumerate(idx_list):
+        h = hits[k]
+        if not h.any():
+            continue
+        out.append((wi, frozenset(np.where(h)[0].tolist()),
+                    float(true_wmat[wi][h].sum())))
+    return d, out
+
+def _assign_slots(d, players):
+    """Assign a legal 9-player set to ROSTER_SLOTS for display. Within a
+    position group, higher-projection players take the named slots and the
+    overflow player takes FLEX (the solver's set already satisfies the
+    slot counts exactly). Returns [(slot, d-position), ...]."""
+    proj = pd.to_numeric(d["My Proj"], errors="coerce").fillna(0.0)
+    by_pos = {"QB": [], "RB": [], "WR": [], "TE": [], "DST": []}
+    for i in players:
+        p = str(d.loc[i, "Position"]).upper()
+        if p in by_pos:
+            by_pos[p].append(i)
+    for p in by_pos:
+        by_pos[p].sort(key=lambda i: -float(proj.loc[i]))
+    chosen = []
+    if by_pos["QB"]:
+        chosen.append(("QB", by_pos["QB"][0]))
+    for sl, i in zip(["RB1", "RB2"], by_pos["RB"][:2]):
+        chosen.append((sl, i))
+    for sl, i in zip(["WR1", "WR2", "WR3"], by_pos["WR"][:3]):
+        chosen.append((sl, i))
+    if by_pos["TE"]:
+        chosen.append(("TE", by_pos["TE"][0]))
+    flex = by_pos["RB"][2:] + by_pos["WR"][3:] + by_pos["TE"][1:]
+    if flex:
+        chosen.append(("FLEX", flex[0]))
+    if by_pos["DST"]:
+        chosen.append(("DST", by_pos["DST"][0]))
+    return chosen
+
+
+def generate_lineups_sim_first(df, count=20, n_worlds=500, seed=42,
+                               strategy_map=None, salary_cap=50000,
+                               min_salary=0, sim_result=None, workers=1,
+                               progress_cb=None):
+    """Sim-first construction (spec section 3) -- OPT-IN alternative to
+    generate_lineups, which remains the default and is untouched.
+
+    Worlds author the lineups: stat-level worlds are generated (or a
+    precomputed topdown_simulate_slate result is reused), each sampled
+    world's highest-scoring legal lineup is solved with the per-world
+    MILP (pure legality, exactly the optimal_lineup_rates problem), and
+    the portfolio is assembled from the distinct world-optimal lineups by
+    world frequency. The user's rules layer (strategy_map) binds at
+    assembly, per spec: excludes are removed before solving, locks and
+    min/max exposure are hard constraints on selection, and any promised
+    setting the assembly could not honor is reported in
+    result.attrs["sim_first_notes"] rather than silently relaxed. When
+    distinct candidates run out, the fill comes from near-optimal world
+    lineups (per-world solves under a perturbed objective, with locks as
+    hard in-solve constraints) -- never from projection-sorted MILP runs.
+
+    Generation reuses topdown_simulate_slate, whose 1,000-world floor
+    applies; n_worlds is the number of worlds actually SOLVED (the Lab's
+    Optimal % sampling pattern). Returns a DataFrame in the
+    generate_lineups shape (slot columns + details + ratings) plus
+    "World Freq %" and "Construction" columns.
+    """
+    strategy_map = strategy_map or {}
+    notes = []
+    if df is None or df.empty or count <= 0:
+        return pd.DataFrame()
+
+    def _strat(pid):
+        return strategy_map.get(str(pid), {})
+
+    excluded_ids = {str(pid) for pid, s in strategy_map.items()
+                    if bool(s.get("Exclude", False)) or s.get("Priority") == "Exclude"}
+    lock_ids = {str(pid) for pid, s in strategy_map.items()
+                if bool(s.get("Lock", False)) and str(pid) not in excluded_ids}
+
+    dmod = df.copy()
+    if excluded_ids and "ActiveForBuild" in dmod.columns and "ID" in dmod.columns:
+        dmod.loc[dmod["ID"].astype(str).isin(excluded_ids), "ActiveForBuild"] = False
+
+    if sim_result is None:
+        sim_result = topdown_simulate_slate(dmod, sims=max(1000, n_worlds),
+                                            seed=seed)
+    worlds = sim_result["worlds"]
+    if worlds is None or worlds.empty:
+        return pd.DataFrame()
+    W = worlds.shape[0]
+    rng = np.random.default_rng(int(seed))
+    solve_idx = rng.choice(W, size=min(int(n_worlds), W), replace=False)
+    solve_idx = [int(w) for w in solve_idx]
+
+    d, results = _world_optimal_lineups(worlds, dmod, solve_idx,
+                                         salary_cap=salary_cap,
+                                         workers=workers,
+                                         progress_cb=progress_cb)
+    if d is None or not results:
+        return pd.DataFrame()
+
+    from collections import Counter
+    cand = {}
+    for _wi, pset, pts in results:
+        c = cand.setdefault(pset, {"n": 0, "pts": 0.0})
+        c["n"] += 1
+        c["pts"] += pts
+    n_solved = len(solve_idx)
+    salaries = pd.to_numeric(d["Salary"], errors="coerce").fillna(0).to_numpy(float)
+    id_of = d["ID"].astype(str).tolist() if "ID" in d.columns else [""] * len(d)
+
+    # ---- rules layer, as assembly constraints ----
+    lock_pos = {i for i in range(len(d)) if id_of[i] in lock_ids}
+    missing_locks = lock_ids - {id_of[i] for i in lock_pos}
+    if missing_locks:
+        notes.append("Locks not in the active pool (excluded or inactive): "
+                     + ", ".join(sorted(missing_locks)))
+    max_count, min_need = {}, {}
+    for i in range(len(d)):
+        s = _strat(id_of[i])
+        mx = float(s.get("Max Exposure", 100) or 100)
+        mn = float(s.get("Min Exposure", 0) or 0)
+        if mx < 100:
+            max_count[i] = int(math.floor(mx / 100.0 * count))
+        if mn > 0:
+            min_need[i] = int(math.ceil(mn / 100.0 * count))
+
+    def _salary(pset):
+        return float(sum(salaries[i] for i in pset))
+
+    def _eligible(pset):
+        if lock_pos and not lock_pos.issubset(pset):
+            return False
+        if min_salary and _salary(pset) < float(min_salary):
+            return False
+        return True
+
+    ordered = sorted(cand.items(),
+                     key=lambda kv: (-kv[1]["n"], -kv[1]["pts"] / max(kv[1]["n"], 1)))
+    selected = []          # list of (pset, freq_pct, construction)
+    exposure = Counter()
+    selected_keys = set()
+
+    def _try_add(pset, freq_pct, construction):
+        if pset in selected_keys or len(selected) >= count:
+            return False
+        for i in pset:
+            if i in max_count and exposure[i] + 1 > max_count[i]:
+                return False
+        selected.append((pset, freq_pct, construction))
+        selected_keys.add(pset)
+        exposure.update(pset)
+        return True
+
+    for pset, c in ordered:
+        if len(selected) >= count:
+            break
+        if _eligible(pset):
+            _try_add(pset, round(100.0 * c["n"] / n_solved, 2), "Sim-first (worlds)")
+
+    # Min-exposure repair: swap in unselected candidates carrying the
+    # deficient player, evicting the lowest-frequency selected lineup whose
+    # removal breaks no lock, no other minimum, and no cap.
+    for i, need in sorted(min_need.items()):
+        guard = 0
+        while exposure[i] < need and guard < 50:
+            guard += 1
+            donor, donor_freq = None, 0.0
+            for pset, c in ordered:
+                if pset in selected_keys or i not in pset or not _eligible(pset):
+                    continue
+                if all(exposure[j] + 1 <= max_count.get(j, count) for j in pset):
+                    donor = pset
+                    donor_freq = round(100.0 * c["n"] / n_solved, 2)
+                    break
+            if donor is None:
+                break
+            evict_at = None
+            for k in range(len(selected) - 1, -1, -1):
+                pset_k, _f, _c = selected[k]
+                if i in pset_k:
+                    continue
+                if lock_pos and not lock_pos.issubset(pset_k):
+                    continue
+                if any(j in min_need and j not in donor and exposure[j] - 1 < min_need[j]
+                       for j in pset_k):
+                    continue
+                evict_at = k
+                break
+            if evict_at is None:
+                break
+            old = selected.pop(evict_at)
+            selected_keys.discard(old[0])
+            exposure.subtract(old[0])
+            _try_add(donor, donor_freq, "Sim-first (worlds)")
+        if exposure[i] < need:
+            notes.append(f"Min exposure unmet for {d.loc[i, 'Name']}: "
+                         f"{exposure[i]}/{need} lineups")
+
+    # Fill: near-optimal world lineups via objective perturbation (locks
+    # become hard in-solve constraints here so the fill can always honor
+    # them), deduped against everything already selected or seen.
+    if len(selected) < count:
+        base_wmat = worlds.to_numpy(float)
+        seen_fill = set(selected_keys)
+        for rnd in range(1, 6):
+            if len(selected) >= count:
+                break
+            mult = np.exp(rng.normal(0, 0.06 * rnd, size=base_wmat.shape))
+            pert = pd.DataFrame(base_wmat * mult, columns=worlds.columns)
+            _d2, res2 = _world_optimal_lineups(
+                worlds, dmod, solve_idx, salary_cap=salary_cap, workers=1,
+                lock_ids=sorted(lock_ids), objective_df=pert)
+            fresh = {}
+            for _wi, pset, pts in res2:
+                if pset not in seen_fill and _eligible(pset):
+                    fresh[pset] = max(fresh.get(pset, -1.0), pts)
+            for pset, _pts in sorted(fresh.items(), key=lambda kv: -kv[1]):
+                if len(selected) >= count:
+                    break
+                if _try_add(pset, 0.0, "Sim-first (near-optimal fill)"):
+                    seen_fill.add(pset)
+    if len(selected) < count:
+        notes.append(f"Only {len(selected)} of {count} requested lineups "
+                     "could be assembled from world-optimal candidates")
+
+    rows = []
+    for pset, freq_pct, construction in selected:
+        chosen = _assign_slots(d, sorted(pset))
+        if len(chosen) != 9:
+            continue
+        detail = lineup_details(d, chosen, strategy_map, [], None)
+        coherence = classic_lineup_coherence(d, chosen)
+        row = dict(detail)
+        row.update({"Coherence Score": coherence["Coherence Score"],
+                    "Lineup Story": coherence["Lineup Story"],
+                    "Coherence Flags": coherence["Coherence Flags"],
+                    "World Freq %": freq_pct,
+                    "Construction": construction})
+        for slot, i in chosen:
+            row[slot] = d.loc[i, "Name"]
+            row[slot + "_ID"] = str(d.loc[i, "ID"])
+        rows.append(row)
+
+    out = pd.DataFrame(rows)
+    if out.empty:
+        return out
+    out = add_ratings(out, contest_aggression(5000, "GPP / top-heavy"))
+    out = out.sort_values(["World Freq %", "Projection"],
+                          ascending=[False, False]).reset_index(drop=True)
+    out.insert(0, "Rank", np.arange(1, len(out) + 1))
+    out.attrs["sim_first_notes"] = notes
+    return out
+
+
+def build_lineups(df, construction="optimizer", **kwargs):
+    """Construction dispatcher. construction="optimizer" (the default)
+    routes to generate_lineups with its behavior unchanged;
+    construction="sim_first" routes to generate_lineups_sim_first.
+    kwargs are forwarded to the chosen builder."""
+    if construction == "sim_first":
+        return generate_lineups_sim_first(df, **kwargs)
+    return generate_lineups(df, **kwargs)
+
+
+def story_conditional_report(sim_result, df, story, n_sample=500, seed=7,
+                             workers=1, progress_cb=None):
+    """Story-conditional Optimal % (sim-first spec section 4) -- advisory
+    reporting only. Nothing here touches construction; a story engages
+    only when the user picks one, and picking one changes nothing unless
+    the user acts on the report.
+
+    `story` is a dict:
+      name:              display name (echoed back)
+      cores:             player names to report (default: top movers)
+      game:              (away, home) team abbreviations, optional
+      min_game_total:    predicate -- the game's simulated REAL total
+                         (both teams' points) is at least this
+      player_conditions: {name: {"stat": "attempts"|"targets"|"carries",
+                                 "min": value}} -- per-player predicates
+                         over the stat-level world detail
+
+    Returns {"story", "scenario_probability" (share of worlds matching,
+    or None when the sim carries no stat detail), "n_worlds",
+    "n_matching", "players": DataFrame(Name, "Optimal % (story)",
+    "Optimal % (all)"), "note"}.
+    """
+    name = str(story.get("name", "Story"))
+    worlds = sim_result.get("worlds") if isinstance(sim_result, dict) else None
+    detail = sim_result.get("detail", {}) if isinstance(sim_result, dict) else {}
+    if worlds is None or worlds.empty or df is None or df.empty:
+        return {"story": name, "scenario_probability": None, "n_worlds": 0,
+                "n_matching": 0, "players": pd.DataFrame(), "note": "No worlds."}
+    W = worlds.shape[0]
+    mask = np.ones(W, dtype=bool)
+    note = ""
+    if not detail.get("stat_level"):
+        return {"story": name, "scenario_probability": None, "n_worlds": W,
+                "n_matching": 0, "players": pd.DataFrame(),
+                "note": "Story predicates need stat-level worlds; this sim "
+                        "used the legacy dealing model (no role layer)."}
+    game = story.get("game")
+    min_total = story.get("min_game_total")
+    if game and min_total is not None:
+        tp = detail["team_pts"]
+        a, h = str(game[0]).upper(), str(game[1]).upper()
+        if a in tp.columns and h in tp.columns:
+            mask &= (tp[a].to_numpy() + tp[h].to_numpy()) >= float(min_total)
+        else:
+            note = f"Game {a}@{h} not in the simulated slate."
+    full = df.reset_index(drop=True)
+    name_to_pos = {str(nm): k for k, nm in enumerate(full["Name"].astype(str))}
+    for pname, cond in (story.get("player_conditions") or {}).items():
+        stat = str(cond.get("stat", "attempts"))
+        mat = detail.get(stat)
+        k = name_to_pos.get(str(pname))
+        if mat is None or k is None:
+            note = (note + f" Condition on {pname} skipped (no {stat} detail).").strip()
+            continue
+        mask &= mat.to_numpy()[:, k] >= float(cond.get("min", 0))
+    n_match = int(mask.sum())
+
+    overall = optimal_lineup_rates(worlds, df, n_sample=n_sample, seed=seed,
+                                   workers=workers, progress_cb=progress_cb)
+    cols = ["Name", "Optimal % (story)", "Optimal % (all)"]
+    if n_match == 0:
+        return {"story": name, "scenario_probability": 0.0, "n_worlds": W,
+                "n_matching": 0,
+                "players": pd.DataFrame(columns=cols),
+                "note": (note + " No worlds match this story.").strip()}
+    cond = optimal_lineup_rates(worlds, df, n_sample=n_sample, seed=seed,
+                                workers=workers, world_mask=mask)
+    m = cond.rename(columns={"Optimal %": "Optimal % (story)"}).merge(
+        overall.rename(columns={"Optimal %": "Optimal % (all)"}),
+        on="Name", how="left")
+    cores = story.get("cores")
+    if cores:
+        m = m[m["Name"].isin([str(c) for c in cores])]
+    else:
+        m["lift"] = m["Optimal % (story)"] - m["Optimal % (all)"]
+        m = m.sort_values("lift", ascending=False).head(15).drop(columns=["lift"])
+    return {"story": name,
+            "scenario_probability": round(n_match / W, 4),
+            "n_worlds": W, "n_matching": n_match,
+            "players": m.reset_index(drop=True), "note": note}
+
 
 def lineup_sim_equity(lineups, worlds_df, names):
     """Per-lineup tournament equity from top-down worlds.
