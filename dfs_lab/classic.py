@@ -1039,14 +1039,60 @@ def _team_fantasy_calibration(season):
 #
 # Tuning constants (calibration-gate knobs per spec section 5; the Oct 2026
 # gate run used exactly these spec defaults):
-#   DIRICHLET_KAPPA   share concentration per game (spec: ~25)
-#   TD_DISPERSION_PHI negative-binomial variance multiplier for TD draws
-#                     (variance = phi * mean; spec: ~1.3)
-#   yards CVs         per-play efficiency spread (lognormal multipliers)
+#   TD_DISPERSION_PHI negative-binomial variance multiplier for TD claim
+#                     draws (variance = phi * mean; spec: ~1.3)
+#
+# FIX ROUND (Oct 2026): the constants below were re-derived from the gate
+# diagnosis and measured on the 2023 season ONLY (play-by-play + weekly
+# stats + schedules; 2023 is in no gate/scorecard evaluation set). Full
+# derivations: hidden_work/fixround_measure_2023.py and
+# hidden_work/sim_fix_round_report.md.
+#   SHARE_CONCENTRATION  Dirichlet TOTAL concentration A per channel
+#                     (alpha_i = share_i * A). Method of moments on 2023
+#                     team-games, expected shares taken from each
+#                     player's TRAILING-4-GAME share -- the same kind of
+#                     current-role expectation the sim conditions on
+#                     (season-mean shares would also charge role drift
+#                     to game noise: A=40.0/6.7 measured that way).
+#                     Trailing: targets R=1.56 -> A=54.9 (winsorized
+#                     cross-check 64.3); carries R=3.06 -> A=12.1
+#                     (winsorized 13.6). The spec's original form
+#                     (alpha_i = exp_opps_i * 25) implied A ~= 800 --
+#                     shares were effectively frozen, a primary cause of
+#                     the too-narrow worlds.
+#   PLAY_CV           per-play yardage CVs (2023 PBP): per-catch 0.927,
+#                     per-carry 1.420, per-attempt (incompletions = 0)
+#                     1.657. A game line's yardage CV is CV/sqrt(plays)
+#                     (Fenton-Wilkinson compounding), replacing the old
+#                     flat per-line multipliers.
+#   PASS_EFF_CV       between-game team passing-efficiency CV: 0.175
+#                     (2023 team-game yds/att variance minus per-play
+#                     sampling variance). The rushing equivalent
+#                     measured 0.009 ~= 0, so rushing gets NO team
+#                     efficiency shock -- its variance is per-play.
+#   PASS_EFF_SCORE_RHO  correlation of the passing-efficiency shock
+#                     with the world's team-score surprise: 2023
+#                     team-game log(yds/att) correlates 0.64 with the
+#                     team's score (raw). rho = 0.60 is the conservative
+#                     read. Without this coupling the sim drew hot
+#                     passing games with cold scores (and vice versa),
+#                     which is exactly backwards for QB-WR correlation.
+#   TD_TOTAL_*        team offensive TDs given the world's drawn team
+#                     score: E[T] = -0.49 + 0.1259 * score, conditional
+#                     sd 0.63 (2023 OLS of team-game off TDs on score;
+#                     mean T 2.25 at mean score 21.8). Replaces the old
+#                     round(score/6.9) hard cap, whose one-sided binomial
+#                     thinning silently deleted ~0.37 TDs per team-game.
 # ---------------------------------------------------------------------------
-DIRICHLET_KAPPA = 25.0
 TD_DISPERSION_PHI = 1.3
-_YDS_CV = {"pass": 0.30, "recv": 0.45, "rush": 0.50}
+SHARE_CONCENTRATION = {"tgt": 54.9, "car": 12.1}
+PLAY_CV = {"catch": 0.927, "carry": 1.420, "att": 1.657}
+PASS_EFF_CV = 0.175
+PASS_EFF_SCORE_RHO = 0.60
+_TEAM_SCORE_SD = 10.0  # mirrors SCORE_SD in topdown_simulate_slate
+TD_TOTAL_INTERCEPT = -0.49
+TD_TOTAL_SLOPE = 0.1259
+TD_TOTAL_SD = 0.63
 # League-average rates used only where the stat feed has no player history
 # at all (the engine's shrunk columns already carry positional priors for
 # every pooled player, so these are last-resort constants).
@@ -1131,6 +1177,57 @@ def _dirichlet_multinomial(rng, totals, alpha):
     return out
 
 
+def _multinomial_capped(rng, totals, weights, caps):
+    """Allocate integer `totals` (S,) across k claimants per world by fixed
+    claim weights (S, k), never exceeding per-claimant caps (S, k).
+
+    Exact multinomial draws (sequential conditional binomials, the same
+    scheme as _dirichlet_multinomial but with fixed probabilities).
+    Claimants who hit their cap leave the pool and the remainder is
+    re-allocated among the rest; any residue that cannot fit under the
+    caps is dropped (for TD channels the caps are receptions/carries,
+    whose team sums dwarf any plausible total, so this is a formality).
+    Returns (S, k) int64 summing per-row to totals minus dropped residue.
+    """
+    totals = np.asarray(totals, dtype=np.int64)
+    weights = np.asarray(weights, dtype=float)
+    caps = np.asarray(caps, dtype=np.int64)
+    S, k = weights.shape
+    out = np.zeros((S, k), dtype=np.int64)
+    if k == 0 or S == 0:
+        return out
+    remaining = totals.copy()
+    w = weights.copy()
+    for _ in range(k + 1):
+        live_rows = remaining > 0
+        if not live_rows.any():
+            break
+        w_eff = np.where((w > 0) & (out < caps), w, 0.0)
+        wsum = w_eff.sum(axis=1)
+        live_rows &= wsum > 0
+        if not live_rows.any():
+            break
+        idx = np.where(live_rows)[0]
+        p = w_eff[idx] / wsum[idx][:, None]
+        rem = remaining[idx].copy()
+        draw = np.zeros((len(idx), k), dtype=np.int64)
+        rem_p = p.sum(axis=1)
+        for j in range(k - 1):
+            pj = np.divide(p[:, j], rem_p, out=np.zeros(len(idx)),
+                           where=rem_p > 1e-12)
+            dj = rng.binomial(rem, np.clip(pj, 0.0, 1.0))
+            draw[:, j] = dj
+            rem = rem - dj
+            rem_p = rem_p - p[:, j]
+        draw[:, k - 1] = rem
+        add = np.minimum(draw, np.maximum(caps[idx] - out[idx], 0))
+        out[idx] += add
+        remaining[idx] -= add.sum(axis=1)
+        capped = out >= caps
+        w = np.where(capped, 0.0, w)
+    return out
+
+
 def _nb_draws(rng, lam, phi=TD_DISPERSION_PHI):
     """Negative-binomial draws with mean lam and variance phi * lam
     (Gamma-Poisson mixture). phi = 1 would be Poisson."""
@@ -1193,9 +1290,10 @@ def _simulate_stat_worlds(d, sims, rng, team_pts, team_list, tix, games,
 
     Draws team channel volumes conditioned on the world's game script,
     allocates them by Dirichlet-multinomial shares from the engine's role
-    layer, draws stat lines from the engine's shrunk stat rates, caps team
-    TD events at the total implied by the world's team score, and scores
-    every player with the canonical DK formula. DST rows keep the legacy
+    layer, draws stat lines from the engine's shrunk stat rates, draws the
+    team's offensive TD total from the world's team score and allocates it
+    across players by their TD claims, and scores every player with the
+    canonical DK formula. DST rows keep the legacy
     points-allowed bracket model; kickers and no-role dust keep a
     projection-anchored lognormal (the stat feed carries neither kicking
     data nor a role for them).
@@ -1218,15 +1316,17 @@ def _simulate_stat_worlds(d, sims, rng, team_pts, team_list, tix, games,
     catch = np.clip(_col("Catch Rate", 0.65), 0.05, 0.95)
     td_tgt_r = np.clip(_col("TD Rate Tgt", 0.045), 0.0, 0.35)
     td_car_r = np.clip(_col("TD Rate Car", 0.028), 0.0, 0.35)
+    td_att_r = np.clip(_col("TD Rate Att", 0.045), 0.0, 0.12)
     ypt = np.clip(_col("Yds Per Tgt", 7.5), 0.0, 15.0)
     ypc = np.clip(_col("Yds Per Car", 4.3), 0.0, 9.0)
     ypa = np.clip(_col("Yds Per Att", 6.9), 0.0, 12.0)
     # Fallback-path players (no current-season role) get wider share
-    # uncertainty (spec 1.2). "Current Games" rides the engine frame; when
-    # a pool does not carry it, nobody is treated as fallback.
+    # uncertainty (spec 1.2): their Dirichlet alpha is halved. "Current
+    # Games" rides the engine frame; when a pool does not carry it,
+    # nobody is treated as fallback.
     cur_games = _col("Current Games", 1.0)
-    kappa = np.where((cur_games <= 0) & ((exp_tgt + exp_car + exp_att) > 0),
-                     DIRICHLET_KAPPA * 0.5, DIRICHLET_KAPPA)
+    fb_factor = np.where((cur_games <= 0) & ((exp_tgt + exp_car + exp_att) > 0),
+                         0.5, 1.0)
 
     # Allocation weights: only players the availability layer expects to
     # dress claim opportunities. Inactive rows keep their projection (the
@@ -1249,6 +1349,7 @@ def _simulate_stat_worlds(d, sims, rng, team_pts, team_list, tix, games,
     car_m = np.zeros((sims, n), dtype=np.int64)
     att_m = np.zeros((sims, n), dtype=np.int64)
     team_rows = {t: np.where(teams == t)[0] for t in team_list}
+    cov_tgt_of = {}
     starter_of = {}
     for t in team_list:
         rows = team_rows[t]
@@ -1279,17 +1380,22 @@ def _simulate_stat_worlds(d, sims, rng, team_pts, team_list, tix, games,
         # pool players (the legacy model's coverage idea, per channel).
         cov_tgt = min(1.0, float(w_tgt[rows].sum()) / tgt_mu) if tgt_mu > 0 else 0.0
         cov_car = min(1.0, float(w_car[rows].sum()) / car_mu) if car_mu > 0 else 0.0
+        cov_tgt_of[t] = cov_tgt
         tgt_tot = np.clip(np.round(tgt_w * cov_tgt), 0, None).astype(np.int64)
         car_tot = np.clip(np.round(car_w * cov_car), 0, None).astype(np.int64)
 
         ti = rows[w_tgt[rows] > 0.05]
         if len(ti):
+            sh = w_tgt[ti] / max(float(w_tgt[ti].sum()), 1e-9)
             tgt_m[:, ti] = _dirichlet_multinomial(
-                rng, tgt_tot, np.clip(w_tgt[ti], 0.02, None) * kappa[ti])
+                rng, tgt_tot, np.clip(sh, 1e-4, None)
+                * SHARE_CONCENTRATION["tgt"] * fb_factor[ti])
         ci = rows[w_car[rows] > 0.05]
         if len(ci):
+            sh = w_car[ci] / max(float(w_car[ci].sum()), 1e-9)
             car_m[:, ci] = _dirichlet_multinomial(
-                rng, car_tot, np.clip(w_car[ci], 0.02, None) * kappa[ci])
+                rng, car_tot, np.clip(sh, 1e-4, None)
+                * SHARE_CONCENTRATION["car"] * fb_factor[ci])
         qi = rows[(pos[rows] == "QB") & _act[rows]]
         if len(qi):
             st = qi[int(np.argmax(exp_att[qi]))]
@@ -1299,37 +1405,114 @@ def _simulate_stat_worlds(d, sims, rng, team_pts, team_list, tix, games,
                 att_m[:, st] = np.round(att_w * share).astype(np.int64)
 
     # ---- stat lines from world opportunities ----
-    rec_m = rng.binomial(tgt_m, catch[None, :])
-    rec_yds = np.where(tgt_m > 0,
-                       tgt_m * ypt[None, :] * _lognormal_mult(rng, _YDS_CV["recv"], (sims, n)), 0.0)
-    rush_yds = np.where(car_m > 0,
-                        car_m * ypc[None, :] * _lognormal_mult(rng, _YDS_CV["rush"], (sims, n)), 0.0)
-    pass_yds = np.where(att_m > 0,
-                        att_m * ypa[None, :] * _lognormal_mult(rng, _YDS_CV["pass"], (sims, n)), 0.0)
-    rush_td = np.minimum(_nb_draws(rng, car_m * td_car_r[None, :]), car_m)
-    rec_td = np.minimum(_nb_draws(rng, tgt_m * td_tgt_r[None, :]), rec_m)
+    # Team passing-efficiency shock for the world (the measured
+    # between-game component, 2023): one draw per team, shared by the QB
+    # and every receiver, so a hot passing game lifts the whole corps
+    # together -- and CORRELATED with the world's team-score surprise
+    # (measured rho ~0.64), because efficient passing games are how
+    # teams post big scores; an independent shock would pair hot
+    # passing with cold scores as often as not. The marginal stays a
+    # mean-1 lognormal with CV PASS_EFF_CV. (The rushing efficiency
+    # equivalent measured ~0.009 ~= 0 -- rushing gets no team shock;
+    # its variance is per-play.)
+    _off_r, _def_r, _lg_r = _nflverse_team_ratings(season)
+    _mean_of = {}
+    for (a, h) in games:
+        _ea, _eh = _anchored_team_means(a, h, season, _off_r, _def_r, _lg_r)
+        _mean_of[a] = _ea
+        _mean_of[h] = _eh
+    _tmean = np.array([_mean_of.get(t, lg) for t in team_list])
+    _z_score = (team_pts - _tmean[None, :]) / _TEAM_SCORE_SD
+    _sig_eff = np.sqrt(np.log1p(PASS_EFF_CV ** 2))
+    _eff_z = (PASS_EFF_SCORE_RHO * _z_score
+              + np.sqrt(1.0 - PASS_EFF_SCORE_RHO ** 2)
+              * rng.standard_normal((sims, len(team_list))))
+    team_col = np.array([tix[t] for t in teams])
+    pass_eff = np.exp(_sig_eff * _eff_z
+                      - 0.5 * _sig_eff ** 2)[:, team_col]
 
-    # Team TD cap: player TD events cannot outnumber the touchdowns the
-    # world's team score implies (spec 1.3). Thin proportionally per team.
-    keep = np.ones((sims, n))
+    # Yardage compounds per play: a line of k plays has yardage CV =
+    # per-play CV / sqrt(k) around k x the per-play mean
+    # (Fenton-Wilkinson moment matching). Receiving yards ride the
+    # REALIZED reception count, so catch variance flows into yardage --
+    # in the original build it did not (yards were drawn off targets).
+    rec_m = rng.binomial(tgt_m, catch[None, :])
+    yds_per_catch = np.clip(ypt / np.maximum(catch, 0.05), 0.0, 25.0)
+    rec_yds = np.where(rec_m > 0,
+                       rec_m * yds_per_catch[None, :]
+                       * _lognormal_mult(rng, PLAY_CV["catch"] / np.sqrt(np.maximum(rec_m, 1)), (sims, n))
+                       * pass_eff, 0.0)
+    rush_yds = np.where(car_m > 0,
+                        car_m * ypc[None, :]
+                        * _lognormal_mult(rng, PLAY_CV["carry"] / np.sqrt(np.maximum(car_m, 1)), (sims, n)), 0.0)
+    pass_yds = np.where(att_m > 0,
+                        att_m * ypa[None, :]
+                        * _lognormal_mult(rng, PLAY_CV["att"] / np.sqrt(np.maximum(att_m, 1)), (sims, n))
+                        * pass_eff, 0.0)
+    # The QB's passing yards ARE his receivers' receiving yards -- the
+    # same money, not a second draw. Deriving them from the realized
+    # corps total (grossed up by target coverage for the non-pool
+    # share) removes an independent QB-side yardage noise (per-attempt
+    # CV / sqrt(att) ~ 0.29) that was diluting every QB-WR correlation:
+    # in reality a QB's 300-yard game and his WR2's 90-yard game are
+    # the same event, and now they are in the sim too.
+    for t, st in starter_of.items():
+        rows = team_rows[t]
+        cov = min(1.0, max(0.5, cov_tgt_of.get(t, 1.0)))
+        pass_yds[:, st] = rec_yds[:, rows].sum(axis=1) / cov
+
+    # ---- touchdowns: draw the team's total, then split it by claims ----
+    # Claims are per-world TD propensities (opportunities x the engine's
+    # shrunk rates, times a mean-1 gamma jitter with the TD dispersion
+    # phi -- the who-scores noise). They set the SPLIT, never the total,
+    # and being continuous they never gate delivery the way realized
+    # count draws would (a world where only one receiver drew a claim
+    # count would strand the rest of the total under its caps). The QB's
+    # passing claim comes from HIS OWN TD Rate Att x his world attempts
+    # -- not from the receiving corps' rates -- and the team's offensive
+    # TD total T is drawn from the world's team score (2023 regression
+    # constants above), then ALLOCATED across channels and players by
+    # claim strength. This replaces the original hard cap
+    # (round(score/6.9) with proportional binomial thinning), which only
+    # ever cut: it silently deleted ~0.37 TDs per team-game (measured on
+    # dev weeks), ~1.5 points per QB, because the cap's left tail
+    # truncated draws in low-score worlds while high-score worlds could
+    # not give back.
+    _jit_shape = 1.0 / (TD_DISPERSION_PHI - 1.0)
+    _jit_scale = TD_DISPERSION_PHI - 1.0
+    w_rec_all = (tgt_m * td_tgt_r[None, :]
+                 * rng.gamma(_jit_shape, _jit_scale, size=(sims, n)))
+    w_rush_all = (car_m * td_car_r[None, :]
+                  * rng.gamma(_jit_shape, _jit_scale, size=(sims, n)))
+    rush_td = np.zeros((sims, n), dtype=np.int64)
+    rec_td = np.zeros((sims, n), dtype=np.int64)
+    pass_td = np.zeros((sims, n), dtype=np.int64)
     for t in team_list:
         rows = team_rows[t]
         if len(rows) == 0:
             continue
-        events = rush_td[:, rows].sum(axis=1) + rec_td[:, rows].sum(axis=1)
-        cap = np.maximum(np.round(team_pts[:, tix[t]] / 6.9), 0)
-        over = events > cap
-        if over.any():
-            pv = np.where(events > 0, cap / np.maximum(events, 1), 1.0)
-            keep[:, rows] = np.where(over, pv, 1.0)[:, None]
-    rush_td = rng.binomial(rush_td, keep)
-    rec_td = rng.binomial(rec_td, keep)
-    # A passing TD is the same event as a receiving TD: the starter QB is
-    # credited with the team's surviving receiving-TD total (spec 1.3).
-    pass_td = np.zeros((sims, n), dtype=np.int64)
-    for t, st in starter_of.items():
-        rows = team_rows[t]
-        pass_td[:, st] = rec_td[:, rows].sum(axis=1)
+        mu_t = np.clip(TD_TOTAL_INTERCEPT
+                       + TD_TOTAL_SLOPE * team_pts[:, tix[t]], 0.0, None)
+        t_tot = np.clip(np.round(mu_t + TD_TOTAL_SD
+                                 * rng.standard_normal(sims)),
+                        0, None).astype(np.int64)
+        st = starter_of.get(t)
+        if st is not None:
+            w_pass = att_m[:, st] * td_att_r[st]
+        else:
+            w_pass = w_rec_all[:, rows].sum(axis=1)
+        w_rush = w_rush_all[:, rows].sum(axis=1)
+        w_tot = w_pass + w_rush
+        frac = np.where(w_tot > 0, w_pass / np.maximum(w_tot, 1e-9), 0.0)
+        t_pass = rng.binomial(t_tot, frac)
+        rec_td[:, rows] = _multinomial_capped(
+            rng, t_pass, w_rec_all[:, rows], rec_m[:, rows])
+        rush_td[:, rows] = _multinomial_capped(
+            rng, t_tot - t_pass, w_rush_all[:, rows], car_m[:, rows])
+        if st is not None:
+            # A passing TD is the same event as a receiving TD: the
+            # starter is credited with the delivered receiving total.
+            pass_td[:, st] = rec_td[:, rows].sum(axis=1)
 
     qb_rows = np.zeros(n, dtype=bool)
     for st in starter_of.values():
