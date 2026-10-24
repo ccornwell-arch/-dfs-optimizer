@@ -929,7 +929,8 @@ def generate_showdown_lineups(df, field_size, payout_style, count, attempts, min
                               entry_format,
                               cpt_qb_passcatchers, wrte_cpt_qb_pair_pct, rb_cpt_dst_k_pct,
                               max_k, max_dst, min_unique, seed, relationship_rules=None, world_influence=50,
-                              show_progress=True, world_max_share=None, qb_exact=None):
+                              show_progress=True, world_max_share=None, qb_exact=None,
+                              progress_cb=None):
     """Generate a Showdown portfolio without wasting attempts on one randomly chosen build shape.
 
     V6.5 reliability change: every attempt now tries every user-allowed team construction
@@ -1055,6 +1056,11 @@ def generate_showdown_lineups(df, field_size, payout_style, count, attempts, min
             row[slot]=df.loc[i,"Name"]; row[slot+"_ID"]=str(df.loc[i,"ID"])
             row[slot+"_NameID"] = df.loc[i,"CPT_NameID"] if slot=="CPT" else df.loc[i,"FLEX_NameID"]
         rows.append(row); previous.append([i for _,i in chosen])
+        if progress_cb is not None:
+            # Per-accepted-lineup progress for background-job callers
+            # (the web API): (rows built, rows requested). Default
+            # None = historical behavior, byte-identical output.
+            progress_cb(len(rows), count)
         last_built_attempt=attempt
         for slot,i in chosen:
             pid=str(df.loc[i,"ID"]); exposure[pid]+=1

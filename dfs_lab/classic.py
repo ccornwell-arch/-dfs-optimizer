@@ -668,7 +668,12 @@ def generate_lineups(
     strategy_map, team_strategy_map, no_dst_from_qb_game, no_offense_vs_dst, seed,
     max_players_team=9, max_players_game=9, max_te=3, allow_qb_with_rb=True,
     allowed_qb_ids=None, flex_mix=None, bringback_worthy=None,
+    progress_cb=None,
 ):
+    # progress_cb(done, total): optional per-lineup progress hook for
+    # callers running the build as a background job (the web API).
+    # Called once per accepted lineup with (len(rows), count). Default
+    # None = the historical behavior, byte-identical output.
     aggr = contest_aggression(field_size, payout_style)
     rng = np.random.default_rng(seed)
     seen = set()
@@ -758,6 +763,8 @@ def generate_lineups(
             row[slot] = df.loc[i, "Name"]
             row[slot + "_ID"] = str(df.loc[i, "ID"])
         rows.append(row)
+        if progress_cb is not None:
+            progress_cb(len(rows), count)
 
         for _, i in chosen:
             exposure_counts[str(df.loc[i, "ID"])] += 1
