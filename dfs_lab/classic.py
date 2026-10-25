@@ -2043,9 +2043,16 @@ def _assign_slots(d, players):
 def generate_lineups_sim_first(df, count=20, n_worlds=500, seed=42,
                                strategy_map=None, salary_cap=50000,
                                min_salary=0, sim_result=None, workers=1,
-                               progress_cb=None):
-    """Sim-first construction (spec section 3) -- OPT-IN alternative to
-    generate_lineups, which remains the default and is untouched.
+                               progress_cb=None, field_size=5000,
+                               payout_style="GPP / top-heavy"):
+    """Sim-first construction (spec section 3) -- the DEFAULT Classic
+    construction since Oct 24, 2026 (Chris's call, reversing the
+    fix-round's do-not-flip verdict). generate_lineups (the optimizer)
+    is untouched and remains available as the explicit opt-in through
+    build_lineups(construction="optimizer"). field_size / payout_style
+    only set the contest aggression the ratings are graded against
+    (their defaults are the values this function used before they were
+    parameters, so a bare call is unchanged).
 
     Worlds author the lineups: stat-level worlds are generated (or a
     precomputed topdown_simulate_slate result is reused), each sampled
@@ -2248,7 +2255,7 @@ def generate_lineups_sim_first(df, count=20, n_worlds=500, seed=42,
     out = pd.DataFrame(rows)
     if out.empty:
         return out
-    out = add_ratings(out, contest_aggression(5000, "GPP / top-heavy"))
+    out = add_ratings(out, contest_aggression(field_size, payout_style))
     out = out.sort_values(["World Freq %", "Projection"],
                           ascending=[False, False]).reset_index(drop=True)
     out.insert(0, "Rank", np.arange(1, len(out) + 1))
@@ -2256,14 +2263,38 @@ def generate_lineups_sim_first(df, count=20, n_worlds=500, seed=42,
     return out
 
 
-def build_lineups(df, construction="optimizer", **kwargs):
-    """Construction dispatcher. construction="optimizer" (the default)
-    routes to generate_lineups with its behavior unchanged;
-    construction="sim_first" routes to generate_lineups_sim_first.
-    kwargs are forwarded to the chosen builder."""
+_SIM_FIRST_KWARGS = frozenset({
+    "count", "n_worlds", "seed", "strategy_map", "salary_cap",
+    "min_salary", "sim_result", "workers", "progress_cb", "field_size",
+    "payout_style"})
+
+
+def build_lineups(df, construction="sim_first", **kwargs):
+    """Construction dispatcher -- the one place the Classic default
+    lives. Since Oct 24, 2026 (Chris's call, reversing the fix-round's
+    do-not-flip verdict) the default construction is "sim_first":
+    simulated worlds author the lineups and the MILP is only the
+    per-world legal solver (generate_lineups_sim_first). The old
+    optimizer-first path is the explicit opt-in:
+    construction="optimizer" routes to generate_lineups with its
+    behavior unchanged.
+
+    kwargs are forwarded to the chosen builder. The sim-first builder
+    takes a narrower contract than the optimizer (the optimizer's
+    structure settings -- QB stack minimum, bring-back mode, per-team /
+    per-game caps, FLEX mix -- are optimizer concepts with no sim-first
+    meaning), so for construction="sim_first" only the kwargs in
+    _SIM_FIRST_KWARGS are forwarded and the rest are dropped, by
+    design; the sim-first rules layer is the strategy_map (excludes
+    bind before solving; locks and min/max exposure bind at assembly).
+    """
     if construction == "sim_first":
-        return generate_lineups_sim_first(df, **kwargs)
-    return generate_lineups(df, **kwargs)
+        kw = {k: v for k, v in kwargs.items() if k in _SIM_FIRST_KWARGS}
+        return generate_lineups_sim_first(df, **kw)
+    if construction == "optimizer":
+        return generate_lineups(df, **kwargs)
+    raise ValueError(f"Unknown construction: {construction!r} "
+                     "(expected 'sim_first' or 'optimizer')")
 
 
 def story_conditional_report(sim_result, df, story, n_sample=500, seed=7,

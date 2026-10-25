@@ -24,7 +24,7 @@ from dfs_lab.leverage import leverage_lane_pick, chalk_bust_beneficiaries
 from dfs_lab.ui.results import render_results_command_center, postbuild_lineups_context
 from dfs_lab.ui import persist
 from dfs_lab.data import prepare_player_pool, prepare_showdown_pool, apply_projection_overrides, apply_override_rescue, apply_post_edit_availability_gate, availability_freshness_note
-from dfs_lab.classic import (generate_lineups, classic_apply_qb_cap, classic_apply_qb_exclusions,
+from dfs_lab.classic import (generate_lineups, build_lineups, classic_apply_qb_cap, classic_apply_qb_exclusions,
     classic_contest_recommendations, classic_context_evidence,
     classic_portfolio_intelligence, classic_postbuild_answer, classic_postbuild_report,
     classic_qb_concentration_plan, topdown_simulate_slate, classic_strategy_theses, bringback_worthy_teams,
@@ -55,6 +55,58 @@ def _classic_nav_go(tab):
     """Programmatic nav jump for the Classic workspace (see _sd_nav_go)."""
     from dfs_lab.ui import nav as _navmod
     _navmod.goto_page("Classic", tab)
+
+
+def _classic_generate(df, field_size, payout_style, lineup_count, seed,
+                      preferred_stack_teams, classic_qb_ids, bb_worthy,
+                      flex_mix=None):
+    """Route a Classic build through the engine's construction
+    dispatcher (dfs_lab.classic.build_lineups). Since Oct 24, 2026
+    the default construction is sim-first — simulated worlds author
+    the lineups (Chris's call, reversing the fix-round's do-not-flip
+    verdict); the optimizer is the explicit opt-in, kept in the
+    "classic_construction" session key and chosen in Classic Rules.
+    Only the build path differs: every other input is the session's
+    own, exactly as the pre-flip direct generate_lineups calls took
+    them. Under sim-first, the Slate Intel QB pool (an optimizer
+    argument) is expressed in the sim-first rules layer instead: a
+    QB outside the pool is excluded, and excludes bind before
+    solving — the pool's function is unchanged."""
+    construction = st.session_state.get("classic_construction",
+                                        "sim_first")
+    strategy = st.session_state["strategy_master"]
+    if construction == "sim_first" and classic_qb_ids:
+        strategy = {str(k): (dict(v) if isinstance(v, dict) else v)
+                    for k, v in strategy.items()}
+        allowed = {str(x) for x in classic_qb_ids}
+        _pos = df["Position"].astype(str).str.upper()
+        for _pid in df.loc[_pos == "QB", "ID"].astype(str):
+            if _pid not in allowed:
+                _entry = strategy.get(_pid)
+                if isinstance(_entry, dict):
+                    _entry["Exclude"] = True
+                else:
+                    strategy[_pid] = {"Exclude": True}
+    return build_lineups(
+        df, construction=construction,
+        field_size=field_size, payout_style=payout_style,
+        count=lineup_count, attempts=max(300, lineup_count * 12),
+        min_salary=int(st.session_state["classic_min_salary"]),
+        qb_stack_min=int(st.session_state["classic_qb_stack"]),
+        bringback_mode=st.session_state["classic_bringback"],
+        preferred_stack_teams=preferred_stack_teams,
+        strategy_map=strategy,
+        team_strategy_map=st.session_state["team_strategy_master"],
+        no_dst_from_qb_game=bool(st.session_state["classic_no_dst"]),
+        no_offense_vs_dst=bool(st.session_state["classic_no_off"]),
+        seed=seed,
+        max_players_team=int(st.session_state["classic_max_team"]),
+        max_players_game=int(st.session_state["classic_max_game"]),
+        max_te=int(st.session_state["classic_max_te"]),
+        allow_qb_with_rb=bool(st.session_state["classic_allow_qb_rb"]),
+        allowed_qb_ids=classic_qb_ids,
+        flex_mix=flex_mix,
+        bringback_worthy=bb_worthy)
 
 
 def persistent_widget(widget_fn, persistent_key, default, *args, **kwargs):
@@ -445,6 +497,7 @@ def render_main(settings):
                 st.session_state["classic_ai_chat_fingerprint"]=_classic_chat_fp
             st.session_state.setdefault("classic_qb_stack",2)
             st.session_state.setdefault("classic_bringback","Optional")
+            st.session_state.setdefault("classic_construction","sim_first")
             st.session_state.setdefault("classic_min_salary",48500)
             st.session_state.setdefault("classic_max_team",5)
             st.session_state.setdefault("classic_max_game",5)
@@ -914,6 +967,9 @@ def render_main(settings):
                 st.markdown('<div class="card-title">Classic Rules</div><div class="card-sub">Contest-aware structure controls. Slate Intel can recommend these, but you decide what gets enforced.</div>',unsafe_allow_html=True)
                 r1,r2=st.columns(2)
                 with r1:
+                    st.selectbox("Build engine",["sim_first","optimizer"],key="classic_construction",
+                        format_func=lambda v: "Sim-first — worlds author the lineups" if v=="sim_first" else "Optimizer — the classic Aytia builder",
+                        help="Sim-first is the default (Chris's call, Oct 24 2026): simulated worlds author the lineups and the optimizer only solves each world's best legal lineup. Your locks, excludes and exposure targets bind either way; the QB stack, bring-back and team-cap rules below are Optimizer-path rules.")
                     min_salary=st.slider("Minimum salary",44000,50000,int(st.session_state["classic_min_salary"]),100,key="classic_min_salary")
                     qb_stack=st.selectbox("QB pass catchers",[1,2,3],key="classic_qb_stack",help="Minimum same-team WR/TE players paired with the QB. Mobile QBs (rushing is the correlation) need one fewer; naked rushing-QB builds are allowed.")
                     bringback_mode=st.selectbox("Bring-back",["Optional","Required","None"],key="classic_bringback",help="Optional nudges lineups toward one opposing skill player when the other offense is good enough to shoot out (league-average scoring or better) — a correlation lean, not a mandate. Required forces at least one opposing RB/WR/TE with the QB stack under the same worthiness gate. None forbids opposing skill players with the QB outright.")
@@ -957,21 +1013,13 @@ def render_main(settings):
 
             _story_build=st.session_state.pop("story_build_requested", False)
             if build_btn or _story_build:
-                res=generate_lineups(
-                    df,field_size,payout_style,lineup_count,max(300,lineup_count*12),
-                    int(st.session_state["classic_min_salary"]),int(st.session_state["classic_qb_stack"]),st.session_state["classic_bringback"],
-                    preferred_stack_teams,st.session_state["strategy_master"],st.session_state["team_strategy_master"],
-                    bool(st.session_state["classic_no_dst"]),bool(st.session_state["classic_no_off"]),seed,
-                    max_players_team=int(st.session_state["classic_max_team"]),
-                    max_players_game=int(st.session_state["classic_max_game"]),
-                    max_te=int(st.session_state["classic_max_te"]),
-                    allow_qb_with_rb=bool(st.session_state["classic_allow_qb_rb"]),
-                    allowed_qb_ids=classic_qb_ids,
+                res=_classic_generate(
+                    df,field_size,payout_style,lineup_count,seed,
+                    preferred_stack_teams,classic_qb_ids,bb_worthy,
                     flex_mix=({"RB":int(st.session_state["classic_flex_rb"]),"WR":int(st.session_state["classic_flex_wr"]),"TE":int(st.session_state["classic_flex_te"])}
                               if bool(st.session_state.get("classic_flex_control",False))
                               and int(st.session_state["classic_flex_rb"])+int(st.session_state["classic_flex_wr"])+int(st.session_state["classic_flex_te"])==100
-                              else None),
-                    bringback_worthy=bb_worthy
+                              else None)
                 )
                 st.session_state["classic_result_v4"]=res
                 # Slate Intel / Post-Build Coach renders earlier in the script than the Build tab.
@@ -1030,21 +1078,13 @@ def render_main(settings):
                             st.session_state["strategy_master"][_pid]=_cur
                             if _rebuild_quick:
                                 with st.spinner("Rebuilding with your new exposure target…"):
-                                    new_res=generate_lineups(
-                                        df,field_size,payout_style,lineup_count,max(300,lineup_count*12),
-                                        int(st.session_state["classic_min_salary"]),int(st.session_state["classic_qb_stack"]),st.session_state["classic_bringback"],
-                                        preferred_stack_teams,st.session_state["strategy_master"],st.session_state["team_strategy_master"],
-                                        bool(st.session_state["classic_no_dst"]),bool(st.session_state["classic_no_off"]),seed,
-                                        max_players_team=int(st.session_state["classic_max_team"]),
-                                        max_players_game=int(st.session_state["classic_max_game"]),
-                                        max_te=int(st.session_state["classic_max_te"]),
-                                        allow_qb_with_rb=bool(st.session_state["classic_allow_qb_rb"]),
-                                        allowed_qb_ids=classic_qb_ids,
+                                    new_res=_classic_generate(
+                                        df,field_size,payout_style,lineup_count,seed,
+                                        preferred_stack_teams,classic_qb_ids,bb_worthy,
                                         flex_mix=({"RB":int(st.session_state["classic_flex_rb"]),"WR":int(st.session_state["classic_flex_wr"]),"TE":int(st.session_state["classic_flex_te"])}
                                                   if bool(st.session_state.get("classic_flex_control",False))
                                                   and int(st.session_state["classic_flex_rb"])+int(st.session_state["classic_flex_wr"])+int(st.session_state["classic_flex_te"])==100
-                                                  else None),
-                                        bringback_worthy=bb_worthy
+                                                  else None)
                                     )
                                 st.session_state["classic_result_v4"]=new_res
                                 st.rerun()
@@ -1094,17 +1134,9 @@ def render_main(settings):
                             st.error("Minimum exposure cannot be higher than maximum for: "+", ".join(bad[:8]))
                         elif rebuild_exp:
                             with st.spinner("Rebuilding with your new exposure limits…"):
-                                new_res=generate_lineups(
-                                    df,field_size,payout_style,lineup_count,max(300,lineup_count*12),
-                                    int(st.session_state["classic_min_salary"]),int(st.session_state["classic_qb_stack"]),st.session_state["classic_bringback"],
-                                    preferred_stack_teams,st.session_state["strategy_master"],st.session_state["team_strategy_master"],
-                                    bool(st.session_state["classic_no_dst"]),bool(st.session_state["classic_no_off"]),seed,
-                                    max_players_team=int(st.session_state["classic_max_team"]),
-                                    max_players_game=int(st.session_state["classic_max_game"]),
-                                    max_te=int(st.session_state["classic_max_te"]),
-                                    allow_qb_with_rb=bool(st.session_state["classic_allow_qb_rb"]),
-                                    allowed_qb_ids=classic_qb_ids,
-                                    bringback_worthy=bb_worthy
+                                new_res=_classic_generate(
+                                    df,field_size,payout_style,lineup_count,seed,
+                                    preferred_stack_teams,classic_qb_ids,bb_worthy
                                 )
                             st.session_state["classic_result_v4"]=new_res
                             st.success("Exposure changes applied and the portfolio was rebuilt.")
