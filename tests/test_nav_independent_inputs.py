@@ -28,8 +28,8 @@ MAIN = "dfs_lab/ui/main.py"
 _BRANCHES = [
     # branch, nav var, tabs var, first line, last line (exclusive)
     # NOTE: update these if render_main() shifts (e.g. helpers added above it).
-    ("classic", "classic_nav", "_CLASSIC_TABS", 428, 987),
-    ("sd", "sd_nav", "_SD_TABS", 987, 1831),
+    ("classic", "classic_nav", "_CLASSIC_TABS", 436, 995),
+    ("sd", "sd_nav", "_SD_TABS", 995, 1839),
 ]
 
 _SKIP = {

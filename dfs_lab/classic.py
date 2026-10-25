@@ -1770,7 +1770,8 @@ def _rates_pool_solve(wi):
     return _rates_solve_from_state(_RATES_POOL_STATE, wi)
 
 
-def _rates_build_state(worlds_df, df, salary_cap=50000, lock_ids=None):
+def _rates_build_state(worlds_df, df, salary_cap=50000, lock_ids=None,
+                       flex_position=None):
     """The fixed per-world constraint system + restricted worlds matrix.
 
     Factored out of the original optimal_lineup_rates (Oct 2026, sim-first
@@ -1782,6 +1783,12 @@ def _rates_build_state(worlds_df, df, salary_cap=50000, lock_ids=None):
     them. Returns (d, names, state) or None when inputs are unusable;
     `d` is the ActiveForBuild-filtered pool the state indexes into, and
     state["keep"] maps its rows back to worlds_df columns.
+
+    `flex_position` ("RB"/"WR"/"TE", construction only, Oct 25, 2026)
+    restricts the FLEX slot variable to players of that position, so a
+    world's optimal lineup is solved subject to a named FLEX position --
+    the sim-first FLEX-mix enforcement. The measurement path never
+    passes it (None = the historical unrestricted eligibility).
     """
     from scipy.optimize import Bounds, LinearConstraint
     from scipy.sparse import lil_matrix
@@ -1802,11 +1809,14 @@ def _rates_build_state(worlds_df, df, salary_cap=50000, lock_ids=None):
         if p == "QB":
             return ["QB"]
         if p == "RB":
-            return ["RB1", "RB2", "FLEX"]
+            return ["RB1", "RB2"] + (
+                ["FLEX"] if flex_position in (None, "RB") else [])
         if p == "WR":
-            return ["WR1", "WR2", "WR3", "FLEX"]
+            return ["WR1", "WR2", "WR3"] + (
+                ["FLEX"] if flex_position in (None, "WR") else [])
         if p == "TE":
-            return ["TE", "FLEX"]
+            return ["TE"] + (
+                ["FLEX"] if flex_position in (None, "TE") else [])
         if p == "DST":
             return ["DST"]
         return []
@@ -1978,7 +1988,7 @@ def optimal_lineup_rates(worlds_df, df, n_sample=500, seed=7, salary_cap=50000,
 
 def _world_optimal_lineups(worlds_df, df, world_indices, salary_cap=50000,
                            workers=1, progress_cb=None, lock_ids=None,
-                           objective_df=None):
+                           objective_df=None, flex_position=None):
     """Solve the listed worlds and return (d, results): `d` is the active
     pool frame the results index into, and results is a list of
     (world_idx, frozenset of d-positions, true world points) for each
@@ -1989,11 +1999,13 @@ def _world_optimal_lineups(worlds_df, df, world_indices, salary_cap=50000,
     (the assembly perturbation fill); reported points always come from
     worlds_df itself. lock_ids add hard in-solve lock rows (fill path
     only -- the plain optimal path stays pure legality, exactly like the
-    measurement path).
+    measurement path). flex_position restricts the FLEX slot to that
+    position in-solve (the FLEX-mix construction constraint); the plain
+    optimal path never passes it.
     """
     built = _rates_build_state(objective_df if objective_df is not None
                                else worlds_df, df, salary_cap=salary_cap,
-                               lock_ids=lock_ids)
+                               lock_ids=lock_ids, flex_position=flex_position)
     if built is None:
         return None, []
     d, _names, state = built
@@ -2040,11 +2052,36 @@ def _assign_slots(d, players):
     return chosen
 
 
+def _flex_quota(count, flex_mix):
+    """Exact per-position FLEX counts for `count` lineups from a
+    percentage mix -- the optimizer path's largest-remainder math
+    (generate_lineups), factored out so both construction paths schedule
+    a mix identically. Returns {RB, WR, TE} counts summing to `count`,
+    or None when the mix is absent or sums to zero (no schedule)."""
+    if not flex_mix:
+        return None
+    raw = {p: max(0.0, float(flex_mix.get(p, 0) or 0))
+           for p in ["RB", "WR", "TE"]}
+    total = sum(raw.values())
+    if total <= 0:
+        return None
+    norm = {p: 100.0 * raw[p] / total for p in raw}
+    exact = {p: count * norm[p] / 100.0 for p in norm}
+    quota = {p: int(np.floor(exact[p])) for p in exact}
+    left = max(0, int(count) - sum(quota.values()))
+    order = sorted(exact, key=lambda p: (exact[p] - quota[p]), reverse=True)
+    for p in order[:left]:
+        quota[p] += 1
+    return quota
+
+
 def generate_lineups_sim_first(df, count=20, n_worlds=500, seed=42,
                                strategy_map=None, salary_cap=50000,
                                min_salary=0, sim_result=None, workers=1,
                                progress_cb=None, field_size=5000,
-                               payout_style="GPP / top-heavy"):
+                               payout_style="GPP / top-heavy",
+                               flex_mix=None, team_strategy_map=None,
+                               entry_format=None):
     """Sim-first construction (spec section 3) -- the DEFAULT Classic
     construction since Oct 24, 2026 (Chris's call, reversing the
     fix-round's do-not-flip verdict). generate_lineups (the optimizer)
@@ -2067,6 +2104,42 @@ def generate_lineups_sim_first(df, count=20, n_worlds=500, seed=42,
     distinct candidates run out, the fill comes from near-optimal world
     lineups (per-world solves under a perturbed objective, with locks as
     hard in-solve constraints) -- never from projection-sorted MILP runs.
+
+    FLEX mix (Oct 25, 2026 -- a user setting must stick or be
+    announced): when flex_mix is given, its percentages become the
+    optimizer's exact largest-remainder schedule (_flex_quota) and the
+    mix binds as a CONSTRUCTION constraint, not a relabel: sampled
+    worlds are partitioned across the scheduled positions (cycling the
+    shuffled schedule) and each partition is solved with the FLEX slot
+    restricted to its position in the MILP itself, so every candidate
+    is a world-optimal lineup whose FLEX is the scheduled position;
+    assembly then enforces the per-position quotas exactly. If
+    candidate supply runs out, the shortfall is named in the notes --
+    the schedule is never violated silently.
+
+    Story / cores (Oct 25, 2026): players the apps mark Priority "Core"
+    (a chosen story's core, translated by the API / Streamlit story
+    layer) form a portfolio core, and the core's share of the portfolio
+    is CONTEST-DEPENDENT -- a sliding scale by lineups requested and
+    entry format (Chris's rule): exactly 1 lineup requested -> the
+    story is the build (share 1 of 1, his rules/story exclusively, no
+    sim dissent); a single-entry contest with multiple lineups ->
+    story-dominant, round(0.75 * count) full-core lineups, the rest
+    left to the sims as dissent; a multi-entry / GPP portfolio ->
+    round(0.6 * count) (the cores model's primary-core share). A core
+    member's appearances OUTSIDE full-core lineups are capped at
+    ceil(0.5 * count) for large fields (field_size >= 1000 and
+    count >= 10) or ceil(0.65 * count) otherwise -- the Showdown
+    guardrail rule, where structural (in-core) exposure is exempt and
+    the cap binds only pile-on; no cap for single-entry contests or
+    count == 1. User rules outrank cores: a core member who is
+    excluded or outside the active pool drops out of the core with a
+    note. Team strategy and Priority Like/Fade leans are
+    consumed in assembly ordering: a candidate's tie-break score is
+    its average world points plus the optimizer's per-player bonuses
+    (TEAM_PRIORITY_BONUS / PRIORITY_BONUS), so leans tilt selection
+    among near-equal candidates without overriding world frequency.
+    Actual core share and lean reach are reported in the notes.
 
     Generation reuses topdown_simulate_slate, whose 1,000-world floor
     applies; n_worlds is the number of worlds actually SOLVED (the Lab's
@@ -2102,10 +2175,37 @@ def generate_lineups_sim_first(df, count=20, n_worlds=500, seed=42,
     solve_idx = rng.choice(W, size=min(int(n_worlds), W), replace=False)
     solve_idx = [int(w) for w in solve_idx]
 
-    d, results = _world_optimal_lineups(worlds, dmod, solve_idx,
-                                         salary_cap=salary_cap,
-                                         workers=workers,
-                                         progress_cb=progress_cb)
+    # FLEX mix: partition the sampled worlds across the scheduled
+    # positions (cycling the shuffled largest-remainder schedule, the
+    # optimizer's own order) and solve each partition with the FLEX
+    # slot restricted to its position in the MILP. No mix -> the one
+    # historical unrestricted solve, unchanged.
+    flex_quota = _flex_quota(count, flex_mix)
+    if flex_mix and flex_quota is None:
+        notes.append("FLEX mix was provided but sums to zero -- ignored")
+    if flex_quota is not None:
+        schedule = []
+        for p in ["RB", "WR", "TE"]:
+            schedule.extend([p] * flex_quota[p])
+        rng.shuffle(schedule)
+        by_class = {p: [] for p in ["RB", "WR", "TE"]}
+        for k, wi in enumerate(solve_idx):
+            by_class[schedule[k % len(schedule)]].append(wi)
+        d, results = None, []
+        for p in ["RB", "WR", "TE"]:
+            if flex_quota[p] <= 0 or not by_class[p]:
+                continue
+            d_p, res_p = _world_optimal_lineups(
+                worlds, dmod, by_class[p], salary_cap=salary_cap,
+                workers=workers, progress_cb=progress_cb, flex_position=p)
+            if d is None:
+                d = d_p
+            results.extend(res_p)
+    else:
+        d, results = _world_optimal_lineups(worlds, dmod, solve_idx,
+                                             salary_cap=salary_cap,
+                                             workers=workers,
+                                             progress_cb=progress_cb)
     if d is None or not results:
         return pd.DataFrame()
 
@@ -2118,6 +2218,80 @@ def generate_lineups_sim_first(df, count=20, n_worlds=500, seed=42,
     n_solved = len(solve_idx)
     salaries = pd.to_numeric(d["Salary"], errors="coerce").fillna(0).to_numpy(float)
     id_of = d["ID"].astype(str).tolist() if "ID" in d.columns else [""] * len(d)
+
+    # ---- flex / story / lean state for assembly ----
+    pos_of = [str(d.loc[i, "Position"]).upper() for i in range(len(d))]
+    team_of = ([str(d.loc[i, "Team"]).upper() for i in range(len(d))]
+               if "Team" in d.columns else [""] * len(d))
+
+    def _flex_class(pset):
+        """The FLEX position of a legal 9-player set, from its
+        composition (the overflow position _assign_slots labels FLEX)."""
+        nrb = sum(1 for i in pset if pos_of[i] == "RB")
+        nwr = sum(1 for i in pset if pos_of[i] == "WR")
+        nte = sum(1 for i in pset if pos_of[i] == "TE")
+        if nrb > 2:
+            return "RB"
+        if nwr > 3:
+            return "WR"
+        if nte > 1:
+            return "TE"
+        return None
+
+    # Story core: Priority "Core" players who survived the rules layer
+    # (user rules outrank cores -- an excluded or inactive core member
+    # drops out, named). Core share and the non-structural cap follow
+    # the product's cores design (see the docstring).
+    core_pos = {i for i in range(len(d))
+                if _strat(id_of[i]).get("Priority") == "Core"}
+    core_names = [str(d.loc[i, "Name"]) for i in sorted(core_pos)]
+    asked_core = [str(pid) for pid, s in strategy_map.items()
+                  if isinstance(s, dict) and s.get("Priority") == "Core"]
+    missing_core = [pid for pid in asked_core
+                    if pid not in {id_of[i] for i in core_pos}
+                    and pid not in excluded_ids]
+    if missing_core:
+        notes.append("Core adjusted: " + ", ".join(sorted(missing_core))
+                     + " not in the active pool -- dropped from the "
+                       "story core (your rules outrank cores)")
+    single_entry = str(entry_format or "").strip().lower() == "single entry"
+    if not core_pos:
+        core_target = 0
+        share_label = ""
+    elif count == 1:
+        core_target = 1
+        share_label = "single lineup -- the story is the build"
+    elif single_entry:
+        core_target = int(round(0.75 * count))
+        share_label = "single-entry story-dominant share"
+    else:
+        core_target = int(round(0.6 * count))
+        share_label = "multi-entry core share"
+    if count == 1 or single_entry:
+        core_cap = None
+    elif int(field_size or 0) >= 1000 and count >= 10:
+        core_cap = int(math.ceil(0.5 * count))
+    else:
+        core_cap = int(math.ceil(0.65 * count))
+
+    # Leans (team strategy + Priority Like/Fade) as an assembly
+    # ordering bonus at the optimizer's own magnitudes.
+    from dfs_lab.config import PRIORITY_BONUS, TEAM_PRIORITY_BONUS
+    team_bonus = {str(t).upper(): float(TEAM_PRIORITY_BONUS[v])
+                  for t, v in (team_strategy_map or {}).items()
+                  if v in TEAM_PRIORITY_BONUS}
+    prio_bonus = {}
+    for i in range(len(d)):
+        pr = _strat(id_of[i]).get("Priority")
+        if pr in ("Like", "Fade"):
+            prio_bonus[i] = float(PRIORITY_BONUS[pr])
+    lean_active = bool(team_bonus or prio_bonus)
+
+    def _lean_bonus(pset):
+        if not lean_active:
+            return 0.0
+        return (sum(team_bonus.get(team_of[i], 0.0) for i in pset)
+                + sum(prio_bonus.get(i, 0.0) for i in pset))
 
     # ---- rules layer, as assembly constraints ----
     lock_pos = {i for i in range(len(d)) if id_of[i] in lock_ids}
@@ -2145,26 +2319,91 @@ def generate_lineups_sim_first(df, count=20, n_worlds=500, seed=42,
             return False
         return True
 
-    ordered = sorted(cand.items(),
-                     key=lambda kv: (-kv[1]["n"], -kv[1]["pts"] / max(kv[1]["n"], 1)))
+    ordered = sorted(
+        cand.items(),
+        key=lambda kv: (-kv[1]["n"],
+                        -(kv[1]["pts"] / max(kv[1]["n"], 1)
+                          + _lean_bonus(kv[0]))))
     selected = []          # list of (pset, freq_pct, construction)
     exposure = Counter()
     selected_keys = set()
+    flex_used = Counter()
+    nonstruct = Counter()  # core members' non-full-core appearances
+    core_selected = 0
+
+    def _is_core(pset):
+        return bool(core_pos) and core_pos.issubset(pset)
 
     def _try_add(pset, freq_pct, construction):
+        nonlocal core_selected
         if pset in selected_keys or len(selected) >= count:
             return False
         for i in pset:
             if i in max_count and exposure[i] + 1 > max_count[i]:
                 return False
+        if flex_quota is not None:
+            if flex_used[_flex_class(pset)] >= flex_quota[_flex_class(pset)]:
+                return False
+        is_core = _is_core(pset)
+        if core_pos and not is_core and core_cap is not None:
+            for i in pset & core_pos:
+                if nonstruct[i] + 1 > core_cap:
+                    return False
         selected.append((pset, freq_pct, construction))
         selected_keys.add(pset)
         exposure.update(pset)
+        if flex_quota is not None:
+            flex_used[_flex_class(pset)] += 1
+        if is_core:
+            core_selected += 1
+        elif core_pos:
+            nonstruct.update(pset & core_pos)
         return True
 
+    def _remove_at(k):
+        nonlocal core_selected
+        pset, _f, _c = selected.pop(k)
+        selected_keys.discard(pset)
+        exposure.subtract(pset)
+        if flex_quota is not None:
+            flex_used[_flex_class(pset)] -= 1
+        if _is_core(pset):
+            core_selected -= 1
+        elif core_pos:
+            nonstruct.subtract(pset & core_pos)
+        return pset
+
+    def _add_back(k, entry):
+        nonlocal core_selected
+        pset, _f, _c = entry
+        selected.insert(k, entry)
+        selected_keys.add(pset)
+        exposure.update(pset)
+        if flex_quota is not None:
+            flex_used[_flex_class(pset)] += 1
+        if _is_core(pset):
+            core_selected += 1
+        elif core_pos:
+            nonstruct.update(pset & core_pos)
+
+    # Phase A: the story core's share first (full-core candidates only).
+    if core_pos:
+        for pset, c in ordered:
+            if len(selected) >= count or core_selected >= core_target:
+                break
+            if _is_core(pset) and _eligible(pset):
+                _try_add(pset, round(100.0 * c["n"] / n_solved, 2),
+                         "Sim-first (worlds)")
+    # Phase B: free lineups, RESERVING the story core's share -- free
+    # additions stop at count - core_target so a core shortfall reaches
+    # the core-targeted fill below instead of being crowded out by free
+    # lineups (with no core chosen the cap is `count`: the historical
+    # single pass, in the historical order).
     for pset, c in ordered:
-        if len(selected) >= count:
+        if len(selected) - core_selected >= count - core_target:
             break
+        if core_pos and _is_core(pset):
+            continue
         if _eligible(pset):
             _try_add(pset, round(100.0 * c["n"] / n_solved, 2), "Sim-first (worlds)")
 
@@ -2195,44 +2434,154 @@ def generate_lineups_sim_first(df, count=20, n_worlds=500, seed=42,
                 if any(j in min_need and j not in donor and exposure[j] - 1 < min_need[j]
                        for j in pset_k):
                     continue
+                # A repair swap may not break the FLEX schedule (the
+                # donor takes the evicted lineup's exact flex slot) nor
+                # drop the story core below its promised share.
+                if flex_quota is not None and \
+                        _flex_class(pset_k) != _flex_class(donor):
+                    continue
+                if core_pos and _is_core(pset_k) and not _is_core(donor) \
+                        and core_selected <= core_target:
+                    continue
                 evict_at = k
                 break
             if evict_at is None:
                 break
-            old = selected.pop(evict_at)
-            selected_keys.discard(old[0])
-            exposure.subtract(old[0])
-            _try_add(donor, donor_freq, "Sim-first (worlds)")
+            old_entry = selected[evict_at]
+            _remove_at(evict_at)
+            if not _try_add(donor, donor_freq, "Sim-first (worlds)"):
+                _add_back(evict_at, old_entry)
+                break
         if exposure[i] < need:
             notes.append(f"Min exposure unmet for {d.loc[i, 'Name']}: "
                          f"{exposure[i]}/{need} lineups")
 
     # Fill: near-optimal world lineups via objective perturbation (locks
     # become hard in-solve constraints here so the fill can always honor
-    # them), deduped against everything already selected or seen.
+    # them), deduped against everything already selected or seen. With a
+    # FLEX mix or a story core active the fill is deficit-targeted: a
+    # core shortfall is solved with the core locked in-solve, a flex
+    # shortfall under that position's FLEX restriction, each on a
+    # rotated subset of the sampled worlds to bound the cost.
     if len(selected) < count:
         base_wmat = worlds.to_numpy(float)
         seen_fill = set(selected_keys)
-        for rnd in range(1, 6):
+        targeted = flex_quota is not None or bool(core_pos)
+        for rnd in range(1, (9 if targeted else 6)):
             if len(selected) >= count:
                 break
-            mult = np.exp(rng.normal(0, 0.06 * rnd, size=base_wmat.shape))
-            pert = pd.DataFrame(base_wmat * mult, columns=worlds.columns)
-            _d2, res2 = _world_optimal_lineups(
-                worlds, dmod, solve_idx, salary_cap=salary_cap, workers=1,
-                lock_ids=sorted(lock_ids), objective_df=pert)
-            fresh = {}
-            for _wi, pset, pts in res2:
-                if pset not in seen_fill and _eligible(pset):
-                    fresh[pset] = max(fresh.get(pset, -1.0), pts)
-            for pset, _pts in sorted(fresh.items(), key=lambda kv: -kv[1]):
-                if len(selected) >= count:
-                    break
-                if _try_add(pset, 0.0, "Sim-first (near-optimal fill)"):
-                    seen_fill.add(pset)
+            if not targeted:
+                jobs = [(None, sorted(lock_ids), solve_idx, 1, False)]
+            else:
+                off = ((rnd - 1) * 53) % max(len(solve_idx), 1)
+                subset = (solve_idx[off:] + solve_idx[:off])[:160] \
+                    or solve_idx
+                jobs = []
+                used_fc = None
+                if core_pos and core_selected < core_target:
+                    if flex_quota is not None:
+                        used_fc = max(
+                            ["RB", "WR", "TE"],
+                            key=lambda p: flex_quota[p] - flex_used[p])
+                    # The core job gets several perturbation draws:
+                    # a locked core's optimal supporting cast is
+                    # stable under one small perturbation, so distinct
+                    # full-core lineups need hotter, repeated draws.
+                    jobs.append((used_fc,
+                                 sorted(lock_ids
+                                        | {id_of[i] for i in core_pos}),
+                                 subset, 3, True))
+                if flex_quota is not None:
+                    for p in ["RB", "WR", "TE"]:
+                        if flex_used[p] < flex_quota[p] and p != used_fc:
+                            jobs.append((p, sorted(lock_ids), subset, 1,
+                                         False))
+                if not jobs:
+                    jobs.append((None, sorted(lock_ids), subset, 1, False))
+            for fc, lk, idxs, draws, is_core_job in jobs:
+                for draw in range(draws):
+                    if len(selected) >= count:
+                        break
+                    if is_core_job and core_selected >= core_target:
+                        break
+                    sigma = 0.06 * rnd + (0.05 * draw if targeted else 0.0)
+                    mult = np.exp(rng.normal(0, sigma,
+                                             size=base_wmat.shape))
+                    pert = pd.DataFrame(base_wmat * mult,
+                                        columns=worlds.columns)
+                    _d2, res2 = _world_optimal_lineups(
+                        worlds, dmod, idxs, salary_cap=salary_cap,
+                        workers=1, lock_ids=lk, objective_df=pert,
+                        flex_position=fc)
+                    fresh = {}
+                    for _wi, pset, pts in res2:
+                        if pset not in seen_fill and _eligible(pset):
+                            fresh[pset] = max(fresh.get(pset, -1.0), pts)
+                    for pset, _pts in sorted(fresh.items(),
+                                             key=lambda kv: -kv[1]):
+                        if len(selected) >= count:
+                            break
+                        # The phase-B reservation holds through the
+                        # fill: while the story core is still short,
+                        # free candidates may not take the core's
+                        # reserved slots (phase C is the only top-up).
+                        if core_pos and core_selected < core_target \
+                                and not _is_core(pset) \
+                                and (len(selected) - core_selected) \
+                                >= (count - core_target):
+                            continue
+                        if _try_add(pset, 0.0,
+                                    "Sim-first (near-optimal fill)"):
+                            seen_fill.add(pset)
+    # Phase C: overflow -- with the fill exhausted, any remaining
+    # eligible candidate may top the portfolio up (a full-core
+    # candidate past its share, a free candidate past the reservation).
+    # Whatever still cannot be filled, and whatever promise still
+    # misses, is named in the notes below.
+    if len(selected) < count:
+        for pset, c in ordered:
+            if len(selected) >= count:
+                break
+            if _eligible(pset):
+                _try_add(pset, round(100.0 * c["n"] / n_solved, 2),
+                         "Sim-first (worlds)")
     if len(selected) < count:
         notes.append(f"Only {len(selected)} of {count} requested lineups "
                      "could be assembled from world-optimal candidates")
+
+    # Promised-setting actuals: the FLEX schedule and the story core
+    # report what they landed; any miss is named, never silent.
+    if flex_quota is not None:
+        built_mix = {p: flex_used[p] for p in ["RB", "WR", "TE"]}
+        if built_mix != flex_quota:
+            notes.append(
+                "FLEX mix deviation: scheduled "
+                + "/".join(f"{p} {flex_quota[p]}" for p in ["RB", "WR", "TE"])
+                + ", built "
+                + "/".join(f"{p} {built_mix[p]}" for p in ["RB", "WR", "TE"])
+                + " -- world-optimal candidate supply ran out")
+    if core_pos:
+        if core_selected < core_target:
+            notes.append(
+                f"Story core ({', '.join(core_names)}) reached "
+                f"{core_selected} of {core_target} promised lineups "
+                f"({share_label}) -- world-optimal candidate supply "
+                "ran out")
+        else:
+            notes.append(
+                f"Story core ({', '.join(core_names)}) in {core_selected} "
+                f"of {count} lineups ({share_label})")
+    if lean_active:
+        like_teams = sorted(t for t, b in team_bonus.items() if b > 0)
+        if like_teams:
+            like_set = set(like_teams)
+            n_like = sum(1 for pset, _f, _c in selected
+                         if any(team_of[i] in like_set for i in pset))
+            notes.append(
+                "Team lean applied in assembly ordering: "
+                + ", ".join(like_teams)
+                + f" -- {n_like} of {len(selected)} lineups include a "
+                  "player from a liked team")
 
     rows = []
     for pset, freq_pct, construction in selected:
@@ -2266,7 +2615,66 @@ def generate_lineups_sim_first(df, count=20, n_worlds=500, seed=42,
 _SIM_FIRST_KWARGS = frozenset({
     "count", "n_worlds", "seed", "strategy_map", "salary_cap",
     "min_salary", "sim_result", "workers", "progress_cb", "field_size",
-    "payout_style"})
+    "payout_style", "flex_mix", "team_strategy_map", "entry_format"})
+
+
+def _sim_first_dropped_warnings(kwargs):
+    """Loud warnings for optimizer settings a sim-first build cannot
+    honor (Oct 25, 2026: a setting is either honored or announced --
+    never silently dropped). Only NON-NEUTRAL values warn: a setting at
+    its no-constraint value imposes nothing, so dropping it changes
+    nothing. `attempts` never warns (an optimizer retry budget; the
+    sim-first candidate budget is n_worlds). `allowed_qb_ids` never
+    warns here: both shipped callers (the web API and the Streamlit
+    app) translate a QB pool into strategy_map excludes before
+    dispatch, and excludes bind before solving, so the pool IS honored
+    on this path -- in the rules layer's own language."""
+    w = []
+
+    def _int_or_none(v):
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return None
+
+    qsm = _int_or_none(kwargs.get("qb_stack_min"))
+    if qsm is not None and qsm > 0:
+        w.append(f"QB stack minimum ({qsm}) is an optimizer rule and "
+                 "was NOT applied to this sim-first build -- the "
+                 "simulated worlds chose the stacks")
+    bbm = kwargs.get("bringback_mode")
+    if bbm and str(bbm).strip().lower() not in ("off", "none"):
+        w.append(f"Bring-back mode ({bbm}) is an optimizer rule and "
+                 "was NOT applied to this sim-first build -- the "
+                 "simulated worlds chose the bring-backs")
+    pst = kwargs.get("preferred_stack_teams")
+    if pst:
+        w.append("Preferred stack teams ("
+                 + ", ".join(str(t) for t in pst)
+                 + ") were NOT applied to this sim-first build")
+    if kwargs.get("no_dst_from_qb_game"):
+        w.append("'No DST from QB's game' is an optimizer rule and "
+                 "was NOT applied to this sim-first build")
+    if kwargs.get("no_offense_vs_dst"):
+        w.append("'No offense vs my DST' is an optimizer rule and "
+                 "was NOT applied to this sim-first build")
+    if kwargs.get("allow_qb_with_rb") is False:
+        w.append("'Allow QB + same-team RB' is off, but that is an "
+                 "optimizer rule and was NOT applied to this "
+                 "sim-first build")
+    mpt = _int_or_none(kwargs.get("max_players_team"))
+    if mpt is not None and mpt < 9:
+        w.append(f"Max players per team ({mpt}) is an optimizer rule "
+                 "and was NOT applied to this sim-first build")
+    mpg = _int_or_none(kwargs.get("max_players_game"))
+    if mpg is not None and mpg < 9:
+        w.append(f"Max players per game ({mpg}) is an optimizer rule "
+                 "and was NOT applied to this sim-first build")
+    mte = _int_or_none(kwargs.get("max_te"))
+    if mte is not None and mte < 2:
+        w.append(f"Max TEs ({mte}) is an optimizer rule and was NOT "
+                 "applied to this sim-first build")
+    return w
 
 
 def build_lineups(df, construction="sim_first", **kwargs):
@@ -2280,19 +2688,32 @@ def build_lineups(df, construction="sim_first", **kwargs):
     behavior unchanged.
 
     kwargs are forwarded to the chosen builder. The sim-first builder
-    takes a narrower contract than the optimizer (the optimizer's
-    structure settings -- QB stack minimum, bring-back mode, per-team /
-    per-game caps, FLEX mix -- are optimizer concepts with no sim-first
-    meaning), so for construction="sim_first" only the kwargs in
-    _SIM_FIRST_KWARGS are forwarded and the rest are dropped, by
-    design; the sim-first rules layer is the strategy_map (excludes
-    bind before solving; locks and min/max exposure bind at assembly).
+    consumes count / seed / strategy_map / salary_cap / min_salary /
+    field_size / payout_style, the FLEX mix (enforced in the per-world
+    solve) and the story translation the apps ride in strategy_map +
+    team_strategy_map (Priority "Core" forms a portfolio core;
+    Priority Like/Fade and team leans tilt assembly ordering). Any
+    other optimizer setting that arrives with a non-neutral value --
+    QB stack minimum, bring-back mode, preferred stack teams, the
+    DST correlation toggles, per-team / per-game / TE caps -- is NOT
+    applied on this path, and since Oct 25, 2026 that is announced:
+    _sim_first_dropped_warnings names each one into
+    result.attrs["sim_first_notes"], which both apps surface as build
+    warnings. A setting is either honored or announced.
     """
     if construction == "sim_first":
         kw = {k: v for k, v in kwargs.items() if k in _SIM_FIRST_KWARGS}
-        return generate_lineups_sim_first(df, **kw)
+        result = generate_lineups_sim_first(df, **kw)
+        dropped = _sim_first_dropped_warnings(kwargs)
+        if dropped:
+            notes = list(result.attrs.get("sim_first_notes") or [])
+            result.attrs["sim_first_notes"] = dropped + notes
+        return result
     if construction == "optimizer":
-        return generate_lineups(df, **kwargs)
+        # entry_format only steers the sim-first story share; the
+        # optimizer's signature predates it and stays untouched.
+        return generate_lineups(
+            df, **{k: v for k, v in kwargs.items() if k != "entry_format"})
     raise ValueError(f"Unknown construction: {construction!r} "
                      "(expected 'sim_first' or 'optimizer')")
 

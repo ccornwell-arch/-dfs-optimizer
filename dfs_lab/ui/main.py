@@ -87,7 +87,7 @@ def _classic_generate(df, field_size, payout_style, lineup_count, seed,
                     _entry["Exclude"] = True
                 else:
                     strategy[_pid] = {"Exclude": True}
-    return build_lineups(
+    result = build_lineups(
         df, construction=construction,
         field_size=field_size, payout_style=payout_style,
         count=lineup_count, attempts=max(300, lineup_count * 12),
@@ -107,6 +107,14 @@ def _classic_generate(df, field_size, payout_style, lineup_count, seed,
         allowed_qb_ids=classic_qb_ids,
         flex_mix=flex_mix,
         bringback_worthy=bb_worthy)
+    if construction == "sim_first":
+        # The engine reports every promised setting it could not
+        # honor (and the actuals for the ones it did: FLEX schedule,
+        # story core share) in result.attrs["sim_first_notes"] --
+        # surface them LOUDLY, never silently (Oct 25, 2026).
+        for _note in (result.attrs.get("sim_first_notes") or []):
+            st.warning(f"Sim-first: {_note}")
+    return result
 
 
 def persistent_widget(widget_fn, persistent_key, default, *args, **kwargs):
