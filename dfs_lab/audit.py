@@ -65,10 +65,13 @@ from scipy.optimize import Bounds, LinearConstraint, milp
 from scipy.sparse import lil_matrix
 
 from dfs_lab.showdown import (
+    _allowed_shape_team_counts,
+    _allowed_showdown_shapes,
     _showdown_exposure_targets,
     _showdown_linkage_breaches,
     _showdown_no_role_players,
     _showdown_qb_linkage_exemptions,
+    _showdown_shape_of,
     _showdown_team_qb_name,
     add_showdown_ratings,
     audit_showdown_portfolio,
@@ -264,6 +267,18 @@ def audit_showdown_set(df, strategy_map, result, worlds_df=None,
     pos_of = {pid: i for i, pid in
               enumerate(str(x) for x in d["ID"])}
     name_of = {pid: str(r["Name"]) for pid, r in by_id.items()}
+    # Build Shape (Oct 28, 2026): the user's unchecked shapes bind
+    # the audit's challengers too — a replacement may not re-enter
+    # a shape the build itself was forbidden to deliver (Chris's
+    # CAR@GB build: 5-1 unchecked, yet a 5-1 challenger could have
+    # replaced a legal lineup here). Tier 1 pool pairs are filtered
+    # on this set below; Tier 2 re-solves pin the split exactly in
+    # _solve_challenger, which reads the same settings key.
+    _audit_allowed_shapes = _allowed_showdown_shapes(
+        s.get("construction_weights"))
+    if _audit_allowed_shapes is not None and len(
+            {str(r["Team"]) for r in by_id.values()}) != 2:
+        _audit_allowed_shapes = None
     exempt = _showdown_qb_linkage_exemptions(d, smap)
     no_role = _showdown_no_role_players(d, smap)
     locked_ids = {pid for pid, st in smap.items()
@@ -694,6 +709,22 @@ def audit_showdown_set(df, strategy_map, result, worlds_df=None,
         sal = _salary_of(by_id, cpt, ids)
         if sal is None or sal < min_salary or sal > max_salary:
             continue
+        if _audit_allowed_shapes is not None:
+            # A pool challenger in a user-disallowed Build Shape is
+            # not a legal replacement, however decisively it wins
+            # (Oct 28, 2026 — see _audit_allowed_shapes above).
+            _per_team = {}
+            _known = True
+            for _pid in ids:
+                _r = by_id.get(str(_pid))
+                if _r is None:
+                    _known = False
+                    break
+                _t = str(_r["Team"])
+                _per_team[_t] = _per_team.get(_t, 0) + 1
+            if _known and len(_per_team) == 2 and _showdown_shape_of(
+                    _per_team.values()) not in _audit_allowed_shapes:
+                continue
         chal_pairs.append((cpt, tuple(ids)))
     chal_totals = showdown_lineup_totals(W, d, chal_pairs) \
         if chal_pairs else np.zeros((0, W.shape[0]))
@@ -1139,7 +1170,8 @@ def _solve_challenger(d, W, home_mask, smap, profile, settings, exempt,
     home worlds (Tier 2): maximize the candidate's mean score over
     the home-world subset, under the build's legality — salary band,
     the user's excludes/locks/captain pool, the punt floor, the
-    QB-linkage guard — with the lineup's thesis preserved (its core
+    QB-linkage guard, the user's Build Shape weights — with the
+    lineup's thesis preserved (its core
     members stay; its captain stays unless the captain is itself the
     incoherence). The solver chooses the sacrifice anywhere the cap
     demands. Returns (cpt_id, ids) or None."""
@@ -1213,14 +1245,34 @@ def _solve_challenger(d, W, home_mask, smap, profile, settings, exempt,
             i = pos_in_sub[cpt_id]
             rows.append({n + i: 1.0}); lows.append(1.0); highs.append(1.0)
     teams = [str(t) for t in sub["Team"].dropna().unique() if str(t)]
+    # Build Shape (Oct 28, 2026): with the user's raw construction
+    # weights in settings, the challenger's team split must be a
+    # shape the user allowed — the plain [1, 5] representation rows
+    # legalized 5-1 challengers against an unchecked 5-1. The solve
+    # below then runs once per allowed count for teams[0] with the
+    # count pinned exactly (a tightened range would leak the
+    # in-between shapes of a non-adjacent allowed set). Unrestricted
+    # settings keep the original single-solve rows untouched.
+    _allowed_shapes = _allowed_showdown_shapes(
+        s.get("construction_weights"))
+    _split_counts = None
+    _team0_coeff = None
     if len(teams) == 2:
+        _team_coeffs = []
         for t in teams:
             coeff = {}
             for i in np.where(sub["Team"].astype(str).eq(t).to_numpy())[0]:
                 coeff[int(i)] = 1.0
                 coeff[n + int(i)] = 1.0
-            if coeff:
-                rows.append(coeff); lows.append(1.0); highs.append(5.0)
+            _team_coeffs.append(coeff)
+        if _allowed_shapes is not None and all(_team_coeffs):
+            _team0_coeff = _team_coeffs[0]
+            _split_counts = sorted(_allowed_shape_team_counts(
+                _allowed_shapes))
+        else:
+            for coeff in _team_coeffs:
+                if coeff:
+                    rows.append(coeff); lows.append(1.0); highs.append(5.0)
     for mask_col, cap in (("is_K", s.get("max_k", 2)),
                           ("is_DST", s.get("max_dst", 1))):
         if cap is None or mask_col not in sub.columns:
@@ -1245,11 +1297,6 @@ def _solve_challenger(d, W, home_mask, smap, profile, settings, exempt,
                 coeff[n + int(i)] = coeff.get(n + int(i), 0.0) - 4.0
             if coeff:
                 rows.append(coeff); lows.append(-np.inf); highs.append(2.0)
-    A = lil_matrix((len(rows), total), dtype=float)
-    for r, coeff in enumerate(rows):
-        for col, val in coeff.items():
-            A[r, col] = val
-    cons = LinearConstraint(A.tocsr(), np.array(lows), np.array(highs))
     c = np.zeros(total)
     c[:n] = -hv_sub
     c[n:] = -1.5 * hv_sub
@@ -1258,18 +1305,44 @@ def _solve_challenger(d, W, home_mask, smap, profile, settings, exempt,
     # eligible columns only).
     ub = np.ones(total)
     ub[n:] = np.where(cpt_ok, 1.0, 0.0)
-    try:
-        res = milp(c=c, constraints=cons, integrality=np.ones(total),
-                   bounds=Bounds(np.zeros(total), ub),
-                   options={"time_limit": float(max(0.5, min(5.0, time_left))),
-                            "presolve": True})
-    except Exception:
-        return None
-    if res.status != 0 or res.x is None:
-        return None
-    x = res.x[:n] > 0.5
-    cc = res.x[n:] > 0.5
-    if x.sum() != 5 or cc.sum() != 1:
-        return None
-    chosen = [ids[i] for i in np.where(x | cc)[0]]
-    return ids[int(np.where(cc)[0][0])], chosen
+    bounds = Bounds(np.zeros(total), ub)
+
+    def _run(rows_, lows_, highs_, tlimit):
+        A_ = lil_matrix((len(rows_), total), dtype=float)
+        for r_, coeff_ in enumerate(rows_):
+            for col_, val_ in coeff_.items():
+                A_[r_, col_] = val_
+        cons_ = LinearConstraint(A_.tocsr(), np.array(lows_, dtype=float),
+                                 np.array(highs_, dtype=float))
+        try:
+            res_ = milp(c=c, constraints=cons_,
+                        integrality=np.ones(total), bounds=bounds,
+                        options={"time_limit": tlimit, "presolve": True})
+        except Exception:
+            return None
+        if res_.status != 0 or res_.x is None:
+            return None
+        x_ = res_.x[:n] > 0.5
+        cc_ = res_.x[n:] > 0.5
+        if x_.sum() != 5 or cc_.sum() != 1:
+            return None
+        chosen_ = [ids[i] for i in np.where(x_ | cc_)[0]]
+        return float(res_.fun), ids[int(np.where(cc_)[0][0])], chosen_
+
+    if _split_counts is None:
+        got = _run(rows, lows, highs,
+                   float(max(0.5, min(5.0, time_left))))
+        return (got[1], got[2]) if got is not None else None
+    # Restricted Build Shapes (Oct 28, 2026): one solve per allowed
+    # teams[0] count, pinned exactly; the best home-world objective
+    # (lowest minimized cost) wins. A thesis constraint (captain or
+    # core pinned) may make some counts infeasible — those solves
+    # simply return None and drop out.
+    best = None
+    _per_solve = float(max(0.5, min(5.0, time_left / len(_split_counts))))
+    for _k in _split_counts:
+        got = _run(rows + [_team0_coeff], lows + [float(_k)],
+                   highs + [float(_k)], _per_solve)
+        if got is not None and (best is None or got[0] < best[0]):
+            best = got
+    return (best[1], best[2]) if best is not None else None

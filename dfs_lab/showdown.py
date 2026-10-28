@@ -160,6 +160,56 @@ def world_construction_weights(base_weights, world_name, entry_format):
     elif entry_format=="150-Max": desired["5-1"]*=1.35
     return {k:(desired[k] if allowed[k] else 0.0) for k in desired}
 
+def _allowed_showdown_shapes(construction_weights):
+    """The user's allowed Build Shapes as a set of shape keys
+    (e.g. {"3-3", "4-2"}), or None when the weights carry no
+    restriction worth enforcing.
+
+    Oct 28, 2026 — Chris built CAR@GB with Build Shape weights
+    {"3-3": 1, "4-2": 1, "5-1": 0} (5-1 unchecked) and 18 of the 20
+    delivered lineups were 5-1: the projection MILP honored his
+    zeros (see _allowed_targets in generate_showdown_lineups), but
+    the WS26 world-authored candidate supply and the portfolio
+    selection never looked at the shapes at all, so the naturally
+    5-1-heavy world candidates crowded out the shape-legal supply.
+    Every layer that can author, select, or substitute a lineup —
+    showdown_world_optimal_lineups, select_showdown_portfolio, and
+    the audit's challengers — now derives the allowed set from the
+    RAW user weights through this one helper. Returns None (no
+    shape enforcement, the pre-fix behavior) when the weights are
+    missing, allow every shape, or allow none: an all-zero dict
+    names no legal shape to enforce toward, and generation's own
+    fallback already handles that case.
+    """
+    if not construction_weights:
+        return None
+    vals = {}
+    for k in ("3-3", "4-2", "5-1"):
+        try:
+            vals[k] = float(construction_weights.get(k, 0) or 0)
+        except (TypeError, ValueError):
+            vals[k] = 0.0
+    if not any(v > 0 for v in vals.values()):
+        return None
+    if all(v > 0 for v in vals.values()):
+        return None
+    return {k for k, v in vals.items() if v > 0}
+
+def _showdown_shape_of(per_team_counts):
+    """Orientation-free shape key ("4-2") for a 6-player lineup's
+    per-team counts (an iterable of exactly two counts)."""
+    cs = sorted((int(c) for c in per_team_counts), reverse=True)
+    return f"{cs[0]}-{cs[1]}" if len(cs) == 2 else None
+
+def _allowed_shape_team_counts(allowed_shapes):
+    """Per-team player counts an allowed-shape set permits: shape
+    "a-b" contributes both a and b ({3-3, 4-2} -> {2, 3, 4})."""
+    counts = set()
+    for shape in allowed_shapes:
+        a, b = shape.split("-")
+        counts.add(int(a)); counts.add(int(b))
+    return counts
+
 def showdown_script_bonus(row, script, script_team):
     team = row["Team"]
     opp = row["Opponent"]
@@ -1354,7 +1404,8 @@ def _showdown_linkage_breaches(df, ids, skip_teams=()):
 
 
 def select_showdown_portfolio(candidates, df, strategy_map, count,
-                              min_unique=2, order_scores=None):
+                              min_unique=2, order_scores=None,
+                              construction_weights=None):
     """Assemble the final `count` lineups from generated candidate rows
     under EXACT exposure accounting against `count`.
 
@@ -1384,6 +1435,15 @@ def select_showdown_portfolio(candidates, df, strategy_map, count,
     order, and the delivered frame is sorted by it. The exposure
     accounting itself — reserves, caps, repairs, named shortfalls —
     is identical either way; only the preference order changes.
+
+    `construction_weights` (Oct 28, 2026), when given, is the user's
+    RAW Build Shape weights: a candidate whose team split is a shape
+    the user switched off is hard-ineligible in every phase below
+    (see _allowed_showdown_shapes). Selection previously re-enforced
+    exposures, the punt floor, and the QB-linkage guard but never
+    shapes — the hole that delivered 18-of-20 5-1 lineups against
+    an unchecked 5-1. None (the default) = no shape enforcement,
+    the pre-fix behavior.
     """
     count = int(count)
     notes = []
@@ -1416,6 +1476,36 @@ def select_showdown_portfolio(candidates, df, strategy_map, count,
     for _, row in candidates.iterrows():
         cand_sets.append([str(row[c]) for c in slot_cols])
         cand_cpts.append(str(row["CPT_ID"]))
+
+    # Build Shape hard filter (Oct 28, 2026): with the user's raw
+    # construction weights in hand, a candidate whose team split is
+    # a disallowed shape is INELIGIBLE in every phase — enforced in
+    # _fits at the same hard tier as a malformed row, never demoted
+    # to the last-resort "dirty" tier, so no fill, repair, or
+    # dirty-pass can deliver it. The incident: Chris unchecked 5-1
+    # on CAR@GB and selection — which never received the weights —
+    # walked world-score order straight past the generator's
+    # shape-legal candidates into the 5-1-heavy world supply.
+    shape_banned = set()
+    shape_banned_shapes = set()
+    _allowed_shapes = _allowed_showdown_shapes(construction_weights)
+    if _allowed_shapes is not None and df is not None \
+            and "Team" in df.columns and "ID" in df.columns:
+        _pool_teams = sorted({str(t) for t in df["Team"].dropna()
+                              .unique() if str(t)})
+        if len(_pool_teams) == 2:
+            _team_of = {str(r["ID"]): str(r["Team"])
+                        for _, r in df.iterrows()}
+            for _i, _ids in enumerate(cand_sets):
+                _per_team = [sum(1 for _p in _ids
+                                 if _team_of.get(_p) == _t)
+                             for _t in _pool_teams]
+                if sum(_per_team) != 6:
+                    continue
+                _shape = _showdown_shape_of(_per_team)
+                if _shape not in _allowed_shapes:
+                    shape_banned.add(_i)
+                    shape_banned_shapes.add(_shape)
     exposure = defaultdict(int)
     cpt_exp = defaultdict(int)
     selected = []
@@ -1452,6 +1542,10 @@ def select_showdown_portfolio(candidates, df, strategy_map, count,
     def _fits(idx, uniq_cap, allow_dirty=False):
         ids = cand_sets[idx]
         if len(set(ids)) != 6:
+            return False
+        # A user-disallowed Build Shape is never admissible, in any
+        # phase, on any pass (Oct 28, 2026 — see shape_banned above).
+        if idx in shape_banned:
             return False
         if idx in dirty and not allow_dirty:
             return False
@@ -1682,6 +1776,16 @@ def select_showdown_portfolio(candidates, df, strategy_map, count,
             f"Shortfall: assembled {len(selected)} of {count} "
             f"requested lineups from the generated candidates — "
             f"{cause}.")
+    if shape_banned and len(selected) < count:
+        # Name the shape filter as a cause of the shortfall: the
+        # generic "candidate supply ran out" above would otherwise
+        # hide that the missing lineups were the user's own rule
+        # working as set (Oct 28, 2026).
+        notes.append(
+            f"Build Shape: {len(shape_banned)} candidates excluded "
+            f"as shapes you did not allow "
+            f"({', '.join(sorted(shape_banned_shapes))}); "
+            f"built {len(selected)} of {count}.")
     out = candidates.iloc[selected]
     if _scores is not None:
         out = out.assign(_ws26_order=[_scores[i] for i in selected])
@@ -2732,7 +2836,7 @@ def showdown_align_worlds(worlds_df, sim_frame, df):
 def showdown_world_optimal_lineups(worlds_mat, df, n_sample=SHOWDOWN_WORLD_SAMPLE,
                                    seed=7, salary_cap=50000, min_salary=0,
                                    strategy_map=None, max_k=None,
-                                   max_dst=None):
+                                   max_dst=None, construction_weights=None):
     """World-authored candidates: the optimal legal lineup of sampled
     simulated worlds, as distinct player sets with win counts.
 
@@ -2743,7 +2847,9 @@ def showdown_world_optimal_lineups(worlds_mat, df, n_sample=SHOWDOWN_WORLD_SAMPL
     in-solve, the punt floor's no-role players are unselectable, and
     the QB-linkage guard's constraint (catchers - 4*QB <= 2 per team,
     exempt teams skipped) holds — a world may not author a candidate
-    the delivery rules would reject. Returns a list of
+    the delivery rules would reject. The user's Build Shape weights
+    bind the same way when passed as `construction_weights` (the
+    allowed team splits only; Oct 28, 2026). Returns a list of
     {"cpt_id", "player_ids" (sorted tuple), "wins"} sorted by wins
     desc; empty when the inputs cannot support it."""
     out = []
@@ -2751,6 +2857,22 @@ def showdown_world_optimal_lineups(worlds_mat, df, n_sample=SHOWDOWN_WORLD_SAMPL
         return out
     d = df.reset_index(drop=True)
     smap = strategy_map or {}
+    # Build Shape enforcement (Oct 28, 2026): this supply ignored
+    # construction shapes entirely when it shipped — its only team
+    # constraint was "both teams represented" (1..5 per team), which
+    # legalizes the 5-1 splits Chris had unchecked on CAR@GB, and
+    # the API merged the candidates in unfiltered. With the user's
+    # raw weights the allowed per-team counts derive from the
+    # allowed shapes ({3-3, 4-2} -> {2, 3, 4}); the solve's
+    # per-team rows tighten to that count range below, and the
+    # returned list is post-filtered to exact allowed splits,
+    # because a bare range leaks non-adjacent mixes (allowed
+    # {3-3, 5-1} -> counts {1, 3, 5} would still admit 4-2 inside
+    # [1, 5]). Weights None or all-allowed -> _shape_counts stays
+    # None and behavior is byte-identical to before.
+    _allowed_shapes = _allowed_showdown_shapes(construction_weights)
+    _shape_counts = (_allowed_shape_team_counts(_allowed_shapes)
+                     if _allowed_shapes is not None else None)
     active_col = (d["ActiveForBuild"].to_numpy(bool)
                   if "ActiveForBuild" in d.columns
                   else np.ones(len(d), bool))
@@ -2804,16 +2926,25 @@ def showdown_world_optimal_lineups(worlds_mat, df, n_sample=SHOWDOWN_WORLD_SAMPL
             rows.append({n + i: 1.0}); lows.append(1.0); highs.append(1.0)
         elif bool(st.get("Lock", False)) and not _excluded(pid):
             rows.append({i: 1.0, n + i: 1.0}); lows.append(1.0); highs.append(1.0)
-    # Both teams represented (the generator's own legality).
+    # Both teams represented (the generator's own legality). With
+    # Build Shape weights in hand the per-team range tightens from
+    # [1, 5] to the allowed count range (Oct 28, 2026 — see the
+    # _shape_counts note at the top of this function); the exact
+    # split is enforced by the post-filter on the returned list.
     teams = [str(t) for t in sub["Team"].dropna().unique() if str(t)]
     if len(teams) == 2:
+        _team_lo, _team_hi = 1.0, 5.0
+        if _shape_counts:
+            _team_lo = float(min(_shape_counts))
+            _team_hi = float(max(_shape_counts))
         for t in teams:
             coeff = {}
             for i in np.where(sub["Team"].astype(str).eq(t).to_numpy())[0]:
                 coeff[int(i)] = 1.0
                 coeff[n + int(i)] = 1.0
             if coeff:
-                rows.append(coeff); lows.append(1.0); highs.append(5.0)
+                rows.append(coeff)
+                lows.append(_team_lo); highs.append(_team_hi)
     # Position caps when the build carries them.
     for mask_col, cap in (("is_K", max_k), ("is_DST", max_dst)):
         if cap is None or mask_col not in sub.columns:
@@ -2888,6 +3019,25 @@ def showdown_world_optimal_lineups(worlds_mat, df, n_sample=SHOWDOWN_WORLD_SAMPL
     out = [{"cpt_id": cpt, "player_ids": pids, "wins": int(k)}
            for (cpt, pids), k in wins.items()]
     out.sort(key=lambda r: (-r["wins"], r["cpt_id"], r["player_ids"]))
+    if _allowed_shapes is not None and out:
+        # Exact-split post-filter (Oct 28, 2026): the tightened
+        # in-solve range cannot express non-adjacent allowed sets,
+        # so any split the range leaked is dropped here — a
+        # world-authored candidate the user's Build Shape switched
+        # off never reaches the merge.
+        _team_of = {str(r["ID"]): str(r["Team"])
+                    for _, r in d.iterrows()}
+        _kept = []
+        for _o in out:
+            _per_team = {}
+            for _p in _o["player_ids"]:
+                _t = _team_of.get(str(_p))
+                if _t is not None:
+                    _per_team[_t] = _per_team.get(_t, 0) + 1
+            if len(_per_team) == 2 and _showdown_shape_of(
+                    _per_team.values()) in _allowed_shapes:
+                _kept.append(_o)
+        out = _kept
     return out
 
 
