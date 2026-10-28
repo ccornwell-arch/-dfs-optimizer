@@ -29,20 +29,29 @@ three voices:
     (his hard settings verified against the delivered counts; his
     chosen story's share and fit).
 
-Disposition (Chris's decision, Oct 28): a dominated lineup is
+Disposition (Chris's decisions, Oct 28): a dominated lineup is
 REPLACED by its challenger by default when the replacement is legal
-and preserves his settings; it is flagged by name with the numbers
-when replacement would break a setting, duplicate another lineup,
-or the shape is his own construction. His settings outrank the audit
-everywhere, and every audit action taken against the pull of a user
-setting is named. The audit budget is fixed and always-on (Tier 2:
-at most 6 lineups, 20 s wall) — no toggle.
+and preserves his settings. Tuning round 2 (same day) set the
+surface policy: the audit is SILENT infrastructure. No verdict is
+ever shown to the user — no flag counts, no per-lineup labels, no
+"your caps cost you" rollups. A challenger his caps or uniqueness
+rules forbid is a non-event (his caps are deliberate intent): the
+lineup simply ships. Coherence verdicts are internal signals that
+prioritize the deep audit and steer challenger choice, nothing
+more. Everything the audit concludes is written to the internal
+record (the capture's audit.json) where it can be verified; the
+only user-facing audit state is the build-health one — "Audit:
+not run", with the reason, when the audit genuinely did not run.
+His settings outrank the audit everywhere. The audit budget is
+fixed and always-on (Tier 2: at most 6 lineups, 20 s wall) — no
+toggle.
 
 Failure contract: unlike the learning capture (measurement, fails
-silent by design), the audit changes what is delivered, so it fails
-LOUD. Missing sim worlds produce an "Audit: not run" trust line with
-the reason; a Tier-2 budget expiry names the lineups that were not
-deep-audited. It never produces a clean-looking set by default.
+silent by design), the audit changes what is delivered, so its
+failures are never default-clean in the record: missing sim worlds
+produce the named not-run state (the one user-facing line), and a
+Tier-2 budget expiry records the lineups that were not
+deep-audited.
 
 Spec: ~/workspace/aytia-web/hidden_files/trust-release-spec.md
 """
@@ -100,12 +109,14 @@ C9_LOAD_SHARE = 0.10
 
 def audit_not_run(reason, n=0):
     """The named not-run audit object (§2.5): the build is still
-    served, but the trust line says the set was never argued with."""
+    served, and the payload's health view says plainly that no audit
+    stood behind the set. This is the ONLY user-facing audit state;
+    everything else the audit produces is internal record."""
     return {
         "ran": False,
         "reason": reason,
         "line": f"Audit: not run — {reason} (lineups unaudited)",
-        "counts": {"lineups": int(n), "replaced": 0, "flagged": 0,
+        "counts": {"lineups": int(n), "replaced": 0, "kept_blocked": 0,
                    "penalized": 0, "overrides": 0, "unaudited": int(n),
                    "clean": 0},
         "details": [f"Audit not run: {reason}."],
@@ -215,10 +226,13 @@ def audit_showdown_set(df, strategy_map, result, worlds_df=None,
                        challengers=None, budget_s=AUDIT_TIER2_BUDGET_S,
                        tier2_cap=AUDIT_TIER2_CAP):
     """Audit one delivered showdown set. Returns (result, audit):
-    the delivered frame — dominated lineups replaced where legal,
-    survivors carrying their flags in an "Audit Flag" column — and
-    the audit object (line / counts / details / per-lineup verdicts)
-    the API puts on the build payload and into the capture.
+    the delivered frame — dominated lineups silently replaced where
+    a legal, settings-preserving challenger exists, every other
+    lineup exactly as delivered (round-2 policy: no user-facing
+    verdicts of any kind on the frame) — and the audit object, the
+    INTERNAL record (counts / details / per-lineup verdicts) the API
+    writes into the capture's audit.json. The payload exposes only
+    whether the audit ran.
 
     df is the build frame (post-scenario pool); worlds_df + sim_frame
     are the build's own sim bundle (the worlds the Lab showed).
@@ -234,7 +248,7 @@ def audit_showdown_set(df, strategy_map, result, worlds_df=None,
     if result is None or len(result) == 0:
         obj = audit_not_run("no lineups to audit", 0)
         obj["ran"] = True
-        obj["line"] = "Audit: 0 lineups · 0 replaced · 0 flagged · 0 unaudited"
+        obj["line"] = None
         return result, obj
     if worlds_df is None or sim_frame is None:
         return result, audit_not_run("sim unavailable", len(result))
@@ -268,11 +282,15 @@ def audit_showdown_set(df, strategy_map, result, worlds_df=None,
             if r is None:
                 continue
             cell = per_team.setdefault(str(r["Team"]),
-                                       {"pc": 0, "qb": False})
+                                       {"pc": 0, "qb": False, "off": 0})
             if bool(r["is_passcatcher"]):
                 cell["pc"] += 1
+                cell["off"] += 1
             if bool(r["is_QB"]):
                 cell["qb"] = True
+                cell["off"] += 1
+            if bool(r["is_RB"]):
+                cell["off"] += 1
         profiles.append({
             "ids": ids, "cpt_id": cpt_id, "per_team": per_team,
             "core": (str(row["Core"]) if "Core" in row
@@ -393,6 +411,35 @@ def audit_showdown_set(df, strategy_map, result, worlds_df=None,
                 "text": "both defenses / two kickers in a "
                         "shootout-script build — the script and the "
                         "construction argue with each other"})
+        # C10 — stack-and-defense: a full offensive stack (4+ skill
+        # players from one team) sharing a lineup with a defense.
+        # The defense's fate is tied to the OTHER team's offense
+        # failing, which is not the story the stack is telling; the
+        # Oct 28 battery's G1 plant (GB stack + GB DST) slipped
+        # through because no instrument queued it for a deep look —
+        # its pair lifts (0.82–0.88) sit above C9's contradiction
+        # line and its DST home-world share is unremarkable (every
+        # delivered DST measures low on that scale, so no share
+        # threshold separates the class honestly). The class signal
+        # is the STRUCTURE: across the 24 stored captures, 0 of 429
+        # delivered lineups combine a DST with a 4+ same-team
+        # offensive stack. The verdict only buys a Tier-2 attempt —
+        # conviction stays with the decisive bar (on G1 the re-solve
+        # found one: 73% of home worlds, +5.7, DST dropped).
+        if n_dst >= 1:
+            stack_team = max(
+                p["per_team"].items(),
+                key=lambda kv: kv[1].get("off", 0), default=None)
+            if stack_team is not None \
+                    and stack_team[1].get("off", 0) >= 4:
+                checks[i].append({
+                    "id": "C10", "kind": "penalty",
+                    "text": f"a full {stack_team[0]} offensive stack "
+                            f"({stack_team[1]['off']} players) sharing "
+                            f"a lineup with a defense — the defense "
+                            f"rides against the stack's own story, so "
+                            f"the construction gets a deep-audit look"})
+                deep_queue_flags[i] = True
         # C6 — punt-role reality, re-verified on the delivered set.
         for pid in ids:
             if pid in no_role:
@@ -686,7 +733,7 @@ def audit_showdown_set(df, strategy_map, result, worlds_df=None,
         return bool(core) and set(core).issubset(set(ids))
 
     # ---- Tier 1: pool challengers, vectorized --------------------------
-    dominated = {}   # i -> {cpt, ids, win, margin, mean_diff, source}
+    dom_t1 = {}   # i -> {cpt, ids, win, margin, mean_diff, source}
     for i, p in enumerate(profiles):
         if not len(chal_pairs):
             break
@@ -701,23 +748,24 @@ def audit_showdown_set(df, strategy_map, result, worlds_df=None,
         if best is not None:
             j, win, margin, md = best
             cpt, ids = chal_pairs[j]
-            dominated[i] = {"cpt": cpt, "ids": list(ids), "win": win,
-                            "margin": margin, "mean_diff": md,
-                            "source": "tier1"}
+            dom_t1[i] = {"cpt": cpt, "ids": list(ids), "win": win,
+                         "margin": margin, "mean_diff": md,
+                         "source": "tier1"}
 
-    # ---- Tier 2: re-solved challengers for the flagged few -------------
+    # ---- Tier 2: re-solved challengers for the queued few --------------
     rating_key = []
     for i in range(n):
         row = result.iloc[i]
         rating_key.append(float(row.get("Rating Score", 0) or 0))
     queue = [i for i in range(n)
-             if i in dominated or deep_queue_flags[i]]
+             if i in dom_t1 or deep_queue_flags[i]]
     queue.sort(key=lambda i: -rating_key[i])
     queue = queue[:tier2_cap] if tier2_cap else []
     not_deep = [i for i in range(n)
-                if (i in dominated or deep_queue_flags[i])
+                if (i in dom_t1 or deep_queue_flags[i])
                 and i not in queue]
     t2_start = time.monotonic()
+    dom_t2 = {}
     for i in queue:
         if time.monotonic() - t2_start > budget_s:
             not_deep.append(i)
@@ -738,157 +786,198 @@ def audit_showdown_set(df, strategy_map, result, worlds_df=None,
         ct = showdown_lineup_totals(W, d, [(cpt, tuple(ids))])[0]
         ok, win, margin, md = _decisive(ct, i, mask)
         if ok:
-            dominated[i] = {"cpt": cpt, "ids": list(ids), "win": win,
-                            "margin": margin, "mean_diff": md,
-                            "source": "tier2"}
+            dom_t2[i] = {"cpt": cpt, "ids": list(ids), "win": win,
+                         "margin": margin, "mean_diff": md,
+                         "source": "tier2"}
     deep_checked = len([i for i in queue if i not in not_deep])
+    # Ordered challenger candidates per dominated lineup: the
+    # re-solved (Tier 2) construction first, the best pool (Tier 1)
+    # construction as the fallback — under the round-2 policy a
+    # blocked first choice must not end the search while a
+    # deliverable challenger exists.
+    dominated = {}
+    for i in set(dom_t1) | set(dom_t2):
+        cands = []
+        for src in (dom_t2.get(i), dom_t1.get(i)):
+            if src is not None and all(
+                    tuple(sorted(src["ids"])) != tuple(sorted(c["ids"]))
+                    for c in cands):
+                cands.append(src)
+        dominated[i] = cands
 
-    # ---- disposition: replace by default, flag with the reason ----
+    # ---- disposition (round-2 policy): replace silently when a
+    # legal, settings-preserving challenger exists; otherwise the
+    # lineup ships and the reason lives in this internal record
+    # only. Challengers are tried in order (re-solved first, pool
+    # fallback) — a blocked first choice never ends the search
+    # while a deliverable challenger exists.
     verdicts = [None] * n
     details = []
     cur_ids = [list(p["ids"]) for p in profiles]
     cur_cpt = [p["cpt_id"] for p in profiles]
     eff_mu = min(min_unique, realized) if min_unique > 0 else 0
     replaced_rows = {}
-    order = sorted(dominated, key=lambda i: -rating_key[i])
-    for i in order:
-        dom = dominated[i]
+    dom_used = {}   # i -> the challenger record that decided it
+
+    def _attempt(i, dom):
+        """Run one challenger through the delivery gauntlet against
+        the CURRENT set state. Returns None when the replacement may
+        be delivered, else the block reason (internal record)."""
         p = profiles[i]
         ch_set = set(dom["ids"])
-        reason = None
-        own_construction = False
-        # His own construction: an exempt shape, or the challenger
-        # removes a player he locked. His settings win; named — and
-        # counted as an override, never as a catch.
-        if any(c["kind"] == "override" for c in checks[i]):
-            reason = "the shape is your own construction (your " \
-                     "settings outrank the audit)"
-            own_construction = True
-        else:
-            removed_locked = [pid for pid in p["ids"]
-                              if pid not in ch_set and pid in locked_ids]
-            if removed_locked:
-                reason = (f"replacing it would remove your locked "
-                          f"{name_of[removed_locked[0]]}")
-        if reason is None and any(
-                tuple(sorted(cur_ids[k])) == tuple(sorted(dom["ids"]))
-                for k in range(n) if k != i):
-            reason = "the challenger duplicates another delivered lineup"
-        if reason is None and eff_mu > 0:
+        removed_locked = [pid for pid in p["ids"]
+                          if pid not in ch_set and pid in locked_ids]
+        if removed_locked:
+            return (f"replacing it would remove your locked "
+                    f"{name_of[removed_locked[0]]}")
+        if any(tuple(sorted(cur_ids[k])) == tuple(sorted(dom["ids"]))
+               for k in range(n) if k != i):
+            return "the challenger duplicates another delivered lineup"
+        if eff_mu > 0:
             for k in range(n):
                 if k == i:
                     continue
                 if 6 - len(ch_set & set(cur_ids[k])) < eff_mu:
-                    reason = ("the challenger would break the "
-                              "portfolio's uniqueness rule")
-                    break
-        if reason is None:
+                    return ("the challenger would break the "
+                            "portfolio's uniqueness rule")
+        # Exposure gates are evaluated on the POST-replacement
+        # counts: a player the challenger keeps from the original
+        # holds his count exactly, so keeping an at-cap player is
+        # settings-preserving, not a breach. (Round-1's raw +1/-1
+        # arithmetic refused such replacements — it blocked the
+        # C10 plant's re-solve purely because the challenger kept
+        # a player all three delivered lineups already carried.)
+        orig_set = set(p["ids"])
+        for pid in orig_set:
+            tgt = targets.get(pid)
+            if tgt is not None and counts[pid] - 1 \
+                    + (1 if pid in ch_set else 0) < tgt["min"]:
+                return (f"replacing it breaks your {tgt['name']} "
+                        f"Min Exposure")
+        if targets.get(p["cpt_id"]) is not None:
+            new_cc = cpt_counts[p["cpt_id"]] - 1 \
+                + (1 if dom["cpt"] == p["cpt_id"] else 0)
+            if new_cc < targets[p["cpt_id"]]["cpt_min"]:
+                return (f"replacing it breaks your "
+                        f"{targets[p['cpt_id']]['name']} CPT Min")
+        for pid in ch_set:
+            tgt = targets.get(pid)
+            if tgt is not None and counts.get(pid, 0) \
+                    - (1 if pid in orig_set else 0) + 1 > tgt["max"]:
+                return (f"the challenger breaks your {tgt['name']} "
+                        f"Max Exposure")
+        if targets.get(dom["cpt"]) is not None:
+            new_cc = cpt_counts.get(dom["cpt"], 0) \
+                - (1 if dom["cpt"] == p["cpt_id"] else 0) + 1
+            if new_cc > targets[dom["cpt"]]["cpt_max"]:
+                return (f"the challenger breaks your "
+                        f"{targets[dom['cpt']]['name']} CPT Max")
+        core = _core_ids_for(p)
+        if core:
+            fit = _story_fit(core, dom["cpt"], list(dom["ids"]))
+            if fit is not None and fit < 60:
+                return ("the challenger falls out of this lineup's "
+                        f"story core (Story Fit {fit} < 60)")
+        # The replacement may not itself be dominated by another
+        # pool challenger in ITS home worlds (one pass, no chains).
+        ct = showdown_lineup_totals(W, d, [(dom["cpt"],
+                                            tuple(dom["ids"]))])[0]
+        home = ct >= np.percentile(ct, 90)
+        for j, (cpt2, ids2) in enumerate(chal_pairs):
+            if tuple(sorted(ids2)) == tuple(sorted(dom["ids"])):
+                continue
+            if not _thesis_ok({"cpt_id": dom["cpt"],
+                               "core": p["core"]}, cpt2, ids2):
+                continue
+            diff = chal_totals[j][home] - ct[home]
+            if float((diff > 0).mean()) >= DOM_WIN_SHARE \
+                    and float(diff.mean()) >= DOM_MARGIN \
+                    and float(chal_totals[j].mean() - ct.mean()) \
+                    >= -DOM_MEAN_TOLERANCE:
+                return ("the challenger is itself beaten in its own "
+                        "best worlds by another candidate")
+        return None
+
+    order = sorted(dominated, key=lambda i: -rating_key[i])
+    for i in order:
+        p = profiles[i]
+        # His own construction: an exempt shape (his locks/settings
+        # built it on purpose). Recorded as an override, never a
+        # catch; the lineup ships untouched.
+        if any(c["kind"] == "override" for c in checks[i]):
+            verdicts[i] = "override"
+            dom_used[i] = dominated[i][0]
+            d0 = dominated[i][0]
+            details.append(
+                f"Lineup {i + 1} kept: beaten in its best worlds by "
+                f"{_shape_text(by_id, d0['cpt'], d0['ids'])} "
+                f"({d0['win']:.0%} of its best worlds · "
+                f"+{d0['margin']:.1f}) — not replaced because the "
+                f"shape is your own construction (your settings "
+                f"outrank the audit).")
+            continue
+        blocks = []
+        placed = False
+        for dom in dominated[i]:
+            reason = _attempt(i, dom)
+            if reason is not None:
+                blocks.append((dom, reason))
+                continue
+            # Build the replacement row; a coherence hard-reject at
+            # this last gate (e.g. a DST conflict the solve did not
+            # model) refuses this challenger too — never a silent
+            # swap to an illegal row.
+            flex_sorted = sorted((pid for pid in dom["ids"]
+                                  if pid != dom["cpt"]),
+                                 key=lambda pid: -float(
+                                     by_id[pid]["FlexSalary"]))
+            chosen = [("CPT", pos_of[dom["cpt"]])] + [
+                (f"FLEX{j}", pos_of[pid])
+                for j, pid in enumerate(flex_sorted, start=1)]
+            new_row = showdown_candidate_row(
+                d, chosen, smap, str(s.get("script") or "Neutral"),
+                str(s.get("script_team") or ""),
+                game_world=p["game_world"], exempt_teams=exempt)
+            if new_row is None:
+                blocks.append((dom, "the challenger fails the "
+                                    "coherence check at delivery"))
+                continue
+            if p["core"]:
+                new_row["Core"] = p["core"]
+                core = _core_ids_for(p)
+                new_row["Story Fit"] = _story_fit(
+                    core, dom["cpt"], list(dom["ids"])) if core \
+                    else p["fit"]
+            replaced_rows[i] = new_row
             for pid in p["ids"]:
-                tgt = targets.get(pid)
-                if tgt is not None and counts[pid] - 1 < tgt["min"]:
-                    reason = (f"replacing it breaks your "
-                              f"{tgt['name']} Min Exposure")
-                    break
-            if reason is None and targets.get(p["cpt_id"]) is not None \
-                    and cpt_counts[p["cpt_id"]] - 1 \
-                    < targets[p["cpt_id"]]["cpt_min"]:
-                reason = (f"replacing it breaks your "
-                          f"{targets[p['cpt_id']]['name']} CPT Min")
-        if reason is None:
+                counts[pid] -= 1
+            cpt_counts[p["cpt_id"]] -= 1
             for pid in dom["ids"]:
-                tgt = targets.get(pid)
-                if tgt is not None and counts.get(pid, 0) + 1 > tgt["max"]:
-                    reason = (f"the challenger breaks your "
-                              f"{tgt['name']} Max Exposure")
-                    break
-            if reason is None and targets.get(dom["cpt"]) is not None \
-                    and cpt_counts.get(dom["cpt"], 0) + 1 \
-                    > targets[dom["cpt"]]["cpt_max"]:
-                reason = (f"the challenger breaks your "
-                          f"{targets[dom['cpt']]['name']} CPT Max")
-        if reason is None:
-            core = _core_ids_for(p)
-            if core:
-                fit = _story_fit(core, dom["cpt"], list(dom["ids"]))
-                if fit is not None and fit < 60:
-                    reason = ("the challenger falls out of this "
-                              "lineup's story core (Story Fit "
-                              f"{fit} < 60)")
-        if reason is None:
-            # The replacement may not itself be dominated by another
-            # pool challenger in ITS home worlds (one pass, no chains).
-            ct = showdown_lineup_totals(W, d, [(dom["cpt"],
-                                                tuple(dom["ids"]))])[0]
-            home = ct >= np.percentile(ct, 90)
-            for j, (cpt2, ids2) in enumerate(chal_pairs):
-                if tuple(sorted(ids2)) == tuple(sorted(dom["ids"])):
-                    continue
-                if not _thesis_ok({"cpt_id": dom["cpt"],
-                                   "core": p["core"]}, cpt2, ids2):
-                    continue
-                diff = chal_totals[j][home] - ct[home]
-                if float((diff > 0).mean()) >= DOM_WIN_SHARE \
-                        and float(diff.mean()) >= DOM_MARGIN \
-                        and float(chal_totals[j].mean() - ct.mean()) \
-                        >= -DOM_MEAN_TOLERANCE:
-                    reason = ("the challenger is itself beaten in "
-                              "its own best worlds by another "
-                              "candidate, so the set keeps the "
-                              "original and flags it instead")
-                    break
-        if reason is not None:
-            verdicts[i] = "override" if own_construction else "flagged"
-            label = "kept" if own_construction else "flagged"
+                counts[pid] += 1
+            cpt_counts[dom["cpt"]] += 1
+            cur_ids[i] = list(dom["ids"])
+            cur_cpt[i] = dom["cpt"]
+            verdicts[i] = "replaced"
+            dom_used[i] = dom
             details.append(
-                f"Lineup {i + 1} {label}: beaten in its best worlds "
-                f"by {_shape_text(by_id, dom['cpt'], dom['ids'])} "
-                f"({dom['win']:.0%} of its best worlds · "
-                f"+{dom['margin']:.1f}) — kept because {reason}.")
-            continue
-        # Build the replacement row; a coherence hard-reject at this
-        # last gate (e.g. a DST conflict the solve did not model)
-        # falls back to a flag — never a silent swap.
-        flex_sorted = sorted((pid for pid in dom["ids"]
-                              if pid != dom["cpt"]),
-                             key=lambda pid: -float(
-                                 by_id[pid]["FlexSalary"]))
-        chosen = [("CPT", pos_of[dom["cpt"]])] + [
-            (f"FLEX{j}", pos_of[pid])
-            for j, pid in enumerate(flex_sorted, start=1)]
-        new_row = showdown_candidate_row(
-            d, chosen, smap, str(s.get("script") or "Neutral"),
-            str(s.get("script_team") or ""),
-            game_world=p["game_world"], exempt_teams=exempt)
-        if new_row is None:
-            verdicts[i] = "flagged"
+                f"Lineup {i + 1} replaced: "
+                f"{_shape_text(by_id, p['cpt_id'], p['ids'])} → "
+                f"{_shape_text(by_id, dom['cpt'], dom['ids'])} — the "
+                f"challenger wins {dom['win']:.0%} of the original's "
+                f"best worlds by +{dom['margin']:.1f} on average.")
+            placed = True
+            break
+        if not placed:
+            verdicts[i] = "kept_blocked"
+            dom_used[i] = dominated[i][0]
+            why = "; ".join(
+                f"{_shape_text(by_id, dm['cpt'], dm['ids'])}: {rs}"
+                for dm, rs in blocks)
             details.append(
-                f"Lineup {i + 1} flagged: beaten in its best worlds "
-                f"by {_shape_text(by_id, dom['cpt'], dom['ids'])} "
-                f"({dom['win']:.0%} · +{dom['margin']:.1f}) — kept "
-                f"because the challenger fails the coherence check "
-                f"at delivery.")
-            continue
-        if p["core"]:
-            new_row["Core"] = p["core"]
-            core = _core_ids_for(p)
-            new_row["Story Fit"] = _story_fit(
-                core, dom["cpt"], list(dom["ids"])) if core else p["fit"]
-        replaced_rows[i] = new_row
-        for pid in p["ids"]:
-            counts[pid] -= 1
-        cpt_counts[p["cpt_id"]] -= 1
-        for pid in dom["ids"]:
-            counts[pid] += 1
-        cpt_counts[dom["cpt"]] += 1
-        cur_ids[i] = list(dom["ids"])
-        cur_cpt[i] = dom["cpt"]
-        verdicts[i] = "replaced"
-        details.append(
-            f"Lineup {i + 1} replaced: "
-            f"{_shape_text(by_id, p['cpt_id'], p['ids'])} → "
-            f"{_shape_text(by_id, dom['cpt'], dom['ids'])} — the "
-            f"challenger wins {dom['win']:.0%} of the original's "
-            f"best worlds by +{dom['margin']:.1f} on average.")
+                f"Lineup {i + 1} kept: beaten in its best worlds "
+                f"({dominated[i][0]['win']:.0%} · "
+                f"+{dominated[i][0]['margin']:.1f}) but no legal "
+                f"replacement exists under your settings — {why}.")
 
     # Surviving lineups: verdicts from the coherence inventory.
     for i in range(n):
@@ -896,7 +985,7 @@ def audit_showdown_set(df, strategy_map, result, worlds_df=None,
             continue
         kinds = {c["kind"] for c in checks[i]}
         if "flag" in kinds:
-            verdicts[i] = "flagged"
+            verdicts[i] = "breach"
         elif "override" in kinds:
             verdicts[i] = "override"
         elif "penalty" in kinds:
@@ -945,42 +1034,23 @@ def audit_showdown_set(df, strategy_map, result, worlds_df=None,
         final = final.sort_values("Rating Score", ascending=False,
                                   kind="mergesort").reset_index(drop=True)
         final["Rank"] = range(1, len(final) + 1)
-    flag_by_orig = {}
-    for i in range(n):
-        if verdicts[i] in ("flagged", "penalized"):
-            first = next((c for c in checks[i]
-                          if c["kind"] in ("flag", "penalty")), None)
-            if i in dominated and verdicts[i] == "flagged":
-                flag_by_orig[i] = "Flagged: beaten in its best worlds"
-            elif first is not None:
-                flag_by_orig[i] = f"Flagged: {first['text']}"
-            else:
-                flag_by_orig[i] = "Flagged"
-        else:
-            flag_by_orig[i] = ""
-    # Map flags onto the (possibly re-sorted) final frame by player set.
-    orig_sets = {tuple(sorted(cur_ids[i])): flag_by_orig[i]
-                 for i in range(n)}
-    if len(final):
-        final["Audit Flag"] = [
-            orig_sets.get(tuple(sorted(_ids_of(row))), "")
-            for _, row in final.iterrows()]
+    # Round-2 policy: the delivered frame carries NO audit
+    # artifacts — no flag column, no labels. Replacements are
+    # simply the lineups; everything else is identical to what was
+    # delivered. The verdicts live only in the audit record below.
 
     n_replaced = sum(1 for v in verdicts if v == "replaced")
-    n_flagged = sum(1 for v in verdicts if v == "flagged")
+    n_kept_blocked = sum(1 for v in verdicts if v == "kept_blocked")
+    n_breach = sum(1 for v in verdicts if v == "breach")
     n_penalized = sum(1 for v in verdicts if v == "penalized")
     n_overrides = sum(1 for v in verdicts if v == "override")
     n_clean = sum(1 for v in verdicts if v == "clean")
     n_unaudited = len(set(not_deep))
-    if n_unaudited:
-        line = (f"Audit: partial — {n - n_unaudited} of {n} "
-                f"deep-checked · {n_replaced} replaced · "
-                f"{n_flagged} flagged")
-    else:
-        line = (f"Audit: {n} lineups · {n_replaced} replaced · "
-                f"{n_flagged} flagged · 0 unaudited")
-    if n_overrides:
-        line += f" · {n_overrides} by your settings"
+    # No user-facing line for a completed audit (round-2 policy):
+    # the payload exposes only ran / not-run. The partial state
+    # (budget bound, some lineups not deep-audited) is recorded in
+    # counts/details, not announced.
+    line = None
     per_lineup = []
     for i, p in enumerate(profiles):
         entry = {
@@ -992,26 +1062,31 @@ def audit_showdown_set(df, strategy_map, result, worlds_df=None,
             "notes": [c["text"] for c in checks[i]],
             "deep_audited": i not in set(not_deep),
         }
-        if i in dominated:
-            dom = dominated[i]
+        dom_rec = dom_used.get(i) or (
+            dominated[i][0] if i in dominated else None)
+        if dom_rec is not None:
             entry["domination"] = {
-                "challenger": _shape_text(by_id, dom["cpt"],
-                                          dom["ids"]),
-                "win_share": round(dom["win"], 3),
-                "margin": round(dom["margin"], 2),
-                "source": dom["source"]}
+                "challenger": _shape_text(by_id, dom_rec["cpt"],
+                                          dom_rec["ids"]),
+                "win_share": round(dom_rec["win"], 3),
+                "margin": round(dom_rec["margin"], 2),
+                "source": dom_rec["source"]}
         per_lineup.append(entry)
     audit_obj = {
         "ran": True,
         "line": line,
         "counts": {"lineups": n, "replaced": n_replaced,
-                   "flagged": n_flagged, "penalized": n_penalized,
+                   "kept_blocked": n_kept_blocked, "breaches": n_breach,
+                   "penalized": n_penalized,
                    "overrides": n_overrides, "unaudited": n_unaudited,
                    "clean": n_clean},
         "details": details,
         "per_lineup": per_lineup,
         "set_notes": set_notes,
-        "warnings": list(set_notes),
+        # The audit contributes NOTHING to the build's user-facing
+        # warnings (round-2 policy); its findings live in this
+        # record (details / set_notes) and in audit.json only.
+        "warnings": [],
         "wall_s": round(time.monotonic() - t_start, 2),
         "tier2": {"eligible": len([i for i in range(n)
                                    if i in dominated

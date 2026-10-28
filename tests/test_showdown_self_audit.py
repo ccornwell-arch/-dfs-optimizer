@@ -5,11 +5,20 @@ that lineup is trying to be right: a challenger is the best-legal
 WHOLE construction re-solved against those home worlds, and a
 lineup is beaten only decisively (>=60% of its home worlds, >= +2.0
 average margin, challenger sim mean within 1.0). Disposition is
-replace-by-default; flag-only when replacement would break the
-user's settings, duplicate another delivered lineup, or the shape
-is the user's own construction. The audit fails LOUD: no worlds ->
-a named "Audit: not run" state; a zeroed budget -> partial
-language with Tier 1 verdicts standing.
+replace-by-default.
+
+Round-2 surface policy (Chris's ruling, Oct 28): the audit is
+SILENT infrastructure. A beaten lineup with a legal,
+settings-preserving challenger is replaced as part of the build;
+one whose challengers are all blocked by the user's own caps /
+uniqueness / locks simply ships — cap-blocked domination is a
+non-event, recorded internally as kept_blocked and shown to NO ONE.
+No verdict reaches the user: the delivered frame carries no audit
+column, a completed audit has line None and contributes no
+warnings, and the only user-facing audit state is the build-health
+one — no worlds -> a named "Audit: not run" state. A zeroed budget
+records the partial state internally (unaudited count) with Tier 1
+verdicts standing.
 
 Worlds here are engineered deterministically (base = projection,
 plus a TB passing spike in 40% of worlds where Baker out-spikes his
@@ -111,8 +120,12 @@ def test_domination_replaces():
                    if e["captain"] == "Javonte Williams")
     _check("the no-QB 3-catcher lineup is replaced",
            verdicts[bad_idx] == "replaced")
-    _check("audit line reports the replacement",
-           "1 replaced" in audit["line"])
+    _check("a completed audit is silent: no user-facing line, no "
+           "warnings, replacement counted only in the record",
+           audit["line"] is None and audit["warnings"] == []
+           and audit["counts"]["replaced"] == 1)
+    _check("the delivered frame carries no audit column",
+           "Audit Flag" not in final.columns)
     rows = [r for _, r in final.iterrows()
             if str(r["CPT"]) == "Javonte Williams"]
     flex_names = ({str(rows[0][c]) for c in
@@ -130,7 +143,7 @@ def test_domination_replaces():
     _check("sound lineups stay clean", all(v == "clean" for v in others))
 
 
-def test_flag_when_replacement_breaks_settings():
+def test_kept_blocked_when_replacement_breaks_settings():
     pool = _pool()
     result = _delivered(pool, [BAD, GOOD, MID])
     strategy = {"109": {"Max Exposure": 0}}
@@ -140,10 +153,14 @@ def test_flag_when_replacement_breaks_settings():
     bad = next(e for e in audit["per_lineup"]
                if e["captain"] == "Javonte Williams")
     _check("beaten lineup whose only winning challenger breaks a "
-           "Max cap is flagged, not replaced",
-           bad["verdict"] == "flagged")
-    _check("the flag names the binding setting",
+           "Max cap ships as-is — cap-blocked domination is a "
+           "non-event, recorded internally as kept_blocked",
+           bad["verdict"] == "kept_blocked")
+    _check("the internal record names the binding setting",
            any("Max Exposure" in d for d in audit["details"]))
+    _check("nothing about the block reaches the user surface",
+           audit["line"] is None and audit["warnings"] == []
+           and "Audit Flag" not in final.columns)
     sets = [{str(r[c]) for c in ("CPT", "FLEX1", "FLEX2", "FLEX3",
                                  "FLEX4", "FLEX5")}
             for _, r in final.iterrows()]
@@ -170,8 +187,10 @@ def test_user_constructed_shape_is_an_override():
     _check("overrides are counted separately",
            audit["counts"]["overrides"] >= 1
            and audit["counts"]["replaced"] == 0)
-    _check("the audit line names the settings carve-out",
-           "by your settings" in audit["line"])
+    _check("the override is silent too: no user-facing line",
+           audit["line"] is None
+           and any("your own construction" in d
+                   for d in audit["details"]))
 
 
 def test_coherence_penalties_and_partial_budget():
@@ -189,9 +208,12 @@ def test_coherence_penalties_and_partial_budget():
     _check("a bare QB flex (no own-team catcher) is a C3 penalty",
            "C3" in by_cpt["CeeDee Lamb"]["checks"]
            and by_cpt["CeeDee Lamb"]["verdict"] == "penalized")
-    _check("a zeroed budget yields partial language, verdicts stand",
-           audit["line"].startswith("Audit: partial")
-           and audit["counts"]["unaudited"] > 0)
+    _check("a zeroed budget records the partial state internally "
+           "(unaudited count, named lineups), verdicts stand, and "
+           "nothing reaches the user surface",
+           audit["ran"] is True and audit["line"] is None
+           and audit["counts"]["unaudited"] > 0
+           and any("not deep-audited" in d for d in audit["details"]))
 
 
 def test_c9_contradictory_requirements():
@@ -219,6 +241,45 @@ def test_c9_contradictory_requirements():
            by_cpt["Brandon Aubrey"]["verdict"] == "clean")
 
 
+def test_c10_stack_and_defense_gets_a_deep_look():
+    pool = _pool()
+    # Baker CPT + all three TB receivers + Bucky (a 5-man TB
+    # offensive stack) sharing the lineup with TB's own DST: the
+    # G1 class from the Oct 28 battery. In the plant's home worlds
+    # (the TB passing spike) the DST is a constant 6.5 while a real
+    # flex piece (Ferguson, 8.5 everywhere) beats it by exactly the
+    # decisive margin — a Tier-2 re-solve must find that, but ONLY
+    # if the structure queues the lineup for a deep look (C10).
+    plant = ("109", ("111", "112", "113", "116", "110"))
+    # Control: a DST in a balanced lineup (no 4+ stack anywhere)
+    # must NOT trip C10.
+    control = ("103", ("100", "104", "110", "114", "116"))
+    result = _delivered(pool, [plant, GOOD, control])
+    final, audit = audit_showdown_set(
+        pool, {}, result, worlds_df=_worlds(pool), sim_frame=pool,
+        settings=_settings(), challengers=[])
+    by_cpt = {e["captain"]: e for e in audit["per_lineup"]}
+    _check("a full offensive stack + a defense trips C10 and is "
+           "deep-audited",
+           "C10" in by_cpt["Baker Mayfield"]["checks"]
+           and by_cpt["Baker Mayfield"]["deep_audited"])
+    _check("the stack-and-defense plant is silently replaced by "
+           "the re-solved construction",
+           by_cpt["Baker Mayfield"]["verdict"] == "replaced")
+    rows = [r for _, r in final.iterrows()
+            if str(r["CPT"]) == "Baker Mayfield"]
+    flex_names = ({str(rows[0][c]) for c in
+                   ("FLEX1", "FLEX2", "FLEX3", "FLEX4", "FLEX5")}
+                  if rows else set())
+    _check("the delivered Baker lineup no longer carries the "
+           "passenger defense",
+           len(rows) == 1 and "TB DST" not in flex_names
+           and "DAL DST" not in flex_names)
+    _check("a defense in a balanced lineup (no 4+ stack) does "
+           "not trip C10",
+           "C10" not in by_cpt["CeeDee Lamb"]["checks"])
+
+
 def test_not_run_is_named():
     pool = _pool()
     result = _delivered(pool, [BAD, GOOD, MID])
@@ -233,9 +294,10 @@ def test_not_run_is_named():
 
 if __name__ == "__main__":
     test_domination_replaces()
-    test_flag_when_replacement_breaks_settings()
+    test_kept_blocked_when_replacement_breaks_settings()
     test_user_constructed_shape_is_an_override()
     test_coherence_penalties_and_partial_budget()
     test_c9_contradictory_requirements()
+    test_c10_stack_and_defense_gets_a_deep_look()
     test_not_run_is_named()
     print("ALL PASS")
