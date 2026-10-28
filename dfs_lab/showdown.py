@@ -920,7 +920,7 @@ def showdown_lineup_details(df, chosen, strategy_map, script, script_team, game_
         "Construction":construction,"Story":story,"Game World":game_world or script,"World Thesis":GAME_WORLDS.get(game_world,{}).get("desc", "Game-script build"),"Strategy Notes":"; ".join(notes) if notes else "Game-script build"
     }
 
-def add_showdown_ratings(out, aggr):
+def add_showdown_ratings(out, aggr, use_world_metrics=False):
     if out.empty: return out
     proj=out["Projection"].rank(pct=True)
     captain=(out["Projection"] - 0.5*out["Salary Left"]/1000).rank(pct=True)
@@ -930,8 +930,32 @@ def add_showdown_ratings(out, aggr):
     dup=(-out["Dup Raw"]).rank(pct=True) if ownership_available else pd.Series(0.5,index=out.index)
     fit=out["User Fit Raw"].rank(pct=True)
     coh=out["Coherence Score"].rank(pct=True) if "Coherence Score" in out.columns else pd.Series(0.5,index=out.index)
-    w_proj=0.30-0.04*aggr; w_cpt=.17; w_corr=.18; w_lev=(.10+.04*aggr) if ownership_available else 0.0; w_dup=(.09+.05*aggr) if ownership_available else 0.0; w_fit=.06; w_coh=.12
-    comp=(w_proj*proj+w_cpt*captain+w_corr*corr+w_lev*lev+w_dup*dup+w_fit*fit+w_coh*coh)/(w_proj+w_cpt+w_corr+w_lev+w_dup+w_fit+w_coh)
+    # WS26 (trust release, Piece 1): when the caller supplies the sim
+    # world metrics (see showdown_lineup_world_metrics), the composite
+    # is anchored on the worlds — Best-of-pool % and Top-decile
+    # presence (the win terms), Ceiling P90 and Sim Mean — plus the
+    # Coherence and User Fit percentiles at their standing weights and
+    # the ownership field terms as-is. Raw adjusted projection and the
+    # correlation heuristic LEAVE the rating: a lineup's standing comes
+    # from the worlds it wins, not from a percentile table of the
+    # projection column inside its own delivered set (the Oct 28
+    # failure: a lineup 9th of its own 20 by sim mean rated #2).
+    _world_cols = ("Best-of-pool %", "Top-decile %", "Ceiling P90",
+                   "Sim Mean")
+    if use_world_metrics and all(c in out.columns for c in _world_cols):
+        w_best=.24; w_top=.24; w_p90=.10; w_mean=.08
+        w_lev=(.10+.04*aggr) if ownership_available else 0.0
+        w_dup=(.09+.05*aggr) if ownership_available else 0.0
+        w_fit=.06; w_coh=.12
+        comp=(w_best*out["Best-of-pool %"].rank(pct=True)
+              +w_top*out["Top-decile %"].rank(pct=True)
+              +w_p90*out["Ceiling P90"].rank(pct=True)
+              +w_mean*out["Sim Mean"].rank(pct=True)
+              +w_lev*lev+w_dup*dup+w_fit*fit+w_coh*coh) \
+            /(w_best+w_top+w_p90+w_mean+w_lev+w_dup+w_fit+w_coh)
+    else:
+        w_proj=0.30-0.04*aggr; w_cpt=.17; w_corr=.18; w_lev=(.10+.04*aggr) if ownership_available else 0.0; w_dup=(.09+.05*aggr) if ownership_available else 0.0; w_fit=.06; w_coh=.12
+        comp=(w_proj*proj+w_cpt*captain+w_corr*corr+w_lev*lev+w_dup*dup+w_fit*fit+w_coh*coh)/(w_proj+w_cpt+w_corr+w_lev+w_dup+w_fit+w_coh)
     rel=comp.rank(pct=True,method="average")
     def grade(p):
         if p>=.95:return "A+"
@@ -1330,7 +1354,7 @@ def _showdown_linkage_breaches(df, ids, skip_teams=()):
 
 
 def select_showdown_portfolio(candidates, df, strategy_map, count,
-                              min_unique=2):
+                              min_unique=2, order_scores=None):
     """Assemble the final `count` lineups from generated candidate rows
     under EXACT exposure accounting against `count`.
 
@@ -1352,6 +1376,14 @@ def select_showdown_portfolio(candidates, df, strategy_map, count,
     in the returned notes. Max caps are never relaxed in any phase.
     Returns (selected_df, notes); with no exposure settings set the
     result is exactly the first `count` candidates in rating order.
+
+    WS26 (trust release): `order_scores`, when given, is a per-candidate
+    preference score aligned with `candidates` rows (the sim world
+    score — see showdown_world_scores). Every phase then prefers
+    candidates in world-score order instead of candidate (rating)
+    order, and the delivered frame is sorted by it. The exposure
+    accounting itself — reserves, caps, repairs, named shortfalls —
+    is identical either way; only the preference order changes.
     """
     count = int(count)
     notes = []
@@ -1364,6 +1396,20 @@ def select_showdown_portfolio(candidates, df, strategy_map, count,
     targets, target_notes = _showdown_exposure_targets(
         df, strategy_map, count)
     notes.extend(target_notes)
+    # Preference order (WS26): identity = the candidates' own order
+    # (rating order, the pre-release behavior); with order_scores the
+    # phases walk candidates best-world-score first and "lowest-rated
+    # selected" in Phase C means lowest world score.
+    _n_cand = len(candidates)
+    if order_scores is not None and len(order_scores) == _n_cand:
+        _scores = [float(x) for x in order_scores]
+        pref = sorted(range(_n_cand), key=lambda i: (-_scores[i], i))
+    else:
+        _scores = None
+        pref = list(range(_n_cand))
+    rankpos = [0] * _n_cand
+    for _pos, _idx in enumerate(pref):
+        rankpos[_idx] = _pos
     slot_cols = ["CPT_ID"] + [f"FLEX{j}_ID" for j in range(1, 6)]
     cand_sets = []
     cand_cpts = []
@@ -1459,7 +1505,7 @@ def select_showdown_portfolio(candidates, df, strategy_map, count,
                 have = cpt_exp[pid] if is_cpt else exposure[pid]
                 while have < want and len(selected) < count:
                     pick = None
-                    for idx in range(len(cand_sets)):
+                    for idx in pref:
                         if idx in used:
                             continue
                         if is_cpt and cand_cpts[idx] != pid:
@@ -1493,8 +1539,8 @@ def select_showdown_portfolio(candidates, df, strategy_map, count,
     # yields only to an otherwise-unfillable request, and the breach
     # is named after the tally below.
     def _fill_repair(allow_dirty):
-        # Phase B — fill in rating order under the caps.
-        for idx in range(len(cand_sets)):
+        # Phase B — fill in preference order under the caps.
+        for idx in pref:
             if len(selected) >= count:
                 break
             if idx not in used and _fits(idx, uniq_cap, allow_dirty):
@@ -1509,7 +1555,7 @@ def select_showdown_portfolio(candidates, df, strategy_map, count,
                 break
             swapped = False
             for pid, is_cpt in deficits:
-                for idx in range(len(cand_sets)):
+                for idx in pref:
                     if idx in used:
                         continue
                     if idx in dirty and not allow_dirty:
@@ -1518,9 +1564,11 @@ def select_showdown_portfolio(candidates, df, strategy_map, count,
                         continue
                     if not is_cpt and pid not in cand_sets[idx]:
                         continue
-                    # Try replacing the lowest-rated selected lineup whose
-                    # removal breaks no minimum of its own.
-                    for prev in sorted(selected, reverse=True):
+                    # Try replacing the lowest-preference selected lineup
+                    # whose removal breaks no minimum of its own.
+                    for prev in sorted(selected,
+                                       key=lambda p: rankpos[p],
+                                       reverse=True):
                         if not is_cpt and pid in cand_sets[prev]:
                             continue
                         removed = cand_sets[prev]
@@ -1558,7 +1606,7 @@ def select_showdown_portfolio(candidates, df, strategy_map, count,
             for mu in range(int(min_unique) - 1, -1, -1):
                 cap = 6 - mu
                 added = False
-                for idx in range(len(cand_sets)):
+                for idx in pref:
                     if len(selected) >= count:
                         break
                     if idx not in used and _fits(idx, cap, allow_dirty):
@@ -1635,7 +1683,12 @@ def select_showdown_portfolio(candidates, df, strategy_map, count,
             f"requested lineups from the generated candidates — "
             f"{cause}.")
     out = candidates.iloc[selected]
-    if "Rating Score" in out.columns:
+    if _scores is not None:
+        out = out.assign(_ws26_order=[_scores[i] for i in selected])
+        out = out.sort_values("_ws26_order", ascending=False,
+                              kind="mergesort")
+        out = out.drop(columns=["_ws26_order"])
+    elif "Rating Score" in out.columns:
         out = out.sort_values("Rating Score", ascending=False,
                               kind="mergesort")
     return out.reset_index(drop=True), list(dict.fromkeys(notes))
@@ -2617,3 +2670,345 @@ def showdown_optimal_rates(worlds_df, df, n_sample=500, seed=7, salary_cap=50000
     return pd.DataFrame({"Name": names,
                          "Optimal %": np.round(100 * opt_hits / denom, 1),
                          "CPT %": np.round(100 * cpt_hits / denom, 1)})
+
+
+# =====================================================================
+# WS26 — Trust release, Piece 1: sim-driven showdown selection.
+#
+# Until Oct 28, 2026 the simulated worlds never entered showdown
+# generation, selection, or rating: candidates came from a MILP on one
+# adjusted-projection vector, selection delivered them in Rating Score
+# order, and the rating was a percentile composite INSIDE the delivered
+# set — so a lineup could rate #2 of 20 while ranking 9th of its own
+# 20 by sim mean and winning almost no worlds (Chris's CAR@GB Lineup
+# 2). The helpers below make the worlds an author and the judge:
+# per-world optimal lineups join the candidate pool, every candidate
+# is scored against the full world set, selection prefers the world
+# score (select_showdown_portfolio's order_scores), and the rating is
+# anchored on world metrics (add_showdown_ratings' use_world_metrics).
+# =====================================================================
+
+#: Enrichment sample: per-world optimal solves drawn from the cached
+#: worlds. A named constant, tuned by measurement (trust-release spec
+#: §1.4): the battery measures the end-to-end build time with this
+#: sample; if the droplet budget (20 lineups ≤ 45 s) fails, the sample
+#: steps down — it is never a hidden behavior.
+SHOWDOWN_WORLD_SAMPLE = 300
+
+
+def showdown_align_worlds(worlds_df, sim_frame, df):
+    """Align a sim worlds frame to another frame's row order.
+
+    `worlds_df` columns are the row positions of `sim_frame` (the
+    frame showdown_simulate_game ran on). Returns an (n_worlds x
+    len(df)) float array whose column j is df row j's simulated FLEX
+    points, matched by player ID (Name fallback), or None when the
+    worlds cannot be aligned (missing players, empty inputs)."""
+    if worlds_df is None or sim_frame is None or df is None:
+        return None
+    if len(worlds_df) == 0 or len(df) == 0 or len(sim_frame) == 0:
+        return None
+    mat = worlds_df.to_numpy(dtype=float)
+    if mat.shape[1] != len(sim_frame):
+        return None
+    if "ID" in sim_frame.columns and "ID" in df.columns:
+        key_sim = [str(x) for x in sim_frame["ID"]]
+        key_df = [str(x) for x in df["ID"]]
+    else:
+        key_sim = [str(x) for x in sim_frame["Name"]]
+        key_df = [str(x) for x in df["Name"]]
+    col_of = {}
+    for k, key in enumerate(key_sim):
+        col_of.setdefault(key, k)
+    keep = []
+    for key in key_df:
+        k = col_of.get(key)
+        if k is None:
+            return None
+        keep.append(k)
+    return mat[:, keep]
+
+
+def showdown_world_optimal_lineups(worlds_mat, df, n_sample=SHOWDOWN_WORLD_SAMPLE,
+                                   seed=7, salary_cap=50000, min_salary=0,
+                                   strategy_map=None, max_k=None,
+                                   max_dst=None):
+    """World-authored candidates: the optimal legal lineup of sampled
+    simulated worlds, as distinct player sets with win counts.
+
+    The solve is showdown_optimal_rates' problem (1 CPT at 1.5x + 5
+    FLEX, salary band) hardened with the build's own legality, the way
+    Classic's _world_optimal_lineups feeds its sim-first generator:
+    the user's excludes and captain pool bind pre-solve, locks bind
+    in-solve, the punt floor's no-role players are unselectable, and
+    the QB-linkage guard's constraint (catchers - 4*QB <= 2 per team,
+    exempt teams skipped) holds — a world may not author a candidate
+    the delivery rules would reject. Returns a list of
+    {"cpt_id", "player_ids" (sorted tuple), "wins"} sorted by wins
+    desc; empty when the inputs cannot support it."""
+    out = []
+    if worlds_mat is None or df is None or len(df) == 0:
+        return out
+    d = df.reset_index(drop=True)
+    smap = strategy_map or {}
+    active_col = (d["ActiveForBuild"].to_numpy(bool)
+                  if "ActiveForBuild" in d.columns
+                  else np.ones(len(d), bool))
+
+    def _excluded(pid):
+        st = smap.get(str(pid), {}) or {}
+        return bool(st.get("Exclude", False)) \
+            or st.get("Priority") == "Exclude"
+
+    no_role = set(_showdown_no_role_players(d, smap))
+    usable = []
+    for pos in range(len(d)):
+        pid = str(d["ID"].iloc[pos])
+        if not bool(active_col[pos]) or _excluded(pid) or pid in no_role:
+            continue
+        usable.append(pos)
+    if len(usable) < 6:
+        return out
+    sub = d.iloc[usable].reset_index(drop=True)
+    n = len(sub)
+    ids = [str(x) for x in sub["ID"]]
+    flex_sal = pd.to_numeric(sub["FlexSalary"], errors="coerce") \
+        .fillna(0).to_numpy(float)
+    cpt_sal = pd.to_numeric(sub.get("CaptainSalary", sub["FlexSalary"] * 1.5),
+                            errors="coerce").fillna(0).to_numpy(float)
+    if strategy_map is not None:
+        pool = set(captain_pool_ids(d, smap))
+        cpt_ok = np.array([pid in pool for pid in ids])
+    elif "CPT?" in sub.columns:
+        cpt_ok = sub["CPT?"].astype(bool).to_numpy()
+    else:
+        cpt_ok = np.ones(n, bool)
+    if not cpt_ok.any():
+        return out
+
+    total = 2 * n
+    rows, lows, highs = [], [], []
+    rows.append({i: 1.0 for i in range(n)}); lows.append(5.0); highs.append(5.0)
+    rows.append({n + i: 1.0 for i in range(n) if cpt_ok[i]})
+    lows.append(1.0); highs.append(1.0)
+    for i in range(n):
+        rows.append({i: 1.0, n + i: 1.0}); lows.append(0.0); highs.append(1.0)
+    rows.append({i: flex_sal[i] for i in range(n)}
+                | {n + i: cpt_sal[i] for i in range(n)})
+    lows.append(float(min_salary)); highs.append(float(salary_cap))
+    # Locks bind in-solve (Classic sim-first semantics): a plain Lock
+    # must appear somewhere; a CPT Lock must captain.
+    for i, pid in enumerate(ids):
+        st = smap.get(pid, {}) or {}
+        if bool(st.get("CPT Lock", False)) and not _excluded(pid):
+            rows.append({n + i: 1.0}); lows.append(1.0); highs.append(1.0)
+        elif bool(st.get("Lock", False)) and not _excluded(pid):
+            rows.append({i: 1.0, n + i: 1.0}); lows.append(1.0); highs.append(1.0)
+    # Both teams represented (the generator's own legality).
+    teams = [str(t) for t in sub["Team"].dropna().unique() if str(t)]
+    if len(teams) == 2:
+        for t in teams:
+            coeff = {}
+            for i in np.where(sub["Team"].astype(str).eq(t).to_numpy())[0]:
+                coeff[int(i)] = 1.0
+                coeff[n + int(i)] = 1.0
+            if coeff:
+                rows.append(coeff); lows.append(1.0); highs.append(5.0)
+    # Position caps when the build carries them.
+    for mask_col, cap in (("is_K", max_k), ("is_DST", max_dst)):
+        if cap is None or mask_col not in sub.columns:
+            continue
+        coeff = {}
+        for i in np.where(sub[mask_col].to_numpy(bool))[0]:
+            coeff[int(i)] = 1.0
+            coeff[n + int(i)] = 1.0
+        if coeff:
+            rows.append(coeff); lows.append(0.0); highs.append(float(cap))
+    # QB-linkage guard in-solve, exempt teams skipped (the guard's own
+    # semantics — see solve_showdown_one).
+    exempt = set(_showdown_qb_linkage_exemptions(d, smap))
+    if "is_passcatcher" in sub.columns and "is_QB" in sub.columns:
+        for t in teams:
+            if t in exempt:
+                continue
+            coeff = {}
+            tm = sub["Team"].astype(str).eq(t).to_numpy()
+            for i in np.where(tm & sub["is_passcatcher"].to_numpy(bool))[0]:
+                coeff[int(i)] = coeff.get(int(i), 0.0) + 1.0
+                coeff[n + int(i)] = coeff.get(n + int(i), 0.0) + 1.0
+            for i in np.where(tm & sub["is_QB"].to_numpy(bool))[0]:
+                coeff[int(i)] = coeff.get(int(i), 0.0) - 4.0
+                coeff[n + int(i)] = coeff.get(n + int(i), 0.0) - 4.0
+            if coeff:
+                rows.append(coeff); lows.append(-np.inf); highs.append(2.0)
+    A = lil_matrix((len(rows), total), dtype=float)
+    for r, coeff in enumerate(rows):
+        for col, val in coeff.items():
+            A[r, col] = val
+    cons = LinearConstraint(A.tocsr(), np.array(lows), np.array(highs))
+    integrality = np.ones(total)
+    # Captain variables outside the captain pool must be hard-zero:
+    # the captain-sum row only spans eligible columns, so without
+    # this the objective parks every ineligible captain variable at
+    # 1 and the extraction check rejects every solve.
+    ub = np.ones(total)
+    ub[n:] = np.where(cpt_ok, 1.0, 0.0)
+    bounds = Bounds(np.zeros(total), ub)
+
+    mat = np.asarray(worlds_mat, dtype=float)
+    if mat.shape[1] != len(d):
+        return out
+    sub_mat = mat[:, usable]
+    rng = np.random.default_rng(int(seed))
+    n_worlds = sub_mat.shape[0]
+    idx = rng.choice(n_worlds, size=min(int(n_sample), n_worlds),
+                     replace=False)
+    wins = {}
+    for w in idx:
+        pts = sub_mat[w]
+        c = np.zeros(total)
+        c[:n] = -pts
+        c[n:] = -1.5 * pts
+        try:
+            res = milp(c=c, constraints=cons, integrality=integrality,
+                       bounds=bounds,
+                       options={"time_limit": 2.0, "presolve": True})
+        except Exception:
+            continue
+        if res.status != 0 or res.x is None:
+            continue
+        x = res.x[:n] > 0.5
+        cc = res.x[n:] > 0.5
+        if x.sum() != 5 or cc.sum() != 1:
+            continue
+        chosen = [ids[i] for i in np.where(x | cc)[0]]
+        cpt_id = ids[int(np.where(cc)[0][0])]
+        key = (cpt_id, tuple(sorted(chosen)))
+        wins[key] = wins.get(key, 0) + 1
+    out = [{"cpt_id": cpt, "player_ids": pids, "wins": int(k)}
+           for (cpt, pids), k in wins.items()]
+    out.sort(key=lambda r: (-r["wins"], r["cpt_id"], r["player_ids"]))
+    return out
+
+
+def showdown_lineup_totals(worlds_mat, df, lineups):
+    """Per-world totals for a set of lineups: (len(lineups) x
+    n_worlds) float array, captain at 1.5x. `lineups` is an iterable
+    of (cpt_id, player_ids) pairs or a result/candidate DataFrame
+    with CPT_ID + FLEX1..5_ID columns."""
+    if worlds_mat is None or df is None or len(df) == 0:
+        return np.zeros((0, 0))
+    d = df.reset_index(drop=True)
+    pos_of = {str(pid): i for i, pid in enumerate(d["ID"])}
+    pairs = _lineup_pairs(lineups)
+    mat = np.asarray(worlds_mat, dtype=float)
+    if mat.shape[1] != len(d) or not pairs:
+        return np.zeros((0, mat.shape[0] if mat.ndim == 2 else 0))
+    totals = np.zeros((len(pairs), mat.shape[0]))
+    for r, (cpt_id, pids) in enumerate(pairs):
+        try:
+            flex = [pos_of[str(p)] for p in pids if str(p) != str(cpt_id)]
+            cpt_pos = pos_of[str(cpt_id)]
+        except KeyError:
+            continue
+        if len(flex) != 5:
+            continue
+        totals[r] = 1.5 * mat[:, cpt_pos] + mat[:, flex].sum(axis=1)
+    return totals
+
+
+def _lineup_pairs(lineups):
+    """Normalize lineup references to [(cpt_id, ids_tuple)]."""
+    pairs = []
+    if lineups is None:
+        return pairs
+    if isinstance(lineups, pd.DataFrame):
+        if "CPT_ID" not in lineups.columns:
+            return pairs
+        cols = ["CPT_ID"] + [f"FLEX{j}_ID" for j in range(1, 6)]
+        for _, row in lineups.iterrows():
+            ids = tuple(str(row[c]) for c in cols)
+            pairs.append((ids[0], ids))
+        return pairs
+    for item in lineups:
+        if isinstance(item, dict):
+            cpt = str(item["cpt_id"])
+            ids = tuple(str(p) for p in item["player_ids"])
+        else:
+            cpt, ids = str(item[0]), tuple(str(p) for p in item[1])
+        if cpt not in ids:
+            ids = (cpt,) + ids
+        pairs.append((cpt, ids))
+    return pairs
+
+
+def showdown_lineup_world_metrics(worlds_mat, df, lineups):
+    """World metrics per lineup, scored against the pool of lineups
+    given (Best-of-pool % is pool-relative by definition — callers
+    pass the full candidate pool for selection/rating, the delivered
+    set + challengers for the audit).
+
+    Columns: Sim Mean, Ceiling P90, Best-of-pool % (share of worlds
+    where the lineup is the pool's highest scorer), Top-decile %
+    (share of worlds where it lands in the pool's top decile that
+    world). All vectorized; sub-second at candidate-pool scale."""
+    pairs = _lineup_pairs(lineups)
+    cols = ["Sim Mean", "Ceiling P90", "Best-of-pool %", "Top-decile %"]
+    if not pairs:
+        return pd.DataFrame(columns=cols)
+    totals = showdown_lineup_totals(worlds_mat, df, pairs)
+    if totals.size == 0 or totals.shape[1] == 0:
+        return pd.DataFrame({c: [0.0] * len(pairs) for c in cols})
+    best = totals.max(axis=0)
+    decile = np.percentile(totals, 90, axis=0)
+    return pd.DataFrame({
+        "Sim Mean": np.round(totals.mean(axis=1), 2),
+        "Ceiling P90": np.round(np.percentile(totals, 90, axis=1), 2),
+        "Best-of-pool %": np.round(
+            100.0 * (totals >= best[None, :] - 1e-9).mean(axis=1), 2),
+        "Top-decile %": np.round(
+            100.0 * (totals >= decile[None, :] - 1e-9).mean(axis=1), 2),
+    })
+
+
+def showdown_world_scores(metrics):
+    """The selection preference score from a metrics frame (spec
+    §1.3): a fixed composite of the two win terms — Best-of-pool %
+    and Top-decile presence, percentile-ranked within the pool —
+    with Sim Mean as the tie-break stratum, never the driver."""
+    if metrics is None or len(metrics) == 0:
+        return np.zeros(0)
+    best = metrics["Best-of-pool %"].rank(pct=True).to_numpy(float)
+    top = metrics["Top-decile %"].rank(pct=True).to_numpy(float)
+    mean = metrics["Sim Mean"].rank(pct=True).to_numpy(float)
+    return 0.5 * best + 0.5 * top + 0.01 * mean
+
+
+def showdown_candidate_row(df, chosen, strategy_map, script, script_team,
+                           game_world=None, exempt_teams=None):
+    """Assemble one full candidate row (the generator's row shape:
+    details + coherence + slot names/IDs) for a chosen lineup given
+    as [(slot, df_position)] over a reset frame — the same assembly
+    generate_showdown_lineups performs inline, exposed for the
+    world-enrichment and audit paths. Returns None when coherence
+    hard-rejects the construction."""
+    d = df.reset_index(drop=True)
+    chosen = [(slot, int(i)) for slot, i in chosen]
+    coherence = showdown_lineup_coherence(
+        d, chosen, game_world, exempt_teams=exempt_teams)
+    if not coherence["Accept"]:
+        return None
+    detail = showdown_lineup_details(d, chosen, strategy_map, script,
+                                     script_team, game_world)
+    detail.update({
+        "Coherence Score": coherence["Coherence Score"],
+        "Lineup Story": coherence["Lineup Story"],
+        "Coherence Flags": coherence["Coherence Flags"],
+    })
+    row = dict(detail)
+    for slot, i in chosen:
+        row[slot] = d.loc[i, "Name"]
+        row[slot + "_ID"] = str(d.loc[i, "ID"])
+        row[slot + "_NameID"] = (d.loc[i, "CPT_NameID"] if slot == "CPT"
+                                 else d.loc[i, "FLEX_NameID"])
+    return row
