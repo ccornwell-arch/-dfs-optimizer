@@ -432,7 +432,8 @@ def solve_showdown_one(
     max_k, max_dst, min_unique, previous_lineups,
     exposure_state=None, cpt_exposure_state=None, built_count=0, noise_scale=0.18,
     relationship_rules=None, forced_overall_ids=None, forced_cpt_ids=None, game_world=None, world_influence=50,
-    qb_exact=None, blocked_ids=None, cpt_blocked_ids=None
+    qb_exact=None, blocked_ids=None, cpt_blocked_ids=None,
+    qb_linkage_exempt_teams=None
 ):
     n = len(df); s = len(SHOWDOWN_SLOTS); total_vars = n*s
     c = np.zeros(total_vars); lb = np.zeros(total_vars); ub = np.ones(total_vars); integrality = np.ones(total_vars)
@@ -603,6 +604,23 @@ def solve_showdown_one(
             for j in range(s): coeff[vidx(i,j)] = 1.0
         if coeff: _add_constraint(rows,lows,highs,coeff,float(qb_exact),float(qb_exact))
 
+    # Flex QB-linkage guard (Oct 28, 2026), enforced in-solve so the
+    # solver never spends attempts on the shape coherence would
+    # reject at delivery: without his QB, a team's pass catchers cap
+    # at 2 in this lineup. Linear form per team: catchers − 4·QBs ≤ 2
+    # (a rostered QB makes the bound 6 — non-binding). Teams the
+    # user's own settings exempt are skipped; his locks construct
+    # their shape and are delivered with the override named instead.
+    _link_exempt = {str(t) for t in (qb_linkage_exempt_teams or ())}
+    for t in teams:
+        if str(t) in _link_exempt: continue
+        coeff={}
+        for i in df.index[df["Team"].eq(t) & df["is_passcatcher"]]:
+            for j in range(s): coeff[vidx(i,j)] = coeff.get(vidx(i,j),0)+1.0
+        for i in df.index[df["Team"].eq(t) & df["is_QB"]]:
+            for j in range(s): coeff[vidx(i,j)] = coeff.get(vidx(i,j),0)-4.0
+        if coeff: _add_constraint(rows,lows,highs,coeff,-np.inf,2.0)
+
     # Captain-specific correlation rules. Use randomized enforcement for percentage-based rules.
     for cpt in df.index[df["ActiveForBuild"]]:
         r=df.loc[cpt]
@@ -730,7 +748,7 @@ def solve_showdown_one(
         return None
     return chosen
 
-def showdown_lineup_coherence(df, chosen, game_world=None):
+def showdown_lineup_coherence(df, chosen, game_world=None, exempt_teams=None):
     """Reject Showdown constructions that are legal on DK but contradict their own football story."""
     slot_map={slot:i for slot,i in chosen}
     idxs=[i for _,i in chosen]
@@ -756,6 +774,42 @@ def showdown_lineup_coherence(df, chosen, game_world=None):
             hard.append(f"{dst['Name']} at Captain conflicts with three or more opposing offensive players.")
         elif len(opp_off)>=3:
             score-=18; warnings.append(f"{dst['Name']} needs to survive three opposing offensive pieces")
+
+    # Flex-level QB linkage (Oct 28, 2026): the captain-slot checks
+    # below never looked at FLEX pass catchers, so a lineup could
+    # carry three Carolina receivers with no Bryce Young and still
+    # freeze as "Coherence 100.0 — no contradictions." A team's pass
+    # catchers can't all get there without the quarterback who feeds
+    # them: 3+ catchers from one team with no QB from that team
+    # anywhere in the lineup is a hard contradiction. Exactly 2 is a
+    # legitimate construction — it costs a named penalty only. Teams
+    # the user's own settings exempt (his locks / exclusions
+    # construct the shape — see _showdown_qb_linkage_exemptions)
+    # are delivered with the reason named, never silently blocked
+    # and never scored as clean.
+    _exempt = exempt_teams or {}
+    for team in sorted({str(t) for t in p["Team"].astype(str)}):
+        tp = p[p["Team"].astype(str).eq(team)]
+        n_pc = int(tp["is_passcatcher"].sum())
+        if n_pc < 2 or bool(tp["is_QB"].any()):
+            continue
+        qb_name = _showdown_team_qb_name(df, team)
+        qb_txt = qb_name or "their quarterback"
+        if n_pc >= 3:
+            if team in _exempt:
+                score -= 40
+                warnings.append(
+                    f"{n_pc} {team} pass catchers without {qb_txt} — "
+                    f"delivered because {_exempt[team]}")
+            else:
+                score -= 40
+                hard.append(
+                    f"{n_pc} {team} pass catchers without {qb_txt} — "
+                    f"a team's pass catchers can't all get there "
+                    f"without their quarterback")
+        else:
+            score -= 8
+            warnings.append(f"2 {team} pass catchers without {qb_txt}")
 
     cfg=GAME_WORLDS.get(game_world,{})
     fam=cfg.get("family")
@@ -1151,6 +1205,130 @@ def _punt_floor_notes(no_role, counts, delivered_n):
     return notes
 
 
+def _showdown_team_qb_name(df, team):
+    """The name the QB-linkage guard speaks for a team's quarterback:
+    the highest-projected QB of that team in the pool."""
+    qbs = df[df["Team"].astype(str).eq(str(team)) & df["is_QB"]]
+    if qbs.empty:
+        return None
+    if "My Proj" in qbs.columns:
+        qbs = qbs.sort_values("My Proj", ascending=False, kind="mergesort")
+    return str(qbs.iloc[0]["Name"])
+
+
+def _showdown_qb_linkage_exemptions(df, strategy_map):
+    """Teams exempt from the flex QB-linkage guard because the USER's
+    own explicit settings construct the no-QB pass-catcher shape
+    (Chris's standing rule: his settings outrank the guard, exactly
+    as his endorsements outrank the punt floor).
+
+    Returns {team: reason}, where reason completes the sentence
+    "...delivered because <reason>" in the coherence flag and the
+    build warning. A team is exempt when:
+      - 3+ of its pass catchers are Locked / CPT Locked — his locks
+        alone put 3+ of that team's catchers into every lineup; or
+      - every QB on the team is excluded in his rules (or inactive)
+        while at least one of its pass catchers carries his
+        endorsement (Lock / CPT Lock / Like / Core / a minimum) —
+        he benched the quarterback and backed the receivers himself.
+    A bare QB exclusion with NO catcher endorsement is not an
+    exemption: the guard still caps that team's catchers at 2 per
+    lineup, which fights nothing he asked for.
+    """
+    exempt = {}
+    if df is None or len(df) == 0:
+        return exempt
+    smap = strategy_map or {}
+    active_col = (df["ActiveForBuild"].to_numpy(bool)
+                  if "ActiveForBuild" in df.columns else [True] * len(df))
+    df = df.assign(_active=list(active_col))
+
+    def _strat(pid):
+        return smap.get(str(pid), {}) or {}
+
+    def _excluded(pid):
+        st = _strat(pid)
+        return bool(st.get("Exclude", False)) \
+            or st.get("Priority") == "Exclude"
+
+    def _locked(pid):
+        st = _strat(pid)
+        return (bool(st.get("Lock", False))
+                or bool(st.get("CPT Lock", False))) and not _excluded(pid)
+
+    def _endorsed(pid):
+        st = _strat(pid)
+        if _excluded(pid):
+            return False
+        return (_locked(pid) or st.get("Priority") in ("Like", "Core")
+                or float(st.get("Min Exposure", 0) or 0) > 0
+                or float(st.get("CPT Min", 0) or 0) > 0)
+
+    for team in sorted({str(t) for t in df["Team"].dropna().unique()}):
+        tdf = df[df["Team"].astype(str).eq(team)]
+        pcs = tdf[tdf["is_passcatcher"]]
+        if pcs.empty:
+            continue
+        locked_pcs = [str(r["Name"]) for _, r in pcs.iterrows()
+                      if _locked(r["ID"])]
+        if len(locked_pcs) >= 3:
+            named = ", ".join(locked_pcs[:3])
+            if len(locked_pcs) > 3:
+                named += f" and {len(locked_pcs) - 3} more"
+            exempt[team] = (f"you locked {len(locked_pcs)} {team} pass "
+                            f"catchers ({named})")
+            continue
+        qbs = tdf[tdf["is_QB"]]
+        if qbs.empty:
+            continue
+        qb_usable = any(bool(r["_active"]) and not _excluded(r["ID"])
+                        for _, r in qbs.iterrows())
+        qb_ruled_out = any(_excluded(r["ID"]) or not bool(r["_active"])
+                           for _, r in qbs.iterrows())
+        endorsed_pcs = [str(r["Name"]) for _, r in pcs.iterrows()
+                        if _endorsed(r["ID"])]
+        if not qb_usable and qb_ruled_out and endorsed_pcs:
+            qb_name = _showdown_team_qb_name(df, team) or "the quarterback"
+            exempt[team] = (f"{qb_name} is ruled out in your settings "
+                            f"while you backed {team} pass catchers "
+                            f"({', '.join(endorsed_pcs[:3])})")
+    return exempt
+
+
+def _showdown_linkage_breaches(df, ids, skip_teams=()):
+    """[(team, n_catchers, qb_name)] for one lineup given as player
+    IDs: the guarded shape — 3+ pass catchers from one team with no
+    QB from that team anywhere in the lineup (the captain counts
+    toward his team like any other slot). Teams in skip_teams (the
+    user's own settings construct their shape) are not reported."""
+    if df is None or len(df) == 0:
+        return []
+    team_of, pc_of, qb_of = {}, {}, {}
+    for _, r in df.iterrows():
+        pid = str(r["ID"])
+        team_of[pid] = str(r["Team"])
+        pc_of[pid] = bool(r["is_passcatcher"])
+        qb_of[pid] = bool(r["is_QB"])
+    skip = {str(t) for t in (skip_teams or ())}
+    per_team = {}
+    for pid in ids:
+        t = team_of.get(str(pid))
+        if t is None or t in skip:
+            continue
+        cell = per_team.setdefault(t, [0, False])
+        if pc_of.get(str(pid)):
+            cell[0] += 1
+        if qb_of.get(str(pid)):
+            cell[1] = True
+    out = []
+    for team in sorted(per_team):
+        n_pc, has_qb = per_team[team]
+        if n_pc >= 3 and not has_qb:
+            out.append((team, n_pc,
+                        _showdown_team_qb_name(df, team)))
+    return out
+
+
 def select_showdown_portfolio(candidates, df, strategy_map, count,
                               min_unique=2):
     """Assemble the final `count` lineups from generated candidate rows
@@ -1207,6 +1385,23 @@ def select_showdown_portfolio(candidates, df, strategy_map, count,
     if no_role:
         _nr = set(no_role)
         dirty = {i for i, ids in enumerate(cand_sets) if _nr & set(ids)}
+
+    # QB-linkage guard at selection (Oct 28, 2026): a candidate
+    # carrying 3+ pass catchers from one team without that team's QB
+    # is last-resort on the same terms as a punt-floor breach. The
+    # generator already rejects the shape in-solve and at coherence,
+    # so this only bites for candidates that arrived by another
+    # route; any delivered anyway are named after the tally. Teams
+    # the user's own settings exempt are not breaches here — their
+    # override is named by the generator's build notes.
+    guard_breach = {}
+    _guard_exempt_sel = _showdown_qb_linkage_exemptions(df, strategy_map)
+    for _i, _ids in enumerate(cand_sets):
+        _b = _showdown_linkage_breaches(
+            df, _ids, skip_teams=set(_guard_exempt_sel))
+        if _b:
+            guard_breach[_i] = _b
+            dirty.add(_i)
 
     def _fits(idx, uniq_cap, allow_dirty=False):
         ids = cand_sets[idx]
@@ -1395,6 +1590,17 @@ def select_showdown_portfolio(candidates, df, strategy_map, count,
                 f"generated candidates under your other rules ran out.")
     if no_role:
         notes.extend(_punt_floor_notes(no_role, exposure, len(selected)))
+    if guard_breach:
+        _gb = {}
+        for _idx in selected:
+            for _t, _n, _qn in guard_breach.get(_idx, []):
+                _gb[(_t, _qn)] = _gb.get((_t, _qn), 0) + 1
+        for (_t, _qn), _k in sorted(_gb.items()):
+            notes.append(
+                f"QB-linkage guard breached: {_k} of {len(selected)} "
+                f"delivered lineups carry 3 or more {_t} pass catchers "
+                f"without {_qn or 'their quarterback'} because the "
+                f"requested set could not be filled without them.")
     if len(selected) < count:
         _cpt_lock_name = None
         for _pid, _st in (strategy_map or {}).items():
@@ -1475,6 +1681,14 @@ def generate_showdown_lineups(df, field_size, payout_style, count, attempts, min
     # no-role player the delivered rows actually use is named.
     no_role = _showdown_no_role_players(df, strategy_map)
     no_role_ids = set(no_role)
+
+    # Flex QB-linkage guard (Oct 28, 2026): 3+ pass catchers from one
+    # team without that team's QB is a hard incoherence — blocked
+    # in-solve and rejected by coherence at delivery. Teams the
+    # user's own settings exempt (his locks / QB exclusions
+    # construct the shape) skip both enforcements; delivered exempt
+    # shapes are named in the build notes after the tally.
+    guard_exempt = _showdown_qb_linkage_exemptions(df, strategy_map)
 
     # Locked-captain candidate supply (Oct 27, 2026): with a captain
     # locked, the per-world solves converge on the same sim-optimal
@@ -1649,7 +1863,8 @@ def generate_showdown_lineups(df, field_size, payout_style, count, attempts, min
                 min_unique,previous,exposure,cpt_exp,len(rows),noise_scale=solve_noise,
                 relationship_rules=relationship_rules,forced_overall_ids=forced_overall,
                 forced_cpt_ids=forced_cpt,game_world=game_world,world_influence=world_influence,
-                qb_exact=qb_exact,blocked_ids=solve_blocked,cpt_blocked_ids=cpt_blocked
+                qb_exact=qb_exact,blocked_ids=solve_blocked,cpt_blocked_ids=cpt_blocked,
+                qb_linkage_exempt_teams=set(guard_exempt)
             )
             if chosen:
                 break
@@ -1674,7 +1889,8 @@ def generate_showdown_lineups(df, field_size, payout_style, count, attempts, min
             if slot=="CPT" and cpt_exp[pid]+1>tgt["cpt_max"]: reject=True; break
         if reject: continue
 
-        coherence=showdown_lineup_coherence(df,chosen,game_world)
+        coherence=showdown_lineup_coherence(df,chosen,game_world,
+                                            exempt_teams=guard_exempt)
         if not coherence["Accept"]:
             continue
 
@@ -1750,7 +1966,8 @@ def generate_showdown_lineups(df, field_size, payout_style, count, attempts, min
                 mu,previous,exposure,cpt_exp,len(rows),noise_scale=f_noise,
                 relationship_rules=relationship_rules,forced_overall_ids=f_overall,
                 forced_cpt_ids=f_cpt,game_world=game_world,world_influence=world_influence,
-                qb_exact=qb_exact,blocked_ids=f_blocked,cpt_blocked_ids=cpt_blocked
+                qb_exact=qb_exact,blocked_ids=f_blocked,cpt_blocked_ids=cpt_blocked,
+                qb_linkage_exempt_teams=set(guard_exempt)
             )
             if chosen:
                 break
@@ -1765,7 +1982,8 @@ def generate_showdown_lineups(df, field_size, payout_style, count, attempts, min
             if tgt is None: continue
             if exposure[pid]+1>tgt["max"]: return False
             if slot=="CPT" and cpt_exp[pid]+1>tgt["cpt_max"]: return False
-        coherence=showdown_lineup_coherence(df,chosen,game_world)
+        coherence=showdown_lineup_coherence(df,chosen,game_world,
+                                            exempt_teams=guard_exempt)
         if not coherence["Accept"]:
             return False
         seen.add(key)
@@ -1886,7 +2104,8 @@ def generate_showdown_lineups(df, field_size, payout_style, count, attempts, min
     def _apply_change(k, new_indices):
         chosen=[(slot,new_indices[j]) for j,slot in enumerate(SHOWDOWN_SLOTS)]
         world=rows[k].get("Game World")
-        coherence=showdown_lineup_coherence(df,chosen,world)
+        coherence=showdown_lineup_coherence(df,chosen,world,
+                                            exempt_teams=guard_exempt)
         if not coherence["Accept"]:
             return False
         old_ids=[id_by_index[i] for i in previous[k]]
@@ -1981,6 +2200,24 @@ def generate_showdown_lineups(df, field_size, payout_style, count, attempts, min
                     _used_nr[_pid] = _used_nr.get(_pid, 0) + 1
         build_notes.extend(
             _punt_floor_notes(no_role, _used_nr, len(rows)))
+    if guard_exempt and rows:
+        # His settings outrank the QB-linkage guard — but an exempt
+        # shape that actually shipped is named, never silent.
+        _ovr = {}
+        for r in rows:
+            _ids = [str(r.get(_c, "")) for _c in
+                    ("CPT_ID", "FLEX1_ID", "FLEX2_ID", "FLEX3_ID",
+                     "FLEX4_ID", "FLEX5_ID")]
+            for _t, _n, _qn in _showdown_linkage_breaches(df, _ids):
+                if _t in guard_exempt:
+                    _ovr[_t] = _ovr.get(_t, 0) + 1
+        for _t in sorted(_ovr):
+            _qn = _showdown_team_qb_name(df, _t) or "their quarterback"
+            build_notes.append(
+                f"QB-linkage guard overridden by your settings: "
+                f"{_ovr[_t]} of {len(rows)} lineups carry 3+ {_t} "
+                f"pass catchers without {_qn} — delivered because "
+                f"{guard_exempt[_t]}.")
     for pid,tgt in targets.items():
         if tgt["min"]>0 and exposure[pid]<tgt["min"]:
             build_notes.append(
