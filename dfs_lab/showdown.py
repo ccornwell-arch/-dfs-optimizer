@@ -1065,6 +1065,92 @@ def _showdown_exposure_targets(df, strategy_map, count):
     return targets, notes
 
 
+def _showdown_no_role_players(df, strategy_map):
+    """Punt-eligibility floor (Chris's standing rule, Oct 25 2026): a
+    punt is a player with a real route/target role, not the cheapest
+    body in the pool — a zero-target blocker or a long snapper listed
+    at TE is a mannequin, not value (the Kallerup/Winchester lesson).
+
+    Returns {pid: {"name", "proj", "opp"}} for ACTIVE skill-position
+    players whose role is effectively zero: expected opportunities
+    (Exp Tgt + Exp Car, + Exp Att for QBs — the role columns the
+    projection engine writes) under 1.0 per game AND a standing
+    projection under 2.0. When the pool carries no Exp columns
+    (SaberSim-fed frames), the projection alone decides, at a tighter
+    under-1.0 bar. Kickers and defenses are exempt — their role is the
+    position itself. The floor judges "My Proj" (the standing
+    projection), never the scenario-tilted one.
+
+    A player the user explicitly endorsed is NEVER in the set — his
+    call beats the rule: Lock / CPT Lock, Priority Like or Core, or a
+    Min Exposure / CPT Min above zero.
+    """
+    info = {}
+    if df is None or len(df) == 0:
+        return info
+    have_exp = all(c in df.columns for c in ("Exp Tgt", "Exp Car"))
+    active_col = (df["ActiveForBuild"].to_numpy(bool)
+                  if "ActiveForBuild" in df.columns else [True] * len(df))
+    for pos, (_, r) in enumerate(df.iterrows()):
+        if not bool(active_col[pos]):
+            continue
+        if str(r.get("Position", "")).upper() in ("K", "DST"):
+            continue
+        pid = str(r["ID"])
+        strat = (strategy_map or {}).get(pid, {}) or {}
+        if bool(strat.get("Lock", False)) or bool(strat.get("CPT Lock", False)):
+            continue
+        if str(strat.get("Priority", "Neutral")) in ("Like", "Core"):
+            continue
+        if float(strat.get("Min Exposure", 0) or 0) > 0:
+            continue
+        if float(strat.get("CPT Min", 0) or 0) > 0:
+            continue
+        try:
+            proj = float(r.get("My Proj"))
+        except (TypeError, ValueError):
+            continue
+        opp = None
+        if have_exp:
+            def _exp(col):
+                try:
+                    return float(r.get(col) or 0)
+                except (TypeError, ValueError):
+                    return 0.0
+            opp = _exp("Exp Tgt") + _exp("Exp Car")
+            if str(r.get("Position", "")).upper() == "QB":
+                opp += _exp("Exp Att")
+            no_role = opp < 1.0 and proj < 2.0
+        else:
+            no_role = proj < 1.0
+        if no_role:
+            info[pid] = {"name": str(r.get("Name", pid)), "proj": proj,
+                         "opp": opp}
+    return info
+
+
+def _punt_floor_notes(no_role, counts, delivered_n):
+    """One named warning per no-role player a delivered set actually
+    used — the floor was breached only because the requested set could
+    not be filled without him."""
+    notes = []
+    for pid, meta in no_role.items():
+        used = int(counts.get(pid, 0))
+        if used <= 0:
+            continue
+        if meta["opp"] is None:
+            detail = f"projection {meta['proj']:.2f}"
+        else:
+            detail = (f"projection {meta['proj']:.2f}, "
+                      f"~{meta['opp']:.1f} opportunities/game")
+        notes.append(
+            f"Punt floor breached: {meta['name']} has no measurable "
+            f"role ({detail}) and was used in {used} of {delivered_n} "
+            f"lineups because the requested set could not be filled "
+            f"without him.")
+    return notes
+
+
 def select_showdown_portfolio(candidates, df, strategy_map, count,
                               min_unique=2):
     """Assemble the final `count` lineups from generated candidate rows
@@ -1111,9 +1197,22 @@ def select_showdown_portfolio(candidates, df, strategy_map, count,
     selected = []
     used = set()
 
-    def _fits(idx, uniq_cap):
+    # Punt floor at selection (see _showdown_no_role_players): a
+    # candidate carrying a no-role player is last-resort — every phase
+    # fills from clean candidates first, and the dirty pass runs only
+    # when the requested count or a minimum cannot be reached without
+    # them. Breaches in the DELIVERED set are named after the tally.
+    no_role = _showdown_no_role_players(df, strategy_map)
+    dirty = set()
+    if no_role:
+        _nr = set(no_role)
+        dirty = {i for i, ids in enumerate(cand_sets) if _nr & set(ids)}
+
+    def _fits(idx, uniq_cap, allow_dirty=False):
         ids = cand_sets[idx]
         if len(set(ids)) != 6:
+            return False
+        if idx in dirty and not allow_dirty:
             return False
         for pid in ids:
             tgt = targets.get(pid)
@@ -1145,118 +1244,142 @@ def select_showdown_portfolio(candidates, df, strategy_map, count,
     uniq_cap = 6 - int(min_unique)
     # Phase A — reserve minimums (largest deficit first, recomputed as
     # picks land; a candidate may serve two minimums at once).
-    while len(selected) < count:
-        deficits = []
-        for pid, tgt in targets.items():
-            if tgt["min"] > exposure[pid]:
-                deficits.append((tgt["min"] - exposure[pid], pid, False))
-            if tgt["cpt_min"] > cpt_exp[pid]:
-                deficits.append((tgt["cpt_min"] - cpt_exp[pid], pid, True))
-        if not deficits:
-            break
-        deficits.sort(key=lambda d: (-d[0], targets[d[1]]["name"]))
-        progressed = False
-        for _, pid, is_cpt in deficits:
+    def _phase_a(allow_dirty):
+        while len(selected) < count:
+            deficits = []
+            for pid, tgt in targets.items():
+                if tgt["min"] > exposure[pid]:
+                    deficits.append((tgt["min"] - exposure[pid], pid, False))
+                if tgt["cpt_min"] > cpt_exp[pid]:
+                    deficits.append((tgt["cpt_min"] - cpt_exp[pid], pid, True))
+            if not deficits:
+                break
+            deficits.sort(key=lambda d: (-d[0], targets[d[1]]["name"]))
+            progressed = False
+            for _, pid, is_cpt in deficits:
+                if len(selected) >= count:
+                    break
+                want = (targets[pid]["cpt_min"] if is_cpt
+                        else targets[pid]["min"])
+                have = cpt_exp[pid] if is_cpt else exposure[pid]
+                while have < want and len(selected) < count:
+                    pick = None
+                    for idx in range(len(cand_sets)):
+                        if idx in used:
+                            continue
+                        if is_cpt and cand_cpts[idx] != pid:
+                            continue
+                        if not is_cpt and pid not in cand_sets[idx]:
+                            continue
+                        if _fits(idx, uniq_cap, allow_dirty):
+                            pick = idx
+                            break
+                    if pick is None:
+                        break
+                    _take(pick)
+                    progressed = True
+                    have = cpt_exp[pid] if is_cpt else exposure[pid]
+            if not progressed:
+                break
+
+    def _mins_unmet():
+        return any(tgt["min"] > exposure[pid]
+                   or tgt["cpt_min"] > cpt_exp[pid]
+                   for pid, tgt in targets.items())
+
+    _phase_a(False)
+    if dirty and len(selected) < count and _mins_unmet():
+        # An explicit minimum outranks the punt floor (same principle
+        # as an endorsement): admit dirty candidates to reserve it.
+        _phase_a(True)
+    # Phases B–D run clean first; if the portfolio is still short or
+    # a minimum is still unmet afterwards, they run once more with
+    # dirty (no-role-carrying) candidates admitted — the punt floor
+    # yields only to an otherwise-unfillable request, and the breach
+    # is named after the tally below.
+    def _fill_repair(allow_dirty):
+        # Phase B — fill in rating order under the caps.
+        for idx in range(len(cand_sets)):
             if len(selected) >= count:
                 break
-            want = (targets[pid]["cpt_min"] if is_cpt
-                    else targets[pid]["min"])
-            have = cpt_exp[pid] if is_cpt else exposure[pid]
-            while have < want and len(selected) < count:
-                pick = None
+            if idx not in used and _fits(idx, uniq_cap, allow_dirty):
+                _take(idx)
+        # Phase C — repair unmet minimums by swapping whole candidates.
+        for _ in range(60):
+            deficits = [(pid, False) for pid, tgt in targets.items()
+                        if tgt["min"] > exposure[pid]]
+            deficits += [(pid, True) for pid, tgt in targets.items()
+                         if tgt["cpt_min"] > cpt_exp[pid]]
+            if not deficits or not selected:
+                break
+            swapped = False
+            for pid, is_cpt in deficits:
                 for idx in range(len(cand_sets)):
                     if idx in used:
+                        continue
+                    if idx in dirty and not allow_dirty:
                         continue
                     if is_cpt and cand_cpts[idx] != pid:
                         continue
                     if not is_cpt and pid not in cand_sets[idx]:
                         continue
-                    if _fits(idx, uniq_cap):
-                        pick = idx
-                        break
-                if pick is None:
-                    break
-                _take(pick)
-                progressed = True
-                have = cpt_exp[pid] if is_cpt else exposure[pid]
-        if not progressed:
-            break
-    # Phase B — fill in rating order under the caps.
-    for idx in range(len(cand_sets)):
-        if len(selected) >= count:
-            break
-        if idx not in used and _fits(idx, uniq_cap):
-            _take(idx)
-    # Phase C — repair unmet minimums by swapping whole candidates.
-    for _ in range(60):
-        deficits = [(pid, False) for pid, tgt in targets.items()
-                    if tgt["min"] > exposure[pid]]
-        deficits += [(pid, True) for pid, tgt in targets.items()
-                     if tgt["cpt_min"] > cpt_exp[pid]]
-        if not deficits or not selected:
-            break
-        swapped = False
-        for pid, is_cpt in deficits:
-            for idx in range(len(cand_sets)):
-                if idx in used:
-                    continue
-                if is_cpt and cand_cpts[idx] != pid:
-                    continue
-                if not is_cpt and pid not in cand_sets[idx]:
-                    continue
-                # Try replacing the lowest-rated selected lineup whose
-                # removal breaks no minimum of its own.
-                for prev in sorted(selected, reverse=True):
-                    if not is_cpt and pid in cand_sets[prev]:
-                        continue
-                    removed = cand_sets[prev]
-                    ok = True
-                    for q in set(removed):
-                        if q == pid:
+                    # Try replacing the lowest-rated selected lineup whose
+                    # removal breaks no minimum of its own.
+                    for prev in sorted(selected, reverse=True):
+                        if not is_cpt and pid in cand_sets[prev]:
                             continue
-                        qt = targets.get(q)
-                        if qt is not None \
-                                and exposure[q] - 1 < qt["min"]:
-                            ok = False
+                        removed = cand_sets[prev]
+                        ok = True
+                        for q in set(removed):
+                            if q == pid:
+                                continue
+                            qt = targets.get(q)
+                            if qt is not None \
+                                    and exposure[q] - 1 < qt["min"]:
+                                ok = False
+                                break
+                        if ok:
+                            qc = cand_cpts[prev]
+                            qt = targets.get(qc)
+                            if qt is not None \
+                                    and cpt_exp[qc] - 1 < qt["cpt_min"]:
+                                ok = False
+                        if not ok:
+                            continue
+                        _drop(prev)
+                        if _fits(idx, uniq_cap, allow_dirty):
+                            _take(idx)
+                            swapped = True
                             break
-                    if ok:
-                        qc = cand_cpts[prev]
-                        qt = targets.get(qc)
-                        if qt is not None \
-                                and cpt_exp[qc] - 1 < qt["cpt_min"]:
-                            ok = False
-                    if not ok:
-                        continue
-                    _drop(prev)
-                    if _fits(idx, uniq_cap):
-                        _take(idx)
-                        swapped = True
+                        _take(prev)
+                    if swapped:
                         break
-                    _take(prev)
                 if swapped:
                     break
-            if swapped:
+            if not swapped:
                 break
-        if not swapped:
-            break
-    # Phase D — uniqueness step-down fill (announced), caps untouched.
-    if len(selected) < count and int(min_unique) > 0:
-        for mu in range(int(min_unique) - 1, -1, -1):
-            cap = 6 - mu
-            added = False
-            for idx in range(len(cand_sets)):
+        # Phase D — uniqueness step-down fill (announced), caps untouched.
+        if len(selected) < count and int(min_unique) > 0:
+            for mu in range(int(min_unique) - 1, -1, -1):
+                cap = 6 - mu
+                added = False
+                for idx in range(len(cand_sets)):
+                    if len(selected) >= count:
+                        break
+                    if idx not in used and _fits(idx, cap, allow_dirty):
+                        _take(idx)
+                        added = True
+                if added:
+                    notes.append(
+                        f"Uniqueness relaxed from {int(min_unique)} to {mu} "
+                        f"while assembling the portfolio to reach {count} "
+                        f"lineups under your exposure rules.")
                 if len(selected) >= count:
                     break
-                if idx not in used and _fits(idx, cap):
-                    _take(idx)
-                    added = True
-            if added:
-                notes.append(
-                    f"Uniqueness relaxed from {int(min_unique)} to {mu} "
-                    f"while assembling the portfolio to reach {count} "
-                    f"lineups under your exposure rules.")
-            if len(selected) >= count:
-                break
+
+    _fill_repair(False)
+    if dirty and (len(selected) < count or _mins_unmet()):
+        _fill_repair(True)
     for pid, tgt in targets.items():
         if tgt["min"] > exposure[pid]:
             notes.append(
@@ -1270,7 +1393,16 @@ def select_showdown_portfolio(candidates, df, strategy_map, count,
                 f"{_pct_label(tgt['cpt_min_pct'])}% ({tgt['cpt_min']} of "
                 f"{count}) at captain, reached {cpt_exp[pid]} — the "
                 f"generated candidates under your other rules ran out.")
+    if no_role:
+        notes.extend(_punt_floor_notes(no_role, exposure, len(selected)))
     if len(selected) < count:
+        _cpt_lock_name = None
+        for _pid, _st in (strategy_map or {}).items():
+            if isinstance(_st, dict) and _st.get("CPT Lock") \
+                    and not _st.get("Exclude"):
+                _tgt = targets.get(str(_pid))
+                _cpt_lock_name = (_tgt or {}).get("name") or str(_pid)
+                break
         capped = sorted(
             (tgt for tgt in targets.values()
              if tgt["usable"] and tgt["max"] < count),
@@ -1281,6 +1413,10 @@ def select_showdown_portfolio(candidates, df, strategy_map, count,
                      f"{capped[0]['name']} at "
                      f"{_pct_label(capped[0]['max_pct'])}%) and the "
                      f"candidate supply under those caps ran out")
+        elif _cpt_lock_name:
+            cause = (f"with {_cpt_lock_name} locked at captain, the "
+                     f"legal-lineup supply under your other rules "
+                     f"ran out")
         elif capped:
             cause = (f"exposure caps bind on {len(capped)} players "
                      f"(tightest: {capped[0]['name']} at "
@@ -1296,7 +1432,7 @@ def select_showdown_portfolio(candidates, df, strategy_map, count,
     if "Rating Score" in out.columns:
         out = out.sort_values("Rating Score", ascending=False,
                               kind="mergesort")
-    return out.reset_index(drop=True), notes
+    return out.reset_index(drop=True), list(dict.fromkeys(notes))
 
 
 def generate_showdown_lineups(df, field_size, payout_style, count, attempts, min_salary, max_salary,
@@ -1332,6 +1468,109 @@ def generate_showdown_lineups(df, field_size, payout_style, count, attempts, min
     # target still unmet at the end is reported in
     # out.attrs["showdown_notes"] instead of passing silently.
     targets, build_notes = _showdown_exposure_targets(df, strategy_map, count)
+
+    # Punt-eligibility floor (Oct 27, 2026): no-role players are
+    # blocked in-solve everywhere below; only the dedicated breach
+    # fills after the uniqueness ladder may admit them, and every
+    # no-role player the delivered rows actually use is named.
+    no_role = _showdown_no_role_players(df, strategy_map)
+    no_role_ids = set(no_role)
+
+    # Locked-captain candidate supply (Oct 27, 2026): with a captain
+    # locked, the per-world solves converge on the same sim-optimal
+    # flex cores and the distinct-lineup supply starves long before
+    # the legal supply runs out (break-it T10 follow-up: a $5,400
+    # captain lock yielded 10 of 60 candidates against 585 legal
+    # sets). When a build with a CPT Lock stalls, solves escalate —
+    # hotter objective noise first, then small random bans on the
+    # flex players the accepted lineups lean on hardest — until
+    # generation unsticks. Locks, the locked captain, and players
+    # with tail-due minimums are never banned. Non-locked builds
+    # never perturb: this fires only in supply mode, only on stall.
+    _smap = strategy_map or {}
+    cpt_locked_ids = {str(pid) for pid, st in _smap.items()
+                      if isinstance(st, dict) and bool(st.get("CPT Lock"))}
+    locked_ids = {str(pid) for pid, st in _smap.items()
+                  if isinstance(st, dict) and bool(st.get("Lock"))}
+    supply_mode = bool(cpt_locked_ids)
+    base_noise = .14 + .13 * aggr
+
+    _band_cache = []
+
+    def _flex_band():
+        """(cpt_salary, [(pid, flex_salary) desc]) for the locked
+        captain, computed once — the salary-band guard for bans."""
+        if _band_cache:
+            return _band_cache
+        cpt_sal = 0
+        band = []
+        _act = (df["ActiveForBuild"].to_numpy(bool)
+                if "ActiveForBuild" in df.columns else [True] * len(df))
+        for _pos, (_, _r) in enumerate(df.iterrows()):
+            if not bool(_act[_pos]):
+                continue
+            _pid = str(_r["ID"])
+            if _pid in cpt_locked_ids:
+                cpt_sal = max(cpt_sal, int(_r["CaptainSalary"]))
+                continue
+            band.append((_pid, int(_r["FlexSalary"])))
+        band.sort(key=lambda t: -t[1])
+        _band_cache.extend([cpt_sal, band])
+        return _band_cache
+
+    def _top5_without(banned):
+        _, band = _flex_band()
+        tot = 0
+        taken = 0
+        for pid2, s2 in band:
+            if pid2 in banned:
+                continue
+            tot += s2
+            taken += 1
+            if taken == 5:
+                break
+        return tot if taken == 5 else -1
+
+    def _supply_perturb(stall_now, base_blocked):
+        if not supply_mode or stall_now <= 4:
+            return base_blocked, base_noise
+        noise = base_noise + min(0.5, 0.1 * (stall_now - 4))
+        if stall_now <= 6 or not rows:
+            return base_blocked, noise
+        usage = {}
+        for r in rows:
+            for i in range(1, 6):
+                fid = str(r.get(f"FLEX{i}_ID", ""))
+                if fid:
+                    usage[fid] = usage.get(fid, 0) + 1
+        protected = set(locked_ids) | set(cpt_locked_ids)
+        remaining = count - len(rows)
+        if remaining > 0:
+            for pid, tgt in targets.items():
+                if tgt["min"] - exposure[pid] >= remaining:
+                    protected.add(pid)
+                if tgt["cpt_min"] - cpt_exp[pid] >= remaining:
+                    protected.add(pid)
+        # Salary-band guard: never ban a player the salary floor
+        # makes essential, individually or via the ban set jointly.
+        # In a thin band (a $300 captain under a $47,500 floor) the
+        # chalk flexes ARE the only legal flexes — banning them turns
+        # every solve infeasible instead of diversifying it.
+        cpt_sal, _ = _flex_band()
+        cand = [(pid, c) for pid, c in usage.items()
+                if pid not in protected
+                and cpt_sal + _top5_without({pid}) >= int(min_salary)]
+        if not cand:
+            return base_blocked, noise
+        ids = [c[0] for c in cand]
+        wts = np.array([c[1] for c in cand], dtype=float)
+        wts = wts / wts.sum()
+        k = min(len(ids), 1 + int(stall_now >= 10) + int(stall_now >= 16))
+        bans = list(rng.choice(ids, size=k, replace=False,
+                               p=wts).tolist())
+        while bans and cpt_sal + _top5_without(set(bans)) < int(min_salary):
+            bans.pop()
+        return base_blocked | set(bans), noise
 
     def _allowed_targets():
         if len(teams)!=2:
@@ -1399,15 +1638,18 @@ def generate_showdown_lineups(df, field_size, payout_style, count, attempts, min
         cpt_blocked={pid for pid,tgt in targets.items()
                      if tgt["cpt_max"]<count and cpt_exp[pid]>=tgt["cpt_max"]}
 
+        stall = attempt - last_built_attempt
+        solve_blocked, solve_noise = _supply_perturb(
+            stall, blocked | no_role_ids)
         chosen=None
         for target in candidates:
             chosen=solve_showdown_one(
                 df,aggr,rng,strategy_map,min_salary,max_salary,target,script,script_team,
                 cpt_qb_passcatchers,wrte_cpt_qb_pair_pct,rb_cpt_dst_k_pct,max_k,max_dst,
-                min_unique,previous,exposure,cpt_exp,len(rows),noise_scale=.14+.13*aggr,
+                min_unique,previous,exposure,cpt_exp,len(rows),noise_scale=solve_noise,
                 relationship_rules=relationship_rules,forced_overall_ids=forced_overall,
                 forced_cpt_ids=forced_cpt,game_world=game_world,world_influence=world_influence,
-                qb_exact=qb_exact,blocked_ids=blocked,cpt_blocked_ids=cpt_blocked
+                qb_exact=qb_exact,blocked_ids=solve_blocked,cpt_blocked_ids=cpt_blocked
             )
             if chosen:
                 break
@@ -1468,7 +1710,9 @@ def generate_showdown_lineups(df, field_size, payout_style, count, attempts, min
     # the only preference ever stepped down is uniqueness — announced
     # in build_notes when it happens. Anything still unmet afterwards
     # is reported by name below, never silently.
-    def _fill_attempt(mu):
+    fill_stall = [0]
+
+    def _fill_attempt(mu, allow_no_role=False):
         game_world=choose_game_world(rng,entry_format,field_size,script)
         _wtries=0
         while world_share_capped(world_counts,game_world,count,_wcap) and _wtries<12:
@@ -1496,15 +1740,17 @@ def generate_showdown_lineups(df, field_size, payout_style, count, attempts, min
                  if tgt["max"]<count and exposure[pid]>=tgt["max"]}
         cpt_blocked={pid for pid,tgt in targets.items()
                      if tgt["cpt_max"]<count and cpt_exp[pid]>=tgt["cpt_max"]}
+        f_blocked = blocked if allow_no_role else (blocked | no_role_ids)
+        f_blocked, f_noise = _supply_perturb(fill_stall[0], f_blocked)
         chosen=None
         for target in cand_targets:
             chosen=solve_showdown_one(
                 df,aggr,rng,strategy_map,min_salary,max_salary,target,script,script_team,
                 cpt_qb_passcatchers,wrte_cpt_qb_pair_pct,rb_cpt_dst_k_pct,max_k,max_dst,
-                mu,previous,exposure,cpt_exp,len(rows),noise_scale=.14+.13*aggr,
+                mu,previous,exposure,cpt_exp,len(rows),noise_scale=f_noise,
                 relationship_rules=relationship_rules,forced_overall_ids=f_overall,
                 forced_cpt_ids=f_cpt,game_world=game_world,world_influence=world_influence,
-                qb_exact=qb_exact,blocked_ids=blocked,cpt_blocked_ids=cpt_blocked
+                qb_exact=qb_exact,blocked_ids=f_blocked,cpt_blocked_ids=cpt_blocked
             )
             if chosen:
                 break
@@ -1552,13 +1798,25 @@ def generate_showdown_lineups(df, field_size, payout_style, count, attempts, min
             for _ in range(60):
                 if len(rows)>=count or fails>=25: break
                 if _fill_attempt(mu):
-                    fails=0
+                    fails=0; fill_stall[0]=0
                 else:
-                    fails+=1
+                    fails+=1; fill_stall[0]+=1
             if mu<min_unique and len(rows)>added_before:
                 build_notes.append(
                     f"Uniqueness relaxed from {min_unique} to {mu} to "
                     f"reach the requested {count} lineups.")
+
+    # Punt-floor breach fills: the set is still short and every clean
+    # avenue above has run — only now may no-role players enter, one
+    # lineup at a time, and each one used is named after repair below.
+    if len(rows)<count and no_role_ids:
+        fails=0
+        for _ in range(60):
+            if len(rows)>=count or fails>=25: break
+            if _fill_attempt(0, allow_no_role=True):
+                fails=0; fill_stall[0]=0
+            else:
+                fails+=1; fill_stall[0]+=1
 
     # Minimum repair by in-place swaps. A swap may only move a player
     # INTO a lineup when every hard rule still holds afterwards —
@@ -1713,6 +1971,16 @@ def generate_showdown_lineups(df, field_size, payout_style, count, attempts, min
 
     if rows:
         _repair_mins()
+    if no_role and rows:
+        _used_nr = {}
+        for r in rows:
+            for _col in ("CPT_ID", "FLEX1_ID", "FLEX2_ID", "FLEX3_ID",
+                         "FLEX4_ID", "FLEX5_ID"):
+                _pid = str(r.get(_col, ""))
+                if _pid in no_role:
+                    _used_nr[_pid] = _used_nr.get(_pid, 0) + 1
+        build_notes.extend(
+            _punt_floor_notes(no_role, _used_nr, len(rows)))
     for pid,tgt in targets.items():
         if tgt["min"]>0 and exposure[pid]<tgt["min"]:
             build_notes.append(
@@ -1732,6 +2000,11 @@ def generate_showdown_lineups(df, field_size, payout_style, count, attempts, min
         elif any(tgt["min"]>exposure[pid] or tgt["cpt_min"]>cpt_exp[pid]
                  for pid,tgt in targets.items()):
             cause="the minimum-exposure targets could not all be satisfied at once"
+        elif cpt_locked_ids:
+            _nm=(targets.get(next(iter(cpt_locked_ids)), {})
+                 or {}).get("name", "your locked captain")
+            cause=(f"the legal-lineup supply with {_nm} locked at "
+                   f"captain ran out under your other rules")
         else:
             cause="the legal-lineup supply under your rules ran out"
         build_notes.append(
