@@ -2081,7 +2081,7 @@ def generate_lineups_sim_first(df, count=20, n_worlds=500, seed=42,
                                progress_cb=None, field_size=5000,
                                payout_style="GPP / top-heavy",
                                flex_mix=None, team_strategy_map=None,
-                               entry_format=None):
+                               entry_format=None, my_entries=None):
     """Sim-first construction (spec section 3) -- the DEFAULT Classic
     construction since Oct 24, 2026 (Chris's call, reversing the
     fix-round's do-not-flip verdict). generate_lineups (the optimizer)
@@ -2140,6 +2140,26 @@ def generate_lineups_sim_first(df, count=20, n_worlds=500, seed=42,
     (TEAM_PRIORITY_BONUS / PRIORITY_BONUS), so leans tilt selection
     among near-equal candidates without overriding world frequency.
     Actual core share and lean reach are reported in the notes.
+
+    Contest Stance (Oct 30, 2026 -- Chris's design): with no story
+    core chosen, Phase B allocates the portfolio across a small
+    number of QB anchors instead of sprinkling by raw world
+    frequency. The stance keys off my_entries (entry_format is the
+    fallback): 1 entry -> 2 target anchors, 2-5 -> 3, 6-20 -> 4-5,
+    150-max -> no stance. It is a STRONG LEAN, never a cap (Chris's
+    explicit call): anchors are ranked by eligible world-win
+    frequency, the next anchor spills in when its evidence is within
+    15% of the last target anchor (max +2, measured against the
+    target anchor so flat tails cannot chain), slots are allocated
+    by frequency sharpened per contest tier and tilted by anchor
+    ceiling (winner-take-all sharpens hardest), and the user's rules
+    layer (caps, locks, minimums, FLEX schedule) binds inside the
+    allocation exactly as before -- allocation proposes, the rules
+    dispose. A chosen story stands the stance down (the story IS the
+    stance). If no QB separates from the field (top anchor under
+    twice the uniform share), no stance is taken and the note says
+    so. The landed split is reported in the notes from the final
+    selection, actuals only.
 
     Generation reuses topdown_simulate_slate, whose 1,000-world floor
     applies; n_worlds is the number of worlds actually SOLVED (the Lab's
@@ -2324,6 +2344,135 @@ def generate_lineups_sim_first(df, count=20, n_worlds=500, seed=42,
         key=lambda kv: (-kv[1]["n"],
                         -(kv[1]["pts"] / max(kv[1]["n"], 1)
                           + _lean_bonus(kv[0]))))
+
+    # ---- Contest Stance plan (see docstring) ----
+    # Computed over ELIGIBLE candidates only, so the user's rules
+    # shape the anchor table itself: locks bind through _eligible (a
+    # locked QB is the only anchor his candidates can have) and an
+    # excluded QB never appears (he left the pool before solving).
+    name_of = d["Name"].astype(str).tolist()
+
+    def _qb_name(pset):
+        for i in pset:
+            if pos_of[i] == "QB":
+                return name_of[i]
+        return None
+
+    stance_mode = None        # None | "earned" | "flat"
+    stance_quota = {}         # QB name -> slots remaining in Phase B
+    stance_target_k = 0
+    stance_entries = 0
+    stance_top_share = 0.0
+    stance_nqb = 0
+    if not core_pos and count > 1:
+        if my_entries is not None and int(my_entries or 0) > 0:
+            stance_entries = int(my_entries)
+        else:
+            _ef = str(entry_format or "").lower()
+            if "150" in _ef:
+                stance_entries = 150
+            elif "20" in _ef:
+                stance_entries = 20
+            elif single_entry or "single" in _ef:
+                stance_entries = 1
+            else:
+                stance_entries = 20
+        if stance_entries < 150:
+            _freq, _ceil, _supply = {}, {}, {}
+            for _pset, _c in ordered:
+                if not _eligible(_pset):
+                    continue
+                _q = _qb_name(_pset)
+                if _q is None:
+                    continue
+                _freq[_q] = _freq.get(_q, 0) + _c["n"]
+                _ceil[_q] = max(_ceil.get(_q, 0.0),
+                                _c["pts"] / max(_c["n"], 1))
+                _supply[_q] = _supply.get(_q, 0) + 1
+            stance_nqb = len(_freq)
+            if stance_nqb:
+                _total = float(sum(_freq.values()))
+                _ranked = sorted(_freq, key=lambda q: -_freq[q])
+                stance_top_share = _freq[_ranked[0]] / _total
+                if stance_entries == 1:
+                    stance_target_k = 2
+                elif stance_entries <= 5:
+                    stance_target_k = 3
+                elif stance_entries <= 20:
+                    stance_target_k = (5 if int(field_size or 0) >= 20000
+                                       else 4)
+                else:
+                    stance_target_k = 5
+                if stance_top_share < 2.0 / stance_nqb:
+                    stance_mode = "flat"
+                else:
+                    stance_mode = "earned"
+                    _wta = "winner" in str(payout_style or "").lower()
+                    _chosen = list(_ranked[:stance_target_k])
+                    _spill = 0
+                    while (len(_ranked) > len(_chosen) and _spill < 2
+                           and _freq[_ranked[len(_chosen)]]
+                           >= 0.85 * _freq[_chosen[stance_target_k - 1]]):
+                        _chosen.append(_ranked[len(_chosen)])
+                        _spill += 1
+                    if stance_entries == 1:
+                        _alpha, _beta = (2.0, 1.0) if _wta else (1.5, 0.5)
+                        _band = (0.55, 0.75) if _wta else (0.40, 0.60)
+                    elif stance_entries <= 5:
+                        _alpha, _beta = 1.25, 0.5
+                        _band = (0.35, 0.60)
+                    else:
+                        _alpha, _beta = 1.0, 0.25
+                        _band = None
+
+                    def _alloc(alpha):
+                        _maxc = max(_ceil[q] for q in _chosen)
+                        _w = {q: (_freq[q] ** alpha)
+                              * ((_ceil[q] / _maxc) ** _beta)
+                              for q in _chosen}
+                        _tw = sum(_w.values())
+                        _raw = {q: count * _w[q] / _tw for q in _chosen}
+                        _a = {q: min(_supply[q],
+                                     max(1, int(math.floor(_raw[q]))))
+                              for q in _chosen}
+                        _order = sorted(
+                            _chosen,
+                            key=lambda q: -(_raw[q]
+                                            - math.floor(_raw[q])))
+                        _i = 0
+                        while (sum(_a.values()) < count and _order
+                               and any(_a[q] < _supply[q]
+                                       for q in _chosen)):
+                            _q = _order[_i % len(_order)]
+                            if _a[_q] < _supply[_q]:
+                                _a[_q] += 1
+                            _i += 1
+                        while sum(_a.values()) > count:
+                            _q = max(_chosen,
+                                     key=lambda q: _a[q] - _raw[q])
+                            if _a[_q] <= 1:
+                                break
+                            _a[_q] -= 1
+                        return _a
+
+                    _a = _alloc(_alpha)
+                    if _band is not None:
+                        for _ in range(12):
+                            _top = (_a[_chosen[0]]
+                                    / max(sum(_a.values()), 1))
+                            if _top >= _band[0]:
+                                break
+                            _alpha *= 1.3
+                            _a = _alloc(_alpha)
+                        for _ in range(6):
+                            _top = (_a[_chosen[0]]
+                                    / max(sum(_a.values()), 1))
+                            if _top <= _band[1]:
+                                break
+                            _alpha *= 0.8
+                            _a = _alloc(_alpha)
+                    stance_quota = dict(_a)
+
     selected = []          # list of (pset, freq_pct, construction)
     exposure = Counter()
     selected_keys = set()
@@ -2399,13 +2548,40 @@ def generate_lineups_sim_first(df, count=20, n_worlds=500, seed=42,
     # the core-targeted fill below instead of being crowded out by free
     # lineups (with no core chosen the cap is `count`: the historical
     # single pass, in the historical order).
+    # Contest Stance: pass 1 honors the anchor quotas; pass 2 tops the
+    # phase up in the historical order when quotas (or the candidate
+    # supply inside them) run out -- the landed split is reported from
+    # the final selection below, so a lean that spills is visible,
+    # never silent. With no stance earned, pass 1 IS the historical
+    # single pass and pass 2 finds the cap already met.
+    def _phase_b_room():
+        return (count - core_target) - (len(selected) - core_selected)
+
     for pset, c in ordered:
-        if len(selected) - core_selected >= count - core_target:
+        if _phase_b_room() <= 0:
             break
         if core_pos and _is_core(pset):
             continue
-        if _eligible(pset):
-            _try_add(pset, round(100.0 * c["n"] / n_solved, 2), "Sim-first (worlds)")
+        if stance_mode == "earned":
+            _q = _qb_name(pset)
+            if stance_quota.get(_q, 0) <= 0:
+                continue
+            if _eligible(pset) and _try_add(
+                    pset, round(100.0 * c["n"] / n_solved, 2),
+                    "Sim-first (worlds)"):
+                stance_quota[_q] -= 1
+        elif _eligible(pset):
+            _try_add(pset, round(100.0 * c["n"] / n_solved, 2),
+                     "Sim-first (worlds)")
+    if stance_mode == "earned" and _phase_b_room() > 0:
+        for pset, c in ordered:
+            if _phase_b_room() <= 0:
+                break
+            if core_pos and _is_core(pset):
+                continue
+            if _eligible(pset):
+                _try_add(pset, round(100.0 * c["n"] / n_solved, 2),
+                         "Sim-first (worlds)")
 
     # Min-exposure repair: swap in unselected candidates carrying the
     # deficient player, evicting the lowest-frequency selected lineup whose
@@ -2571,6 +2747,30 @@ def generate_lineups_sim_first(df, count=20, n_worlds=500, seed=42,
             notes.append(
                 f"Story core ({', '.join(core_names)}) in {core_selected} "
                 f"of {count} lineups ({share_label})")
+    if stance_mode == "earned":
+        _final = Counter(_qb_name(pset) for pset, _f, _c in selected)
+        _final.pop(None, None)
+        _n_fin = sum(_final.values())
+        if _n_fin:
+            _parts = ", ".join(
+                f"{q} {round(100.0 * n / _n_fin):.0f}%"
+                for q, n in _final.most_common())
+            _line = (f"Stance: {len(_final)} QB anchors for "
+                     f"{stance_entries} "
+                     f"entr{'y' if stance_entries == 1 else 'ies'} -- "
+                     + _parts)
+            if len(_final) > stance_target_k:
+                _line += (f" (target {stance_target_k} -- sim evidence "
+                          "too close to cut)")
+            elif len(_final) < stance_target_k:
+                _line += (f" (target {stance_target_k} -- candidate "
+                          "supply ran out)")
+            notes.append(_line)
+    elif stance_mode == "flat":
+        notes.append(
+            f"No stance earned -- sims flat across {stance_nqb} QBs "
+            f"(top QB wins {stance_top_share:.0%} of solved worlds); "
+            "spread kept")
     if lean_active:
         like_teams = sorted(t for t, b in team_bonus.items() if b > 0)
         if like_teams:
@@ -2615,7 +2815,8 @@ def generate_lineups_sim_first(df, count=20, n_worlds=500, seed=42,
 _SIM_FIRST_KWARGS = frozenset({
     "count", "n_worlds", "seed", "strategy_map", "salary_cap",
     "min_salary", "sim_result", "workers", "progress_cb", "field_size",
-    "payout_style", "flex_mix", "team_strategy_map", "entry_format"})
+    "payout_style", "flex_mix", "team_strategy_map", "entry_format",
+    "my_entries"})
 
 
 def _sim_first_dropped_warnings(kwargs):
@@ -2689,7 +2890,8 @@ def build_lineups(df, construction="sim_first", **kwargs):
 
     kwargs are forwarded to the chosen builder. The sim-first builder
     consumes count / seed / strategy_map / salary_cap / min_salary /
-    field_size / payout_style, the FLEX mix (enforced in the per-world
+    field_size / payout_style / entry_format / my_entries (the
+    contest stance), the FLEX mix (enforced in the per-world
     solve) and the story translation the apps ride in strategy_map +
     team_strategy_map (Priority "Core" forms a portfolio core;
     Priority Like/Fade and team leans tilt assembly ordering). Any
@@ -2710,10 +2912,12 @@ def build_lineups(df, construction="sim_first", **kwargs):
             result.attrs["sim_first_notes"] = dropped + notes
         return result
     if construction == "optimizer":
-        # entry_format only steers the sim-first story share; the
-        # optimizer's signature predates it and stays untouched.
+        # entry_format only steers the sim-first story share and
+        # my_entries only steers the sim-first contest stance; the
+        # optimizer's signature predates both and stays untouched.
         return generate_lineups(
-            df, **{k: v for k, v in kwargs.items() if k != "entry_format"})
+            df, **{k: v for k, v in kwargs.items()
+                   if k not in ("entry_format", "my_entries")})
     raise ValueError(f"Unknown construction: {construction!r} "
                      "(expected 'sim_first' or 'optimizer')")
 
